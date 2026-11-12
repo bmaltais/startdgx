@@ -223,6 +223,25 @@ first_line() { grep -n -m1 -e "$1" "$FAKE_LOG" | cut -d: -f1; }
 earlier() { [ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]; }
 earlier "$(first_line startdgx-backup)" "$(first_line '^sudo bash -c')"; ok $? "the backup is taken before the root script runs"
 
+# An engine that was there before startdgx: install replaces it only when told to, keeping a copy.
+old_engine=$FAKE_HOST/home/.local/share/omarchy-local-ai
+engine_there() { fresh_host "$@"; mkdir -p "$old_engine"; echo "old engine" >"$old_engine/agent_local.py"
+  spark "$@" "engine=$(sha256sum <"$old_engine/agent_local.py" | cut -c1-64)" >"$FAKE_HOST/probe"; after "$@" "engine=$(printf '%064d' 9)"; : >"$FAKE_LOG"; }
+engine_there
+out=$(s install me@spark --engine-path "$engine" 2>&1); ok $((!$?)) "install refuses to overwrite an engine it didn't install"
+echo "$out" | grep -q 'omarchy-local-ai' && echo "$out" | grep -q -- '--replace-engine'; ok $? "it says why, and how to replace it"
+none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log" "$FAKE_MANIFEST" "$bk"; ok $? "a refused replacement changes nothing"
+out=$(s install --dry-run me@spark --engine-path "$engine" 2>&1); ok $((!$?)) "install --dry-run refuses it too"
+echo "$out" | grep -q -- '--replace-engine'; ok $? "and says so"
+out=$(s install --dry-run --replace-engine me@spark --engine-path "$engine"); echo "$out" | grep -q "back up the engine"
+ok $? "install --dry-run --replace-engine says it backs the engine up"
+s install --replace-engine me@spark --engine-path "$engine" >/dev/null; ok $? "install --replace-engine succeeds"
+same "$(cat "$bk/engine/agent_local.py" 2>/dev/null)" "old engine"; ok $? "it backs the old engine up first"
+m 'item("engine", "/home/me/.local/share/omarchy-local-ai")["previous"]["backup"] == "/home/me/.local/share/startdgx/backup/engine" and item("engine", "/home/me/.local/share/omarchy-local-ai")["changed_by_us"] and not item("engine", "/home/me/.local/share/omarchy-local-ai")["created_by_us"]'
+ok $? "the manifest records the backup, and the engine as changed, not created"
+echo "newer" >"$old_engine/agent_local.py"; s install me@spark --engine-path "$engine" >/dev/null; ok $? "a second install needs no --replace-engine"
+same "$(cat "$bk/engine/agent_local.py")" "old engine"; ok $? "and keeps the first backup"
+
 # Without --engine-path, the pinned tag is cloned here (a fake git, on this test's PATH only, copies $engine).
 mkdir -p "$tmp/fakegit"
 cat >"$tmp/fakegit/git" <<F
@@ -250,7 +269,7 @@ h=$FAKE_HOST/home q=$FAKE_HOST/home/.config/containers/systemd
 fentry=$h/.local/share/omarchy-local-ai/omarchy-local-ai
 img=ghcr.io/omacom/tensorfold@sha256:$(printf '%064d' 7)
 rdma='# RDMA between paired DGX Sparks registers large buffers as locked memory.'
-before_root='' engine_root='' changed=()
+before_root='' engine_root='' changed=() install_flags=()
 installed() {
   fresh_host "home=$h" "$@"; eval "$before_root"
   after "home=$h" "$@" linger=yes engine=e1 "${changed[@]}"
@@ -260,7 +279,7 @@ printf '%s\\n' '$rdma' >"\$root$limits"
 ln -sfn '$fentry' "\$root/usr/local/bin/omarchy-agent-local"
 $engine_root
 E
-  s install me@spark --engine-path "$engine" >/dev/null || echo "installed: install failed" >&2
+  s install "${install_flags[@]}" me@spark --engine-path "$engine" >/dev/null || echo "installed: install failed" >&2
   mkdir -p "$q" "$h/.config/omarchy/agent-local" "$h/.config/omarchy/other" "$h/.local/state/omarchy/agent-local" \
     "$h/.local/share/omarchy/agent-local/models/q1" "$h/.config/systemd/user" "$FAKE_HOST/podman" "${fentry%/*}"
   cp "$tmp/engine-stub" "$fentry"; chmod +x "$fentry"
@@ -330,6 +349,29 @@ ok $? "a failed restore keeps the manifest, the backups and the host"
 FAKE_ROOT_FAIL=1 installed 2>/dev/null
 s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall after a failed install succeeds"
 grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link" "$FAKE_MANIFEST"; ok $? "it undoes what the failed install's root script did"
+
+# A host whose engine was there before the install, which --replace-engine replaced.
+eng=$h/.local/share/omarchy-local-ai
+replaced() {
+  before_root="mkdir -p $eng; echo 'old engine' >$eng/agent_local.py"; install_flags=(--replace-engine)
+  installed "engine=$(echo 'old engine' | sha256sum | cut -c1-64)"; before_root='' install_flags=()
+  echo 'new engine' >"$eng/agent_local.py"
+}
+replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
+out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
+ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
+out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
+same "$(ls "$eng")" agent_local.py && same "$(cat "$eng/agent_local.py")" 'old engine'; ok $? "it puts the old engine back"
+same "$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)" "$before" \
+  && present "$FAKE_HOST/podman/network" "$FAKE_HOST/podman/secret" "$FAKE_HOST/podman/image-${img//[\/:@]/_}" \
+  && ! grep -q -e 'systemctl --user stop' -e 'share q1' -e 'tailscale serve --yes' "$FAKE_HOST/calls"
+ok $? "it leaves the engine's units, quadlets, network, secret, images, state, config and models"
+echo "$out" | grep -q "left .*units.*was there before"; ok $? "and says what it left and why"
+grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link" "$FAKE_MANIFEST" "$h/.local/share/startdgx"
+ok $? "it still undoes as root what the install changed, and finishes"
+replaced; rm -rf "$h/.local/share/startdgx/backup/engine"
+s uninstall me@spark >/dev/null 2>&1; ok $((!$?)) "uninstall fails when the replaced engine's backup is gone"
+present "$FAKE_MANIFEST" && same "$(cat "$eng/agent_local.py")" 'new engine'; ok $? "and keeps the manifest and the engine there"
 
 before_root="put $link '#!/bin/sh old agent'"; installed; before_root=''
 m 'item("symlink", "'$link'")["changed_by_us"] and item("symlink", "'$link'")["previous"]["type"] == "file"'; ok $? "a plain file where the agent link goes is recorded as changed"

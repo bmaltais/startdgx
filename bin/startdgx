@@ -53,6 +53,9 @@ BACKUPS = {**{("file", path): backup_name(path) for path in ROOT_FILES}, ("symli
 BACKUP = f"set -eu\nmkdir -p ~/{BACKUP_DIR}\ncd ~/{BACKUP_DIR}\n" + "".join(
   f"if [ -f {path} ]{' && [ ! -L ' + path + ' ]' if kind == 'symlink' else ''} && [ ! -e {name} ]; then cp -p {path} {name}; fi\n"
   for (kind, path), name in BACKUPS.items())
+# An engine that predates the install, which --replace-engine replaces.
+ENGINE_BACKUP = f"{BACKUP_DIR}/engine"
+BACKUP_ENGINE = f"if [ -d ~/{ENGINE_DIR} ] && [ ! -e ~/{ENGINE_BACKUP} ]; then cp -a ~/{ENGINE_DIR} ~/{ENGINE_BACKUP}; fi\n"
 
 # What the engine creates under the user's home once installed (its use and share), relative to it.
 ENGINE_STATE = ".local/state/omarchy/agent-local"
@@ -374,6 +377,8 @@ def with_backup(key, previous, home):
   existed = previous.get("exists") or previous.get("type") == "file"
   if key in BACKUPS and existed:
     return {**previous, "backup": f"{home}/{BACKUP_DIR}/{BACKUPS[key]}"}
+  if key[0] == "engine" and existed:
+    return {**previous, "backup": f"{home}/{ENGINE_BACKUP}"}
   return previous
 
 
@@ -430,15 +435,21 @@ def cmd_install(args):
   before = probe(host)
   if not is_spark(before):
     raise Error(f"{host} isn't a DGX Spark (no GB10 GPU and no DGX Spark in /etc/dgx-release)")
+  old = read_manifest(host)
+  # An engine there without a manifest isn't one startdgx installed; one with a manifest is ours, or backed up.
+  replace = bool(before.get("engine")) and not old
+  if replace and not args.replace_engine:
+    raise Error(f"{host} already has an engine startdgx didn't install, in ~/{ENGINE_DIR}. Run install with --replace-engine "
+                f"to back it up to ~/{ENGINE_BACKUP} and replace it (uninstall puts it back)")
   if args.dry_run:
     print(f"Would, on {host}:")
-    for step in plan(before, args):
+    for step in ([f"back up the engine ~/{ENGINE_DIR} to ~/{ENGINE_BACKUP}"] if replace else []) + plan(before, args):
       print(f"  {step}")
     return
   with engine_source(args) as src:
-    script, old, engine = engine_setup_script(src), read_manifest(host), engine_record(args, before)
+    script, engine = engine_setup_script(src), engine_record(args, before)
     # Recorded before anything changes, so an install that fails halfway still knows what was there.
-    ssh_raw(host, "bash -s -- startdgx-backup", stdin=BACKUP, what="backup")
+    ssh_raw(host, "bash -s -- startdgx-backup", stdin=BACKUP + (BACKUP_ENGINE if replace else ""), what="backup")
     write_manifest(host, build_manifest(old, before, before, engine))
     try:
       print(f"Preparing {host} (sudo there asks for your password)")
@@ -506,6 +517,9 @@ def user_plan(manifest, state, args):
   Units stop first; the engine goes last, since the units' hooks call it."""
   q, exists = shlex.quote, set(state["exists"])
   steps, kept = [], []
+  engine_path = f"{state['home']}/{ENGINE_DIR}"
+  if (("engine", engine_path)) not in ours(manifest, "created_by_us"):
+    return replaced_engine_plan(manifest, state, args)
   if ENGINE_DIR in exists:
     for rid in shared_recipes(state):
       steps.append((f"stop sharing {rid} (omarchy-local-ai share {rid} --off)",
@@ -544,15 +558,31 @@ def user_plan(manifest, state, args):
       steps.append((f"delete {weights})", f"rm -rf ~/{ENGINE_DATA}"))
     else:
       kept.append(f"keep {weights}; --delete-models deletes them)")
-  engine = next((item for item in manifest["items"] if isinstance(item, dict) and item.get("kind") == "engine"), {})
   if ENGINE_DIR in exists:
-    if engine.get("path") == f"{state['home']}/{ENGINE_DIR}" and engine.get("created_by_us") is True:
-      steps.append((f"delete the engine ~/{ENGINE_DIR}", f"rm -rf ~/{ENGINE_DIR}"))
-    else:
-      kept.append(f"keep the engine ~/{ENGINE_DIR}, which was there before the install")
+    steps.append((f"delete the engine ~/{ENGINE_DIR}", f"rm -rf ~/{ENGINE_DIR}"))
   parents = " ".join(f"~/{path}" for path in SHARED_PARENTS)
   steps.append((f"remove {parents} where empty",
                 f'for dir in {parents}; do if [ -d "$dir" ]; then rmdir --ignore-fail-on-non-empty "$dir"; fi; done'))
+  return steps, kept
+
+
+def replaced_engine_plan(manifest, state, args):
+  """The user's steps where the engine was there before the install: what it set up isn't startdgx's to remove,
+  so the only step puts back the engine --replace-engine replaced."""
+  engine, backup = f"{state['home']}/{ENGINE_DIR}", f"{state['home']}/{ENGINE_BACKUP}"
+  steps, kept = [], [f"left what the engine set up under ~ (its units, quadlets, network, secret, images, state, config, key, "
+                     f"shares and models): the engine in ~/{ENGINE_DIR} was there before the install, so they aren't startdgx's to remove"]
+  item = ours(manifest, "changed_by_us").get(("engine", engine))
+  if item:
+    put_back = f"rm -rf {engine} && cp -a {backup} {engine}"
+    sha = str(previous_of(item).get("agent_local_sha256"))
+    if SHA_RE.match(sha):
+      steps.append((f"put back the engine that was there before, from {backup}", restore(f"{engine}/agent_local.py", f"{backup}/agent_local.py", sha, put_back)))
+    else:
+      steps.append((f"put back the engine that was there before, from {backup}",
+                    f'if [ -d {backup} ]; then {put_back}; else echo "  left {engine}: its backup {backup} is missing" >&2; failed=1; fi'))
+  if args.delete_models:
+    kept.append("--delete-models deletes nothing here: the models are the engine's, which was there before")
   return steps, kept
 
 
@@ -722,6 +752,8 @@ def build_parser():
   i = add("install", cmd_install, timeout=3600)
   i.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   i.add_argument("--engine-path", metavar="DIR", help=f"copy this engine checkout instead of cloning {ENGINE_TAG}")
+  i.add_argument("--replace-engine", action="store_true",
+                 help=f"replace an engine startdgx didn't install, backing it up to ~/{ENGINE_BACKUP} for uninstall to put back")
   u = add("uninstall", cmd_uninstall, timeout=3600)
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
