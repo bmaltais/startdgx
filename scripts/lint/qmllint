@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# qmllint with the Omarchy shell's modules on its import path, so `import qs.Commons` and `import qs.Ui` resolve and
+# their warnings are real ones. Quickshell serves the shell's folder as the module `qs`; qmllint needs a folder that
+# holds `qs`, and a symlink can't live in a plugin folder (omarchy plugin validate refuses it), so it is made outside,
+# per user. devkit.conf and scripts/qmllint put this folder first on PATH; the devkit's qmllint step then finds it.
+set -euo pipefail
+shell=${OMARCHY_SHELL_DIR:-/usr/share/omarchy/shell}
+self=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}" /usr/lib/qt6/bin; do
+  [[ $d == "$self" || ! -x $d/qmllint ]] && continue
+  real=$d/qmllint; break
+done
+[[ -n $real ]] || { echo "qmllint not found (install qt6-declarative)" >&2; exit 127; }
+imports=()
+if [[ -d $shell/Commons && -d $shell/Ui ]]; then
+  dir=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/startdgx-qmllint-$(id -u)
+  mkdir -p "$dir"
+  [[ $(readlink "$dir/qs" 2>/dev/null) == "$shell" ]] || ln -sfn "$shell" "$dir/qs"
+  imports=(-I "$dir")
+fi
+exec "$real" "${imports[@]}" "$@"

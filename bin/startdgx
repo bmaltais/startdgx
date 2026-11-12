@@ -8,14 +8,22 @@ import argparse
 import ast
 import base64
 import contextlib
+import concurrent.futures
 import datetime
+import fcntl
+import getpass
+import hashlib
+import codecs
 import json
 import os
+import pty
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
@@ -25,7 +33,13 @@ TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
 RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]*$")
 HOME_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
-SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+# Keepalives: a host that went away (asleep, off the tailnet) is noticed in 45 s, not when TCP gives up.
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+# Discover's probes take the host key of a machine ssh has never seen (accept-new), and only discover's: the peers are
+# the tailnet's own, which the user chose to list, and a never-seen Spark would otherwise be unreachable and get no
+# Install. A key that changed is still refused. The key it saves is what add and install then check against.
+DISCOVER_SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new"]
+DISCOVER_WORKERS = 8
 
 # What the engine's host setup (HOST_SETUP + MACHINE_SETUP_TAIL in its agent_local.py) may create or change as root.
 ROOT_FILES = (
@@ -104,6 +118,49 @@ if [ -d ~/{ENGINE_DATA} ]; then echo "models_bytes=$(du -sb ~/{ENGINE_DATA} | cu
 exit 0
 '''
 
+# Read-only, for delete --dry-run: what the engine's remove of the recipe (argv[1]) would free, as its _remove_files
+# counts it: each blob that no other model's files link and that nothing else holds, and for a setup in progress the
+# half-downloaded files its record lists. Prints {"set_up", "setting_up", "bytes"}.
+REMOVE_PROBE = f'''
+import json, os, re, sys
+rid, home = sys.argv[1], os.path.expanduser("~")
+data, state = os.path.join(home, "{ENGINE_DATA}"), os.path.join(home, "{ENGINE_STATE}")
+def stats(top):
+  for directory, _, names in os.walk(top):
+    for name in names:
+      try:
+        yield os.stat(os.path.join(directory, name))
+      except OSError:
+        pass
+mine, others = {{}}, set()
+models = os.path.join(data, "models")
+for entry in sorted(os.listdir(models)) if os.path.isdir(models) else []:
+  for info in stats(os.path.join(models, entry)):
+    key = (info.st_dev, info.st_ino)
+    if entry == rid:
+      mine[key] = mine.get(key, 0) + 1
+    else:
+      others.add(key)
+freed = 0
+for info in stats(os.path.join(data, "blobs")):
+  key = (info.st_dev, info.st_ino)
+  if key not in others and info.st_nlink - mine.get(key, 0) == 1:
+    freed += info.st_size
+set_up = os.path.exists(os.path.join(state, "models", rid + ".json"))
+try:
+  with open(os.path.join(state, "installing", rid + ".json")) as handle:
+    record = json.load(handle)
+except (OSError, ValueError):
+  record = None
+setting_up = not set_up and isinstance(record, dict)
+for name in (record.get("partials") or []) if setting_up else []:
+  if isinstance(name, str) and re.fullmatch(r"[0-9a-f]{{40}}|[0-9a-f]{{64}}", name.removesuffix(".part")):
+    path = os.path.join(data, "staging", name)
+    if os.path.isfile(path):
+      freed += os.path.getsize(path)
+print(json.dumps({{"set_up": set_up, "setting_up": setting_up, "bytes": freed}}))
+'''
+
 # Read-only: prints key=value lines about the host. Bash, since python3 may be one of the missing tools.
 PROBE = USER_PROBE + r'''
 echo "gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
@@ -138,13 +195,88 @@ for name, value in (("PACKAGES", " ".join(PACKAGES)), ("ROOT_FILES", " ".join(RO
   PROBE = PROBE.replace(f"@{name}@", value)
 
 
+# Discover's probe: the install's own read-only PROBE, plus whether startdgx's manifest is there.
+DISCOVER_PROBE = PROBE + f'if [ -f "$HOME/{STARTDGX_DIR}/manifest.json" ]; then echo startdgx=yes; else echo startdgx=; fi\n'
+
+
 class Error(Exception):
   pass
 
 
+# Terminal controls a host could print to act on this terminal (an OSC 52 clipboard write, a CSI that redraws it):
+# C0 but newline and tab, DEL, and C1. Everything startdgx passes on from a host goes through clean().
+CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# What the root script prints reaches a terminal through a pty, where a line ends in a carriage return too.
+TTY_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def clean(text):
+  return CONTROLS.sub("", text)
+
+
+# The commands running now (discover runs several at once, in threads), so a signal can end them all; and whether
+# startdgx is stopping, after which none starts.
+CHILDREN = set()
+STOPPING = False
+
+
+def run_process(cmd, stdin=None, timeout=None):
+  """subprocess.run for a command whose output comes from a host: text with undecodable bytes replaced, and
+  terminal controls taken out of stdout and stderr. It is ended with startdgx (stop_children)."""
+  if STOPPING:
+    raise Error("startdgx is stopping")
+  with subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin is not None else None, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True, errors="replace") as proc:
+    CHILDREN.add(proc)
+    try:
+      out, err = proc.communicate(stdin, timeout=timeout)
+    except BaseException:
+      proc.kill()
+      raise
+    finally:
+      CHILDREN.discard(proc)
+  return subprocess.CompletedProcess(cmd, proc.returncode, clean(out), clean(err))
+
+
+def stop_children(signum, _frame):
+  """On SIGTERM, SIGINT or SIGHUP (a shell restart ends the panel's processes): end every command startdgx runs, so
+  no ssh is left behind, then exit."""
+  global STOPPING
+  STOPPING = True
+  for proc in list(CHILDREN):
+    with contextlib.suppress(OSError):
+      proc.kill()
+  raise SystemExit(128 + signum)
+
+
+def run_on_tty(cmd):
+  """Runs cmd on a pty of its own, relaying this terminal's input to it (sudo's password prompt) and its output back
+  without terminal controls; returns its exit code."""
+  decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+  # What was printed here before goes first: the relay writes to the terminal directly.
+  sys.stdout.flush()
+  sys.stderr.flush()
+
+  def read(fd):
+    while True:
+      data = os.read(fd, 4096)
+      if not data:
+        return data
+      shown = TTY_CONTROLS.sub("", decoder.decode(data)).encode()
+      # An empty answer would read as the end of the output.
+      if shown:
+        return shown
+
+  return os.waitstatus_to_exitcode(pty.spawn(cmd, read))
+
+
+def config_dir():
+  return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "startdgx")
+
+
 def config_path():
-  base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-  return os.path.join(base, "startdgx", "hosts.json")
+  # Demo mode keeps its own machines, so the real list is never read or written.
+  return os.path.join(demo_dir() if DEMO else config_dir(), "hosts.json")
 
 
 def load_hosts():
@@ -155,11 +287,16 @@ def load_hosts():
     return {}
 
 
-def save_hosts(hosts):
+@contextlib.contextmanager
+def hosts_changing():
+  """The hosts to change, saved when the block ends; one change at a time, so an add and a forget running at once
+  (the panel runs them in parallel) never lose each other's."""
   os.makedirs(os.path.dirname(config_path()), exist_ok=True)
-  with open(config_path(), "w") as f:
-    json.dump(hosts, f, indent=2)
-    f.write("\n")
+  with open(config_path() + ".lock", "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    hosts = load_hosts()
+    yield hosts
+    write_json(config_path(), hosts)
 
 
 def target(host):
@@ -174,13 +311,15 @@ def ssh(host, *argv, timeout=None, check=True):
   return ssh_raw(host, f"{ENGINE} {shlex.join(argv)}", timeout=timeout, check=check, what=argv[0])
 
 
-def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command"):
+def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command", opts=SSH_OPTS):
   """Runs a fixed shell command on the host; anything variable in it must already be shlex-quoted."""
-  cmd = ["ssh", *SSH_OPTS, "--", host, command]
+  cmd = ["ssh", *opts, "--", host, command]
   try:
-    result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
+    result = run_process(cmd, stdin=stdin, timeout=timeout)
   except subprocess.TimeoutExpired as error:
     raise Error(f"{host} didn't answer in time") from error
+  if check and result.returncode == 255:
+    raise Error(ssh_failure(host, result.stderr) if result.stderr.strip() else f"{what} failed on {host}")
   if check and result.returncode != 0:
     lines = (result.stderr.strip().splitlines() or [f"{what} failed on {host}"])
     raise Error(lines[-1].removeprefix("Error: "))
@@ -201,17 +340,15 @@ def recipe(value):
 
 def cmd_add(args):
   profile = json.loads(ssh(ssh_target(args.host), "profile").stdout)
-  hosts = load_hosts()
-  hosts[args.host] = {"profile": profile}
-  save_hosts(hosts)
+  with hosts_changing() as hosts:
+    hosts[args.host] = {"profile": profile}
   print(f"{args.host} added")
 
 
 def cmd_remove_host(args):
-  hosts = load_hosts()
-  if hosts.pop(args.host, None) is None:
-    raise Error(f"{args.host} isn't added")
-  save_hosts(hosts)
+  with hosts_changing() as hosts:
+    if hosts.pop(args.host, None) is None:
+      raise Error(f"{args.host} isn't added")
   print(f"{args.host} removed from startdgx")
 
 
@@ -249,17 +386,49 @@ def cmd_stop(args):
 
 
 def cmd_use(args):
-  sys.stdout.write(ssh(target(args.host), "use", recipe(args.model), timeout=args.timeout).stdout)
+  if not args.detach:
+    sys.stdout.write(ssh(target(args.host), "use", recipe(args.model), timeout=args.timeout or 3600).stdout)
+    return
+  # The engine runs the setup in a transient user unit and returns, or says one is already running (and starts no
+  # second); its last line says which, and it is the one line the panel shows.
+  out = ssh(target(args.host), "use", recipe(args.model), "--detach", timeout=args.timeout or 120).stdout
+  print((out.strip().splitlines() or [f"Setting up {args.model} in the background"])[-1])
 
 
 def cmd_delete(args):
+  if args.dry_run:
+    rid, host = recipe(args.model), target(args.host)
+    out = ssh_raw(host, f"python3 -I - {shlex.quote(rid)}", stdin=REMOVE_PROBE, timeout=args.timeout, what="probe").stdout
+    try:
+      found = json.loads(out.strip().splitlines()[-1])
+      plan = {"recipe": rid, "setting_up": bool(found["setting_up"]), "bytes": int(found["bytes"])}
+      set_up = bool(found["set_up"])
+    except (ValueError, IndexError, KeyError, TypeError) as error:
+      raise Error(f"{host} gave an answer startdgx can't read") from error
+    if not (set_up or plan["setting_up"]):
+      raise Error(f"{rid} isn't set up on {host}")
+    print_remove_plan(plan, args.json)
+    return
   sys.stdout.write(ssh(target(args.host), "remove", recipe(args.model), timeout=args.timeout).stdout)
+
+
+def print_remove_plan(plan, as_json):
+  if as_json:
+    print(json.dumps(plan))
+  elif plan["setting_up"]:
+    print(f"Cancelling the setup of {plan['recipe']} would delete the {size_text(plan['bytes'])} downloaded so far")
+  else:
+    print(f"Removing {plan['recipe']} would free {size_text(plan['bytes'])}")
 
 
 def probe(host):
   """The host's state as a dict, from the read-only PROBE; a key given twice keeps its last value."""
   out = ssh_raw(host, "bash -s", stdin=PROBE, timeout=60, what="probe").stdout
-  return checked_user(host, dict(line.split("=", 1) for line in out.splitlines() if "=" in line))
+  return checked_user(host, parse_probe(out))
+
+
+def parse_probe(out):
+  return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
 def checked_user(host, state):
@@ -271,6 +440,84 @@ def checked_user(host, state):
 
 def is_spark(state):
   return "GB10" in state.get("gpu", "") or "Spark" in state.get("dgx_name", "")
+
+
+def tailnet_peers():
+  """The online Linux peers in `tailscale status --json`, as sorted unique short names."""
+  try:
+    result = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=30, check=False)
+  except (OSError, subprocess.TimeoutExpired) as error:
+    raise Error(f"Can't run tailscale: {error}") from error
+  if result.returncode != 0:
+    raise Error((result.stderr.strip().splitlines() or ["tailscale status failed"])[-1])
+  try:
+    peers = json.loads(result.stdout).get("Peer") or {}
+    names = {clean(str((p.get("DNSName") or "").split(".")[0] or p.get("HostName") or ""))
+             for p in peers.values() if p.get("Online") and str(p.get("OS", "")).lower() == "linux"}
+  except (ValueError, AttributeError) as error:
+    raise Error("tailscale status gave unexpected JSON") from error
+  return sorted(names - {""})
+
+
+def discover_peer(name, user, timeout, added, deadline, limit):
+  """One peer's record. Pure: it reads nothing shared and writes nothing, so peers can be probed in parallel. A probe
+  never runs past discover's deadline (time.monotonic())."""
+  host = f"{user}@{name}"
+  record = {"name": name, "target": host, "reachable": False, "reason": None, "spark": None, "installed": None, "engine": None,
+            "added": host in added}
+  if not TARGET_RE.match(name) or name.startswith("-") or not TARGET_RE.match(host):
+    record["reason"] = "not a valid ssh name"
+    return record
+  left = deadline - time.monotonic()
+  if left < 1:
+    record["reason"] = f"not asked: discover's time limit ({limit} s) ran out"
+    return record
+  try:
+    result = ssh_raw(host, "bash -s", stdin=DISCOVER_PROBE, timeout=min(timeout, left), check=False, what="probe", opts=DISCOVER_SSH_OPTS)
+  except Error as error:
+    record["reason"] = str(error)
+    return record
+  if result.returncode != 0:
+    record["reason"] = ssh_failure(host, result.stderr)
+    return record
+  state = parse_probe(result.stdout)
+  record.update(reachable=True, spark=is_spark(state), installed=bool(state.get("startdgx")), engine=bool(state.get("engine")))
+  return record
+
+
+def ssh_failure(host, stderr):
+  """Why a BatchMode ssh failed, in words that say what to do: its last line, unless it is one ssh says vaguely."""
+  if "Permission denied" in stderr:
+    return f"ssh needs a key: run ssh-copy-id {host}"
+  if "Host key verification failed" in stderr and "host key is known" in stderr:
+    return f"ssh hasn't seen {host}'s host key yet: Add machine's tailnet list saves it, or run ssh {host} once"
+  if "Host key verification failed" in stderr:
+    return f"its host key changed since this machine last saw it: check why before you trust it (ssh {host} says more)"
+  return (stderr.strip().splitlines() or ["ssh failed"])[-1]
+
+
+def discover_peers(user, timeout, limit):
+  names, added = tailnet_peers(), set(load_hosts())
+  deadline = time.monotonic() + limit
+  with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVER_WORKERS) as pool:
+    return list(pool.map(lambda name: discover_peer(name, user, timeout, added, deadline, limit), names))
+
+
+def cmd_discover(args):
+  user = args.user or ("demo" if DEMO else getpass.getuser())
+  if not TARGET_RE.match(user) or user.startswith("-") or "@" in user:
+    raise Error("Not a valid user name")
+  records = demo_peers(user) if DEMO else discover_peers(user, args.timeout, args.limit)
+  if args.json:
+    print(json.dumps(records, indent=2))
+    return
+  for r in records:
+    if not r["reachable"]:
+      print(f"{r['name']}  {r['target']}  unreachable ({r['reason']})")
+    else:
+      flags = [("spark" if r["spark"] else "not a Spark"), ("installed" if r["installed"] else "not installed"),
+               ("engine" if r["engine"] else "no engine"), ("added" if r["added"] else "not added")]
+      print(f"{r['name']}  {r['target']}  {', '.join(flags)}")
 
 
 def engine_entry(state):
@@ -338,7 +585,7 @@ def run_root(host, script, argv, doing):
   """Runs a script as root on the host in one sudo call, with argv as its $0 and arguments; sudo asks for the
   password on this terminal."""
   remote = shlex.join(["sudo", "bash", "-c", script, *argv])
-  if subprocess.run(["ssh", "-t", *SSH_OPTS, "--", host, remote], check=False).returncode != 0:
+  if run_on_tty(["ssh", "-t", *SSH_OPTS, "--", host, remote]) != 0:
     raise Error(f"{doing} {host} as root failed (see above)")
 
 
@@ -509,7 +756,10 @@ def serve_paths(state):
 
 
 def size_text(n):
-  return f"{n / 2**30:.1f} GiB" if n >= 2**30 else f"{n / 2**20:.1f} MiB"
+  for unit, size in (("GiB", 2**30), ("MiB", 2**20), ("KiB", 2**10)):
+    if n >= size:
+      return f"{n / size:.1f} {unit}"
+  return f"{n} B"
 
 
 def engine_is_ours(manifest, state):
@@ -727,6 +977,19 @@ def cmd_uninstall(args):
   if args.remove_packages and removable_packages(manifest):
     check_apt_removal(host, removable_packages(manifest))
   final = [f"delete {MANIFEST} and the backups", f"forget {host} here"]
+  if args.dry_run and args.json:
+    weights = state.get("models_bytes", "")
+    print(json.dumps({
+      "host": host,
+      "steps": [what for what, _ in user_steps if what] + [f"as root: {what}" for what, _ in root_steps] + final,
+      "kept": user_kept + root_kept,
+      "manual": manual_steps(host),
+      # What --delete-models would delete (None: nothing, or weights that are another engine's), and the packages
+      # --remove-packages would remove.
+      "models_bytes": int(weights) if ENGINE_DATA in state["exists"] and weights.isdigit() and engine_is_ours(manifest, state) else None,
+      "packages": removable_packages(manifest),
+    }))
+    return
   if args.dry_run:
     print(f"Would, on {host}:")
     for what in [what for what, _ in user_steps if what] + [f"as root: {what}" for what, _ in root_steps] + final:
@@ -755,12 +1018,17 @@ def cmd_uninstall(args):
     cmd_remove_host(args)
 
 
-def print_manual_steps(host):
+def manual_steps(host):
   """What uninstall can't do from here: the paired clients and the host's SSH access are someone else's."""
+  return [f"on each Omarchy machine paired with {host}, run: omarchy agent local forget <its tailnet name>",
+          f"{host}:~/.ssh/authorized_keys still has the keys of the machines that reach it over SSH (this one, and any "
+          "Omarchy machine that paired with it); remove their lines yourself if they shouldn't any more"]
+
+
+def print_manual_steps(host):
   print("Left for you to do:")
-  print(f"  on each Omarchy machine paired with {host}, run: omarchy agent local forget <its tailnet name>")
-  print(f"  {host}:~/.ssh/authorized_keys still has the keys of the machines that reach it over SSH (this one, and any "
-        "Omarchy machine that paired with it); remove their lines yourself if they shouldn't any more")
+  for step in manual_steps(host):
+    print(f"  {step}")
 
 
 def run_steps(host, phase, script, timeout):
@@ -771,6 +1039,36 @@ def run_steps(host, phase, script, timeout):
     raise Error(f"Uninstall stopped on {host} (see above); run it again once that's fixed")
 
 
+LAUNCHER = "omarchy-launch-floating-terminal-with-presentation"
+# The commands launch may open a terminal on, and whether each takes a model.
+LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True}
+
+
+def cmd_launch(args):
+  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and
+  uninstall). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
+  if args.verb not in LAUNCH_VERBS:
+    raise Error(f"launch: '{args.verb}' isn't one of {', '.join(LAUNCH_VERBS)}")
+  if args.model and not LAUNCH_VERBS[args.verb]:
+    raise Error(f"launch {args.verb} takes no model")
+  if args.replace_engine and args.verb != "install":
+    raise Error("--replace-engine goes only with launch install")
+  if (args.delete_models or args.remove_packages) and args.verb != "uninstall":
+    raise Error("--delete-models and --remove-packages go only with launch uninstall")
+  argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
+  argv += [recipe(args.model)] if args.model else []
+  argv += ["--replace-engine"] if args.replace_engine else []
+  argv += ["--delete-models"] if args.delete_models else []
+  argv += ["--remove-packages"] if args.remove_packages else []
+  if DEMO:
+    print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
+    return
+  try:
+    os.execvp(LAUNCHER, [LAUNCHER, shlex.join(argv)])
+  except OSError as error:
+    raise Error(f"Can't open a terminal with {LAUNCHER}: {error.strerror}") from error
+
+
 def cmd_engine(args):
   if args.json:
     print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
@@ -778,11 +1076,337 @@ def cmd_engine(args):
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
 
 
+# Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
+# demo/ and change a copy of them under $XDG_STATE_HOME/startdgx-demo, so the panel can be clicked through, and no
+# process is ever run. Starts, stops, setups and removals take effect over time, as on a real host: each row is
+# advanced from its timestamps whenever it is read, and only the commands that change something write.
+DEMO = False
+DEMO_FIXTURES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "demo")
+DEMO_RATE = 1_200_000_000  # bytes a second that a demo setup downloads at
+DEMO_WAIT_MS = 2000  # how long a demo setup waits before it downloads, as the engine's waits for its lock and unit
+
+
+def demo_enabled():
+  return os.environ.get("STARTDGX_DEMO") == "1" or os.path.exists(os.path.join(config_dir(), "demo", "ENABLED"))
+
+
+def demo_dir():
+  base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+  return os.path.join(base, "startdgx-demo")
+
+
+def demo_now_ms():
+  """The demo's clock; STARTDGX_DEMO_NOW (seconds since the epoch) holds it still, for tests."""
+  return int(float(os.environ.get("STARTDGX_DEMO_NOW") or time.time()) * 1000)
+
+
+def wall():
+  """Makes every way to run a process fail with an Error, so a hole in demo mode can't reach a machine."""
+  def refused(name):
+    def run(*args, **kwargs):
+      raise Error(f"demo mode runs nothing ({name})")
+    return run
+  for name in ("run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"):
+    setattr(subprocess, name, refused(f"subprocess.{name}"))
+  for name in [n for n in dir(os) if n.startswith(("exec", "spawn", "posix_spawn"))] + ["system", "popen", "fork", "forkpty"]:
+    if callable(getattr(os, name, None)):
+      setattr(os, name, refused(f"os.{name}"))
+
+
+def read_fixture(*path):
+  with open(os.path.join(DEMO_FIXTURES, *path)) as f:
+    return json.load(f)
+
+
+def write_json(path, doc):
+  tmp = f"{path}.{os.getpid()}.tmp"
+  with open(tmp, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+  os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def demo_state(write=False):
+  """The demo's machines by short name, each {status, list}; seeded from the fixtures on first use. A machine with
+  no state doesn't answer."""
+  folder = demo_dir()
+  os.makedirs(folder, exist_ok=True)
+  with open(os.path.join(folder, ".lock"), "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    path = os.path.join(folder, "state.json")
+    try:
+      with open(path) as f:
+        state = json.load(f)
+    except FileNotFoundError:
+      state, write = demo_seed(folder), True
+    yield state
+    if write:
+      write_json(path, state)
+
+
+def demo_seed(folder):
+  now = demo_now_ms()
+  if not os.path.exists(os.path.join(folder, "hosts.json")):
+    write_json(os.path.join(folder, "hosts.json"), read_fixture("hosts.json"))
+  state = {"hosts": {}}
+  for name in sorted(os.listdir(os.path.join(DEMO_FIXTURES, "hosts"))):
+    status, listing = read_fixture("hosts", name, "status.json"), read_fixture("hosts", name, "list.json")
+    for rid, row in status["models"].items():
+      if row["unit"] == "installing":
+        row["since_ms"] = row["since_ms"] or now
+        row["_progress_ms"] = now
+        row["_then"] = demo_model_row(status, listing, rid)
+      elif row["unit"] in ("activating", "deactivating", "removing"):
+        row["since_ms"] = row["since_ms"] or now
+    # A machine with the file needs-setup has an engine startdgx didn't install, and isn't set up as root.
+    needs_setup = os.path.exists(os.path.join(DEMO_FIXTURES, "hosts", name, "needs-setup"))
+    state["hosts"][name] = {"status": status, "list": listing, **({"needs_setup": True} if needs_setup else {})}
+  return state
+
+
+def demo_model_row(status, listing, rid):
+  """An installed model's row, as the engine's model_record shapes it, for a recipe in the listing; loading."""
+  r = next(r for r in listing if r["id"] == rid)
+  port = max([row["port"] for row in status["models"].values() if row.get("port")] or [11429]) + 1
+  digest = hashlib.sha256(rid.encode()).hexdigest()
+  return {"error": "", "fits": True, "fit_reason": "", "shared": False, "recipe": rid, "name": r["name"], "vendor": r["vendor"],
+          "runtime": r["runtime"], "image": f"ghcr.io/omacom/{r['runtime']}@sha256:{digest}", "ctx": r["context"],
+          "unit": "activating", "sub_state": "start", "result": "success", "port": port, "endpoint": f"http://127.0.0.1:{port}/v1",
+          "observed": None, "ram_total_gib": status["ram_total_gib"], "since_ms": None, "expected_load_seconds": 6.0,
+          "expected_stop_seconds": 2.0, "expected_remove_seconds": None,
+          "_observed": {"load_seconds": 6.0, "ram_used_gib": round((r.get("memory_gib") or 30) * 0.3, 1), "gpu_used_gib": 0.0}}
+
+
+def demo_advance(row, now):
+  """The row as it is at `now`: a download grows, then loads; a load, stop or removal ends once its time is up."""
+  row = json.loads(json.dumps(row))
+  if row["unit"] == "installing" and row["install"]["phase"] == "waiting":
+    begins = (row.get("since_ms") or now) + DEMO_WAIT_MS
+    if now < begins:
+      return row
+    row["install"].update(phase="downloading", rate_bytes_s=DEMO_RATE)
+    row["_progress_ms"] = begins
+  if row["unit"] == "installing" and row["install"]["phase"] == "downloading":
+    install, since = row["install"], row.get("_progress_ms", now)
+    left = install["total_bytes"] - install["done_bytes"]
+    if install["rate_bytes_s"] * (now - since) // 1000 < left:
+      install["done_bytes"] += install["rate_bytes_s"] * (now - since) // 1000
+      row["_progress_ms"] = now
+      return row
+    row = {**row["_then"], "since_ms": since + left * 1000 // max(install["rate_bytes_s"], 1)}
+  elapsed = now - (row.get("since_ms") or now)
+  if row["unit"] == "activating" and elapsed >= row["expected_load_seconds"] * 1000:
+    row.update(unit="active", sub_state="running", since_ms=None, observed=row.get("observed") or row.get("_observed"))
+  elif row["unit"] == "deactivating" and elapsed >= (row["expected_stop_seconds"] or 2) * 1000:
+    row.update(unit="inactive", sub_state="dead", since_ms=None)
+  elif row["unit"] == "removing" and elapsed >= (row["expected_remove_seconds"] or 3) * 1000:
+    return None
+  return row
+
+
+def demo_host(state, host):
+  """The added host's state, advanced to now; one without state doesn't answer, as an unreachable host doesn't."""
+  machine = state["hosts"].get(target(host).rsplit("@", 1)[-1])
+  if machine is None:
+    raise Error(f"{host} didn't answer in time")
+  now = demo_now_ms()
+  machine["status"]["models"] = {rid: row for rid, row in ((rid, demo_advance(row, now)) for rid, row in machine["status"]["models"].items())
+                                 if row is not None}
+  return machine
+
+
+def public(row):
+  return {key: value for key, value in row.items() if not key.startswith("_")}
+
+
+def demo_status(args):
+  with demo_state() as state:
+    status = demo_host(state, args.host)["status"]
+  print(json.dumps({**status, "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
+
+
+def demo_list(args):
+  with demo_state() as state:
+    machine = demo_host(state, args.host)
+  models = machine["status"]["models"]
+  print(json.dumps([{**r, "installed": r["id"] in models and models[r["id"]]["unit"] != "installing",
+                     "active": models.get(r["id"], {}).get("unit") == "active"} for r in machine["list"]], indent=2))
+
+
+def demo_set_up(models, rid):
+  row = models.get(recipe(rid))
+  if row is None or row["unit"] == "installing":
+    raise Error(f"{rid} isn't set up. Run: omarchy agent local use {rid}")
+  return row
+
+
+def demo_start(args):
+  with demo_state(write=True) as state:
+    status = demo_host(state, args.host)["status"]
+    row = demo_set_up(status["models"], args.model)
+    if row["unit"] in ("deactivating", "removing"):
+      raise Error(f"{args.model} is {'stopping' if row['unit'] == 'deactivating' else 'being removed'}")
+    if row["unit"] not in ("active", "activating"):
+      if row["fits"] is False:
+        raise Error(f"Not enough memory to start model {args.model}: stop another model first")
+      row.update(unit="activating", sub_state="start", result="success", error="", since_ms=demo_now_ms())
+    status["last"] = args.model
+  demo_wait_loaded(args)
+  print(f"Started {args.model} at {row['endpoint']}")
+
+
+def demo_wait_loaded(args):
+  """Returns once the model has loaded, as the engine's start does, with the state unlocked meanwhile so a stop
+  can come; a model that stops loading (a stop) didn't start. A clock held still (STARTDGX_DEMO_NOW) never moves,
+  so then it returns at once."""
+  if os.environ.get("STARTDGX_DEMO_NOW"):
+    return
+  deadline = time.monotonic() + (args.timeout or 600)
+  while True:
+    with demo_state() as state:
+      unit = demo_host(state, args.host)["status"]["models"].get(args.model, {}).get("unit")
+    if unit == "active":
+      return
+    if unit != "activating":
+      raise Error(f"{args.model} didn't start: it stopped while it loaded")
+    if time.monotonic() >= deadline:
+      raise Error(f"{args.host} didn't answer in time")
+    time.sleep(0.2)
+
+
+def demo_stop(args):
+  with demo_state(write=True) as state:
+    models = demo_host(state, args.host)["status"]["models"]
+    if args.model:
+      demo_set_up(models, args.model)
+    targets = [args.model] if args.model else [rid for rid, row in models.items() if row["unit"] in ("active", "activating")]
+    for rid in targets:
+      if models[rid]["unit"] in ("active", "activating"):
+        models[rid].update(unit="deactivating", sub_state="stop-sigterm", since_ms=demo_now_ms())
+  print(f"Stopped {', '.join(targets)}" if targets else "No local model is running")
+
+
+def demo_use(args):
+  rid = recipe(args.model)
+  unit = f"omarchy-agent-local-use-{rid}.service"
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    status, models = machine["status"], machine["status"]["models"]
+    r = next((r for r in machine["list"] if r["id"] == rid), None)
+    if r is None:
+      raise Error(f"No recipe {rid} in the catalog")
+    if models.get(rid, {}).get("unit") == "installing":
+      print(f"{rid} is already being set up; follow it with: journalctl --user -u {unit} -f")
+      return
+    if rid in models:
+      raise Error(f"{rid} is already set up: start it with startdgx start {args.host} {rid}")
+    if not r["available"]:
+      raise Error(r["reason"] or f"{rid} can't run on {args.host}")
+    if machine.get("needs_setup"):
+      # The engine's prepare_host, on a machine whose engine startdgx didn't install and that isn't set up as root.
+      raise Error("This machine needs Podman set up as root first: run this same command once in a terminal, where sudo can ask for your password")
+    now = demo_now_ms()
+    models[rid] = {"error": "", "fits": True, "fit_reason": "", "recipe": rid, "name": r["name"], "vendor": r["vendor"], "runtime": "",
+                   "image": "", "ctx": None, "unit": "installing", "sub_state": "", "result": "", "port": None, "endpoint": "",
+                   "observed": None, "since_ms": now, "expected_load_seconds": 6.0, "expected_stop_seconds": None,
+                   "expected_remove_seconds": None,
+                   "install": {"phase": "waiting", "done_bytes": 0, "total_bytes": int((r.get("memory_gib") or 30) * 2**29),
+                               "rate_bytes_s": 0},
+                   "_progress_ms": now, "_then": demo_model_row(status, machine["list"], rid)}
+  print(f"Setting up {rid} in the background; the agents panel shows its progress, or follow it with: journalctl --user -u {unit} -f")
+
+
+def demo_delete(args):
+  if args.dry_run:
+    rid = recipe(args.model)
+    with demo_state() as state:
+      machine = demo_host(state, args.host)
+    row = machine["status"]["models"].get(rid)
+    if row is None:
+      raise Error(f"{rid} isn't set up on {args.host}")
+    if row["unit"] == "installing":
+      plan = {"recipe": rid, "setting_up": True, "bytes": row["install"]["done_bytes"]}
+    else:
+      # What a demo setup of it downloads (demo_use), so the two agree.
+      r = next((r for r in machine["list"] if r["id"] == rid), {})
+      plan = {"recipe": rid, "setting_up": False, "bytes": int((r.get("memory_gib") or 30) * 2**29)}
+    print_remove_plan(plan, args.json)
+    return
+  with demo_state(write=True) as state:
+    models = demo_host(state, args.host)["status"]["models"]
+    if models.get(recipe(args.model), {}).get("unit") == "installing":
+      del models[args.model]
+      print(f"Cancelled the setup of {args.model}")
+      return
+    demo_set_up(models, args.model).update(unit="removing", sub_state="dead", since_ms=demo_now_ms(), expected_remove_seconds=3.0)
+  print(f"Removed {args.model}")
+
+
+def demo_peers(user):
+  added = set(load_hosts())
+  return [{**p, "target": f"{user}@{p['name']}", "added": f"{user}@{p['name']}" in added} for p in read_fixture("discover.json")]
+
+
+def demo_add(args):
+  name = ssh_target(args.host).rsplit("@", 1)[-1]
+  with demo_state() as state:
+    known = name in state["hosts"]
+  if not known:
+    peer = next((p for p in read_fixture("discover.json") if p["name"] == name and p["reachable"]), None)
+    raise Error(f"{args.host} has no engine: run startdgx install {args.host}" if peer else f"{args.host} didn't answer in time")
+  with hosts_changing() as hosts:
+    hosts[args.host] = {"profile": next(iter(read_fixture("hosts.json").values()))["profile"]}
+  print(f"{args.host} added")
+
+
+def demo_says(verb):
+  def run(args):
+    print(f"Demo: would {verb} {ssh_target(args.host)}{' (dry run)' if getattr(args, 'dry_run', False) else ''}")
+  return run
+
+
+def demo_uninstall(args):
+  """The uninstall's plan, as an install startdgx made would have it (podman added, the models' weights kept unless
+  --delete-models); anything else only says what it would do."""
+  if not (args.dry_run and args.json):
+    return demo_says("uninstall from")(args)
+  with demo_state() as state:
+    machine = demo_host(state, args.host)
+  installed = [r for r in machine["list"] if r["id"] in machine["status"]["models"]]
+  weights = sum(int((r.get("memory_gib") or 30) * 2**29) for r in installed)
+  where = f"~/{ENGINE_DATA} ({size_text(weights)} of model weights"
+  steps = ["stop the engine's units (omarchy-agent-local-*.service)", f"remove ~/{QUADLET_DIR}/omarchy-agent-local.network",
+           f"remove the podman network {NETWORK}", f"remove the podman secret {SECRET}",
+           f"delete ~/{ENGINE_STATE} (the engine's state)", f"delete ~/{ENGINE_CONFIG} (the engine's key, overlays and shares)"]
+  steps += [f"delete {where})"] if args.delete_models else []
+  steps += [f"delete the engine ~/{ENGINE_DIR}", "as root: disable linger for demo", f"as root: remove {AGENT_LINK}"]
+  steps += ["as root: remove the packages podman"] if args.remove_packages else []
+  steps += [f"delete {MANIFEST} and the backups", f"forget {args.host} here"]
+  kept = ([] if args.delete_models else [f"keep {where}; --delete-models deletes them)"])
+  kept += [] if args.remove_packages else ["keep the packages podman (the install added them; --remove-packages removes them)"]
+  print(json.dumps({"host": args.host, "steps": steps, "kept": kept, "manual": manual_steps(args.host), "models_bytes": weights,
+                    "packages": ["podman"]}))
+
+
+def demo_logs(args):
+  with demo_state() as state:
+    status = demo_host(state, args.host)["status"]
+  rid = recipe(args.model) if args.model else status["last"]
+  error = status["models"].get(rid or "", {}).get("error")
+  print(f"Last error: {error}\n" if error else "", end="")
+  print(f"Demo: {rid or 'no model'} on {args.host} has no logs")
+
+
+DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "use": demo_use, "delete": demo_delete,
+                 "add": demo_add, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
+
+
 def build_parser():
   p = argparse.ArgumentParser(prog="startdgx", description=__doc__)
   sub = p.add_subparsers(dest="command", required=True)
 
-  def add(name, fn, model=False, optional_model=False, timeout=60, description=None):
+  def add(name, fn, model=False, optional_model=False, timeout=60, description=None, timeout_help="%(default)s"):
     s = sub.add_parser(name, description=description)
     if name not in ("hosts", "engine"):
       s.add_argument("host")
@@ -790,7 +1414,7 @@ def build_parser():
       s.add_argument("model")
     if optional_model:
       s.add_argument("model", nargs="?")
-    s.add_argument("--timeout", type=int, default=timeout)
+    s.add_argument("--timeout", type=int, default=timeout, help=f"seconds to wait for the host (default: {timeout_help})")
     s.set_defaults(fn=fn)
     return s
 
@@ -808,23 +1432,56 @@ def build_parser():
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
+  u.add_argument("--json", action="store_true", help="with --dry-run: as {host, steps, kept, manual, models_bytes, packages}")
+  d = sub.add_parser("discover", description="List the tailnet's online Linux machines and probe each over ssh, read-only, "
+                     "for a DGX Spark. Installs nothing and adds nothing; it saves the host key of a machine ssh has never seen "
+                     "(StrictHostKeyChecking=accept-new).")
+  d.add_argument("--json", action="store_true")
+  d.add_argument("--user", help="the ssh user on the peers (default: this machine's user)")
+  d.add_argument("--timeout", type=int, default=20, help="seconds to wait for each peer")
+  d.add_argument("--limit", type=int, default=60, help="seconds the whole discover may take; a peer not heard from by then is unreachable")
+  d.set_defaults(fn=cmd_discover)
   add("forget", cmd_remove_host)
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)
   add("status", cmd_status)
   add("list", cmd_list)
-  add("start", cmd_start, model=True)
+  # start returns once the model has loaded, which can take minutes.
+  add("start", cmd_start, model=True, timeout=600)
   add("stop", cmd_stop, optional_model=True)
-  add("use", cmd_use, model=True, timeout=3600)
-  add("delete", cmd_delete, model=True)
+  us = add("use", cmd_use, model=True, timeout=None, timeout_help="3600, or 120 with --detach")
+  us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
+  de = add("delete", cmd_delete, model=True)
+  de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
+  de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")
+  add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
+  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
+                      "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
+  la.add_argument("verb", metavar="install|uninstall|logs")
+  la.add_argument("host")
+  la.add_argument("model", nargs="?")
+  la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")
+  la.add_argument("--delete-models", action="store_true", help="with uninstall: also delete the model weights")
+  la.add_argument("--remove-packages", action="store_true", help="with uninstall: also remove the packages the install added")
+  la.set_defaults(fn=cmd_launch)
   return p
 
 
 def main(argv):
+  global DEMO
   args = build_parser().parse_args(argv)
+  for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(signum, stop_children)
   try:
+    if demo_enabled():
+      DEMO = True
+      wall()
+      with demo_state():
+        pass
+      args.fn = DEMO_COMMANDS.get(args.command, args.fn)
     args.fn(args)
   except Error as error:
-    print(f"Error: {error}", file=sys.stderr)
+    # An error can quote a host (rsync's or git's stderr, a tailnet name): its controls go too.
+    print(f"Error: {clean(str(error))}", file=sys.stderr)
     return 1
   return 0
 

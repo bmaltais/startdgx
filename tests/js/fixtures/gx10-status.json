@@ -1,0 +1,92 @@
+{
+  "models": {
+    "nemotron-3.5-bolt-tensorfold": {
+      "error": "",
+      "fits": true,
+      "fit_reason": "",
+      "shared": false,
+      "recipe": "nemotron-3.5-bolt-tensorfold",
+      "name": "Nemotron 3.5 Bolt",
+      "vendor": "nvidia",
+      "runtime": "tensorfold-bolt",
+      "image": "ghcr.io/omacom/tensorfold-nemotron-bolt@sha256:cae70d9ade0dd6f762d86b1fe5cb84e8a66cbb881d886a96b76bf89e81f3bc3a",
+      "ctx": 262144,
+      "unit": "inactive",
+      "sub_state": "dead",
+      "result": "success",
+      "port": 11435,
+      "endpoint": "http://127.0.0.1:11435/v1",
+      "observed": {
+        "load_seconds": 31.0,
+        "ram_used_gib": 31.2,
+        "gpu_used_gib": 0.0
+      },
+      "ram_total_gib": 121.6,
+      "since_ms": null,
+      "expected_load_seconds": 30.7,
+      "expected_stop_seconds": 1.1,
+      "expected_remove_seconds": null
+    },
+    "qwen3.8-27b-abliterated-tensorfold": {
+      "error": "",
+      "fits": true,
+      "fit_reason": "",
+      "shared": false,
+      "recipe": "qwen3.8-27b-abliterated-tensorfold",
+      "name": "Qwen3.8 27B Abliterated",
+      "vendor": "qwen",
+      "runtime": "tensorfold",
+      "image": "ghcr.io/omacom/tensorfold@sha256:c88821d872e22f9dc6148173816b654e2c6dcd712fae50bc5e95915e3f817856",
+      "ctx": 131072,
+      "unit": "active",
+      "sub_state": "running",
+      "result": "success",
+      "port": 11438,
+      "endpoint": "http://127.0.0.1:11438/v1",
+      "observed": {
+        "load_seconds": 60.0,
+        "ram_used_gib": 27.9,
+        "gpu_used_gib": 0.0
+      },
+      "ram_total_gib": 121.6,
+      "since_ms": null,
+      "expected_load_seconds": 59.9,
+      "expected_stop_seconds": 2.2,
+      "expected_remove_seconds": null
+    },
+    "qwen3.8-27b-tensorfold": {
+      "error": "",
+      "fits": true,
+      "fit_reason": "",
+      "shared": false,
+      "recipe": "qwen3.8-27b-tensorfold",
+      "name": "Qwen3.8 27B",
+      "vendor": "qwen",
+      "runtime": "tensorfold",
+      "image": "ghcr.io/omacom/tensorfold@sha256:c88821d872e22f9dc6148173816b654e2c6dcd712fae50bc5e95915e3f817856",
+      "ctx": 131072,
+      "unit": "inactive",
+      "sub_state": "dead",
+      "result": "success",
+      "port": 11436,
+      "endpoint": "http://127.0.0.1:11436/v1",
+      "observed": {
+        "load_seconds": 55.0,
+        "ram_used_gib": 27.9,
+        "gpu_used_gib": 0.0
+      },
+      "ram_total_gib": 121.6,
+      "since_ms": null,
+      "expected_load_seconds": 55.0,
+      "expected_stop_seconds": 2.1,
+      "expected_remove_seconds": null
+    }
+  },
+  "share_error": "",
+  "last": "qwen3.8-27b-abliterated-tensorfold",
+  "ram_total_gib": 121.6,
+  "best": "qwen3.8-flash-next-tensorfold",
+  "link": {
+    "state": "none"
+  }
+}

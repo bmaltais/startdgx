@@ -1,0 +1,65 @@
+{
+  "models": {
+    "nemotron-3.5-bolt-tensorfold": {
+      "error": "",
+      "fits": true,
+      "fit_reason": "",
+      "shared": false,
+      "recipe": "nemotron-3.5-bolt-tensorfold",
+      "name": "Nemotron 3.5 Bolt",
+      "vendor": "nvidia",
+      "runtime": "tensorfold-bolt",
+      "image": "ghcr.io/omacom/tensorfold-nemotron-bolt@sha256:cae70d9ade0dd6f762d86b1fe5cb84e8a66cbb881d886a96b76bf89e81f3bc3a",
+      "ctx": 262144,
+      "unit": "inactive",
+      "sub_state": "dead",
+      "result": "success",
+      "port": 11435,
+      "endpoint": "http://127.0.0.1:11435/v1",
+      "observed": {
+        "load_seconds": 31.0,
+        "ram_used_gib": 31.2,
+        "gpu_used_gib": 0.0
+      },
+      "ram_total_gib": 121.6,
+      "since_ms": null,
+      "expected_load_seconds": 6.0,
+      "expected_stop_seconds": 2.0,
+      "expected_remove_seconds": null
+    },
+    "qwen3.8-flash-next-tensorfold": {
+      "error": "",
+      "fits": true,
+      "fit_reason": "",
+      "recipe": "qwen3.8-flash-next-tensorfold",
+      "name": "Qwen3.8 Flash Next",
+      "vendor": "qwen",
+      "runtime": "",
+      "image": "",
+      "ctx": null,
+      "unit": "installing",
+      "sub_state": "",
+      "result": "",
+      "port": null,
+      "endpoint": "",
+      "observed": null,
+      "since_ms": null,
+      "expected_load_seconds": 6.0,
+      "expected_stop_seconds": null,
+      "expected_remove_seconds": null,
+      "install": {
+        "phase": "downloading",
+        "done_bytes": 21904333209,
+        "total_bytes": 54760833024,
+        "rate_bytes_s": 312000000
+      }
+    }
+  },
+  "share_error": "",
+  "last": "nemotron-3.5-bolt-tensorfold",
+  "ram_total_gib": 121.6,
+  "best": "qwen3.8-flash-next-tensorfold",
+  "link": {
+    "state": "none"
+  }
+}
