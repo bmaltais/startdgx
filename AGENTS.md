@@ -4,7 +4,7 @@ The repo root is the Omarchy plugin `io.github.bmaltais.startdgx` (`manifest.jso
 
 ## Testing
 
-- **`scripts/check.sh`**: the devkit's check plus `tests/cli.sh`, `node --test tests/js/` and the icon check. Run it before every commit (the pre-commit hook does, once enabled: `git config core.hooksPath .githooks`). Fix every warning; the qmllint baseline is only for imports qmllint cannot resolve.
+- **`scripts/check.sh`**: the devkit's check plus `tests/cli.sh`, `node --test tests/js/` and the icon check. Run it before every commit (the pre-commit hook does, once enabled: `git config core.hooksPath .githooks`). Fix every warning; the qmllint baseline is only for the Omarchy shell's own typing (its `QtObject` groups, Quickshell's `PanelWindow`), which `docs/testing.md` lists; its modules resolve through `scripts/lint/qmllint`.
 - **`scripts/dev`**: test every UI change in the nested session, which runs the CLI in demo mode with ssh and tailscale guarded. `scripts/dev up`, `open`, `add`, `uninstall HOST`, `models HOST`, `remove HOST MODEL`, `shot FILE` (look at it), `click`, `key`, `errors` (0 = clean), `reload` after an edit, `down` when done. Details: `docs/testing.md`.
 - **Never run the real CLI against a real machine to test a change**, and never `scripts/reload` or `scripts/pointer` unless the user asks: reload restarts the user's real shell, where the plugin talks to real machines.
 - The logic is test-first: a rule goes in `DgxModel.js` with its test in `tests/js/`, a CLI change with its case in `tests/cli.sh`.

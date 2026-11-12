@@ -3,7 +3,6 @@
 // It only shows when the list is taller than the window; the wheel scrolls the list itself.
 import QtQuick
 import qs.Commons
-import qs.Ui
 
 Item {
   id: bar

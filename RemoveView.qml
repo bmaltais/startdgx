@@ -6,7 +6,6 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
-import qs.Ui
 import "DgxModel.js" as Model
 
 FocusScope {

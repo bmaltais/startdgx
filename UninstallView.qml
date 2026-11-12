@@ -5,6 +5,7 @@
 // model weights (--delete-models) and removing the packages the install added (--remove-packages). Each change asks
 // the machine for the plan again, and Uninstall… waits for it. Esc, Cancel or a click outside closes it and nothing
 // happens.
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons

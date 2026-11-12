@@ -2,7 +2,6 @@
 // red while a destructive one waits for its second click.
 import QtQuick
 import qs.Commons
-import qs.Ui
 
 Rectangle {
   id: pill
