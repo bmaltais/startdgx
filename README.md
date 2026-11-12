@@ -32,12 +32,14 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   terminal), and records what was there before and what it changed in `~/.local/share/startdgx/manifest.json` on the
   host. The root files it may overwrite are backed up first. It refuses a host that already has an engine it didn't
   install unless `--replace-engine` is given, which backs that engine up for uninstall to put back. A failed install
-  still records what it changed, so an uninstall can undo it.
+  still records what it changed, so an uninstall can undo it. Where the host runs tailscale, the same `sudo` makes the
+  user its operator (`tailscale set --operator`), without which `tailscale serve` refuses the engine's shares; the
+  manifest records who it was.
 - [x] `startdgx uninstall [--dry-run [--json]] [--delete-models] [--remove-packages] <host>`: (`--dry-run --json` prints `{host, steps, kept, manual, models_bytes, packages}`, for the panel's card) reverses the install from its
   manifest. It stops sharing and stops the engine's units, then removes only the `/local-ai` tailscale serve routes,
   the engine's quadlets, network, secret and images (an image a container still uses stays), its state and config,
   and finally the engine. Then, in one `sudo`, it reverts only what the install changed: what it created goes, files
-  it overwrote are restored from their backups, and linger and the agent link go back to how they were. Model
+  it overwrote are restored from their backups, and linger, the agent link and the tailscale operator go back to how they were (an operator someone else set since stays). Model
   weights are kept by default (`--delete-models` deletes them), and the uninstall says how much they take. Packages
   the install added stay unless `--remove-packages` is given, which never removes `python3` and refuses if apt would
   remove anything else with them. Where the engine was there before the install, the uninstall leaves everything it

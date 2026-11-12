@@ -50,6 +50,8 @@ case "$cmd" in
   # The engine's share when tailscale serve refuses: it has already saved the share, and says why over several lines.
   *"share serve-off --off"*) echo "serve-off is no longer shared";;
   *"share serve-off"*) printf '%s\n' "Error: tailscale serve /local-ai/serve-off: Serve is not enabled on your tailnet." "To enable, visit:" "  https://login.tailscale.com/f/serve?node=n1" >&2; exit 1;;
+  # The engine's share when tailscale serve hangs (a tailnet without Serve makes it wait for a click): it only says so.
+  *"share serve-hang"*) echo "Error: tailscale serve didn't answer" >&2; exit 1;;
   *"fail"*) echo "Error: boom" >&2; exit 1;;
 esac
 F
@@ -105,6 +107,8 @@ cat >"$FAKE_HOSTBIN/tailscale" <<'F'
 printf '%s\n' "tailscale $*" >>"$FAKE_HOST/calls"
 case "$*" in
   "serve status --json") cat "$FAKE_HOST/serve.json" 2>/dev/null || echo '{}';;
+  "debug prefs") printf '{"OperatorUser": "%s"}\n' "$(cat "$FAKE_HOST/operator" 2>/dev/null)";;
+  "set --operator="*) printf '%s' "${2#--operator=}" >"$FAKE_HOST/operator";;
   "serve --yes --set-path "*" off") python3 -c '
 import json, sys
 path, file = sys.argv[1:]
@@ -175,6 +179,9 @@ same "$(echo "$err" | wc -l)" 1 && echo "$err" | grep -q '^Error: serve-off is n
 ok $? "with the engine's whole message on one line, saying the model is not shared"
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai share serve-off --off$'; ok $? "and the share the engine had already saved is taken back"
 s share me@dgx serve-off --off >/dev/null; ok $? "so that unsharing it works"
+err=$(s share me@dgx serve-hang 2>&1 >/dev/null)
+same "$err" "Error: serve-hang is not shared: tailscale serve didn't answer. Serve may not be enabled on the tailnet: enable it at https://login.tailscale.com/f/serve, then share again"
+ok $? "a share whose tailscale serve hangs says Serve may not be enabled, and where to enable it"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -323,6 +330,28 @@ s install me@spark --engine-path "$engine" >/dev/null; m 'item("linger", "me")["
 fresh_host; after linger=yes
 FAKE_RSYNC_FAIL=1 s install me@spark --engine-path "$engine" >/dev/null 2>&1; ok $((!$?)) "install fails when copying the engine fails"
 m 'item("linger", "me")["created_by_us"]'; ok $? "a failed copy still records what the root script changed"
+
+# The tailscale operator: without it tailscale serve refuses the user the engine shares as. The install sets it when the host
+# runs tailscale and records what it was; uninstall puts that back only while it is still ours.
+fresh_host operator=; after operator=me
+out=$(s install --dry-run me@spark --engine-path "$engine"); echo "$out" | grep -q 'set the tailscale operator to me'; ok $? "install --dry-run lists setting the tailscale operator"
+s install me@spark --engine-path "$engine" >/dev/null
+# shellcheck disable=SC2016 # the $1 is the root script's, meant to stay unexpanded
+grep -q 'tailscale set --operator="\$1"' "$FAKE_HOST/root-call"; ok $? "the root script sets the tailscale operator to the user"
+m 'item("operator", "tailscale")["created_by_us"] and item("operator", "tailscale")["previous"] == {"operator": ""}'; ok $? "an operator that was unset is marked ours"
+fresh_host operator=bob; after operator=me
+out=$(s install --dry-run me@spark --engine-path "$engine"); echo "$out" | grep -q 'set the tailscale operator to me (now bob)'; ok $? "the plan says whose operator it replaces"
+s install me@spark --engine-path "$engine" >/dev/null
+m 'item("operator", "tailscale")["changed_by_us"] and item("operator", "tailscale")["previous"] == {"operator": "bob"}'; ok $? "another user's operator is recorded and marked changed"
+fresh_host operator=me; after operator=me
+out=$(s install --dry-run me@spark --engine-path "$engine"); ! echo "$out" | grep -q operator; ok $? "an operator that is already the user needs no step"
+s install me@spark --engine-path "$engine" >/dev/null
+! grep -q 'tailscale set' "$FAKE_HOST/root-call" && m 'not item("operator", "tailscale")["created_by_us"] and not item("operator", "tailscale")["changed_by_us"]'; ok $? "and is not marked ours"
+fresh_host; s install me@spark --engine-path "$engine" >/dev/null
+! grep -q 'tailscale' "$FAKE_HOST/root-call" && m '("operator", "tailscale") not in its'; ok $? "a host without tailscale gets no operator step and no item"
+fresh_host operator='?'; after operator=me
+s install me@spark --engine-path "$engine" >/dev/null
+grep -q 'tailscale set --operator' "$FAKE_HOST/root-call" && m '("operator", "tailscale") not in its'; ok $? "an operator the user can't read is set but not recorded, so uninstall leaves it"
 
 cdi=/etc/cdi/nvidia.yaml compat=/usr/local/sbin/nvidia-cdi-podman-compat bk=$FAKE_HOST/home/.local/share/startdgx/backup
 fresh_host; put $cdi 'cdiVersion: 0.6.0'; put $compat '#!/bin/sh'; put /etc/other 'not ours'
@@ -488,6 +517,17 @@ uconf=/etc/systemd/user.conf.d/99-rdma-memlock.conf
 engine_root="mkdir -p \"\$root${uconf%/*}\"; printf '%s\\n' '$rdma' >\"\$root$uconf\""; installed; engine_root=''
 s uninstall me@spark >/dev/null 2>&1; none_of "$r$uconf" && grep -qx 'systemctl --user -M me@ daemon-reexec' "$FAKE_HOST/calls"
 ok $? "removing the user services' memlock default re-executes the user's systemd, to drop it"
+
+changed=(operator=me); installed operator=; changed=(); echo me >"$FAKE_HOST/operator"
+s uninstall --dry-run me@spark | grep -q 'as root: clear the tailscale operator'; ok $? "uninstall --dry-run lists clearing an operator the install set"
+s uninstall me@spark >/dev/null 2>&1; same "$(cat "$FAKE_HOST/operator")" ""; ok $? "uninstall clears the operator the install set"
+changed=(operator=me); installed operator=; changed=(); echo carol >"$FAKE_HOST/operator"
+s uninstall me@spark >/dev/null 2>&1; same "$(cat "$FAKE_HOST/operator")" carol; ok $? "and leaves one someone else set since"
+changed=(operator=me); installed operator=bob; changed=(); echo me >"$FAKE_HOST/operator"
+s uninstall --dry-run me@spark | grep -q 'as root: set the tailscale operator back to bob'; ok $? "uninstall --dry-run lists putting back the operator the install replaced"
+s uninstall me@spark >/dev/null 2>&1; same "$(cat "$FAKE_HOST/operator")" bob; ok $? "uninstall puts back the operator the install replaced"
+installed operator=me; echo me >"$FAKE_HOST/operator"
+s uninstall me@spark >/dev/null 2>&1; same "$(cat "$FAKE_HOST/operator")" me; ok $? "uninstall leaves an operator that was already the user's"
 
 # A host whose engine was there before the install, which --replace-engine replaced.
 eng=$h/.local/share/omarchy-local-ai
