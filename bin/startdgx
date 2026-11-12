@@ -1561,7 +1561,7 @@ DRAFT_TEMPLATE = """# Drafted by startdgx from {repo}. The memory numbers are pl
 name = {name}
 summary = {summary}
 runtime = "tensorfold"
-
+{vision_input}
 [[hardware]]
 gpu = "nvidia-gb10"
 ram_class = 128
@@ -1580,7 +1580,13 @@ ctx = {ctx}
 peak_ram_gib = {gib}
 peak_gpu_gib = {gib}
 source = "drafted"
-"""
+{vision_server}"""
+
+
+# A repo with a vision_config gets what the curated vision recipes declare: the image input, and the server arguments that load the
+# vision tower (TensorFold's --vision, with the curated recipes' limit of 50 images a request). The runtime needs nothing more.
+DRAFT_VISION_INPUT = '# Screenshots and photos through the checkpoint\'s vision tower, which --vision loads.\ninput = ["text", "image"]\n'
+DRAFT_VISION_SERVER = '\n[server]\nargs = ["--vision", "--vision-max-images", "50"]\n'
 
 
 def draft_id(repo):
@@ -1654,11 +1660,9 @@ DRAFT_DRAFTER_RE = re.compile(r"draft|eagle|mtp|speculat", re.I)
 
 
 def draft_judgement(repo, config):
-  """What in this repo the template can't settle, so an agent should look: ["vision", "drafter", "server"]."""
-  archs = [a for a in config.get("architectures") or [] if isinstance(a, str)]
+  """What in this repo the template can't settle, so an agent should look: ["drafter", "server"]. A vision_config is not one:
+  the template sets the image input and the vision server arguments itself."""
   why = []
-  if config.get("vision_config") or any(re.search(r"vision|VL", a) for a in archs):
-    why.append("vision")
   nextn = config.get("num_nextn_predict_layers")
   if DRAFT_DRAFTER_RE.search(repo.split("/", 1)[1]) or (isinstance(nextn, int) and nextn > 0):
     why.append("drafter")
@@ -1667,8 +1671,7 @@ def draft_judgement(repo, config):
   return why
 
 
-JUDGEMENT_TEXT = {"vision": "it has a vision tower (the template drafts the language model only)",
-                  "drafter": "it is, or carries, a speculative drafter (the template has no field for one)",
+JUDGEMENT_TEXT = {"drafter": "it is, or carries, a speculative drafter (the template has no field for one)",
                   "server": "its config scales positions (rope_scaling), which may need server arguments the template cannot set"}
 
 
@@ -1715,9 +1718,11 @@ def draft_recipe(args, replace=False):
     warnings.append("License unknown: Hugging Face reports none startdgx can use for this repo, so read its model card before you use it")
   elif not DRAFT_FREE_LICENSES.match(license_id.lower()):
     warnings.append(f"License '{license_id}' may restrict use: read its terms before you use it")
+  vision = bool(config.get("vision_config"))
   text = DRAFT_TEMPLATE.format(repo=repo, name=toml_str(draft_name(repo)), repo_q=toml_str(repo), revision=sha,
                                summary=toml_str(f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
-                               license=toml_str(license_id or "unknown"), files=toml_str(DRAFT_FILES), ctx=DRAFT_CTX, gib=gib)
+                               license=toml_str(license_id or "unknown"), files=toml_str(DRAFT_FILES), ctx=DRAFT_CTX, gib=gib,
+                               vision_input=DRAFT_VISION_INPUT if vision else "", vision_server=DRAFT_VISION_SERVER if vision else "")
   data = text.encode("utf-8")
   try:
     os.makedirs(out, exist_ok=True)
@@ -2426,7 +2431,7 @@ def build_parser():
   rd.set_defaults(fn=cmd_recipe)
   ra = rv.add_parser("author", description="Draft a recipe for a Hugging Face repo on HOST (as recipe draft), then open a terminal running the "
                      "agent (agent_command in ~/.config/startdgx/config.json, default claude) with the authoring brief, when the draft needs "
-                     "judgement (a vision tower, a drafter, server arguments the template cannot set) or with --agent.")
+                     "judgement (a drafter, rope scaling, server arguments the template cannot set) or with --agent.")
   ra.add_argument("host")
   ra.add_argument("repo", help="OWNER/NAME")
   ra.add_argument("--id", help="the recipe id (default: the repo name slugified, owner dropped, plus -tensorfold)")
