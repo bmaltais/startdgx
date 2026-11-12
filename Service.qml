@@ -1,12 +1,13 @@
 // StartDGX: DGX Spark machines and their models, from the Omarchy shell. This file owns the window, the
 // cards over it, the IPC entry points and the bar icon's status; DgxService.qml owns the machines and every
-// call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, ForgetView.qml, AddModelView.qml
-// and RemoveView.qml draw what is in it.
+// call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, ForgetView.qml, AddModelView.qml,
+// AddRecipeView.qml, ContextView.qml and RemoveView.qml draw what is in it.
 //
 //   omarchy-shell io.github.bmaltais.startdgx open               toggle the manager
 //   omarchy-shell io.github.bmaltais.startdgx addMachine         the manager with its Add machine card
 //   omarchy-shell io.github.bmaltais.startdgx uninstall <host>   the manager with a machine's uninstall card
 //   omarchy-shell io.github.bmaltais.startdgx addModel <host>    the manager with a machine's model picker
+//   omarchy-shell io.github.bmaltais.startdgx addRecipe <host> [path]   the manager with a machine's Add recipe card
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 //   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
 pragma ComponentBehavior: Bound
@@ -34,8 +35,10 @@ Item {
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
   // A card floats over the manager: "add" (Add machine), "uninstall" or "forget" (one machine's), "addModel" (a
-  // machine's model picker) or "remove" or "context" (one model's), or "" for none.
+  // machine's model picker or Add recipe card) or "remove" or "context" (one model's), or "" for none.
   property string card: ""
+  // The path the Add recipe card opens with (IPC addRecipe's second argument).
+  property string cardPath: ""
   property string cardHost: ""
   property string cardModel: ""
   property var targetScreen: null
@@ -110,6 +113,14 @@ Item {
     root.card = "addModel"
     core.listRecipes(host)
   }
+  function showAddRecipe(host, path) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardPath = path || ""
+    root.card = "recipe"
+    core.loadUserRecipes(host)
+  }
   function showContext(host, id) {
     if (!Model.contextAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
     root.ensureManager()
@@ -150,6 +161,7 @@ Item {
     case "install": core.launch("install", action.host, "", action.replace ? ["--replace-engine"] : []); root.close(); break
     case "uninstallNow": core.launch("uninstall", action.host, "", action.flags || []); root.close(); break
     case "addModel": root.showAddModel(action.host); break
+    case "addRecipe": root.showAddRecipe(action.host, ""); break
     case "use": root.setUp(action.host, action.recipe); break
     case "context": root.showContext(action.host, action.id); break
     case "contextNow": core.setContext(action.host, action.id, action.ctx); root.closeCard(); break
@@ -179,6 +191,7 @@ Item {
     function addMachine(): void { root.showAddMachine() }
     function uninstall(host: string): void { root.showUninstall(host) }
     function addModel(host: string): void { root.showAddModel(host) }
+    function addRecipe(host: string, path: string): void { root.showAddRecipe(host, path) }
     function removeModel(host: string, model: string): void { root.showRemove(host, model) }
     function forget(host: string): void { root.showForget(host) }
     function start(host: string, model: string): string { core.start(host, model); return "ok" }
@@ -393,13 +406,14 @@ Item {
         active: root.card !== ""
         sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
-          : root.card === "context" ? contextCard : addCard
+          : root.card === "context" ? contextCard : root.card === "recipe" ? recipeCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }
       Component { id: contextCard; ContextView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
       Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
 

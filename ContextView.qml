@@ -1,6 +1,7 @@
 // A model's context card, over the manager: the context sizes its recipe has measured on the machine (`variants HOST
 // MODEL --json`), the one it runs now, and what each needs. Choosing one restarts the model with it (the engine's
-// `use --ctx`; a stopped model starts); one that needs more memory than the machine has is greyed out, with why. Esc,
+// `use --ctx`; a stopped model starts); one that needs more memory than the machine has, or whose numbers are only
+// drafted, is greyed out, with why. A variant whose source isn't measured says so. Esc,
 // Keep it or a click outside close the card and nothing changes.
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -108,6 +109,13 @@ FocusScope {
           textFormat: Text.PlainText
           wrapMode: Text.Wrap
           text: choice.modelData.text
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          visible: choice.modelData.source !== "measured"
+          text: choice.modelData.source
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall

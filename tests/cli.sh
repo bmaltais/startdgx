@@ -49,6 +49,9 @@ case "$cmd" in
   # status's own command runs for real, in zsh where there is one (the hosts' login shell), against a stub engine in the fake home.
   *"status --json"*"'#manifest'"*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
   *"status --json"*) echo '{"models":{}}';;
+  # recipe validate and add make a temp folder, copy stdin into it and run the engine on it: run for real.
+  *"mktemp -d"*"recipe "*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
+  *"recipe remove used"*|*"recipe remove "*|*"recipe list"*) host sh -c "$cmd";;
   # The engine's share when tailscale serve refuses: it has already saved the share, and says why over several lines.
   *"share serve-off --off"*) echo "serve-off is no longer shared";;
   *"share serve-off"*) printf '%s\n' "Error: tailscale serve /local-ai/serve-off: Serve is not enabled on your tailnet." "To enable, visit:" "  https://login.tailscale.com/f/serve?node=n1" >&2; exit 1;;
@@ -167,7 +170,23 @@ s status me@dgx >/dev/null 2>&1; ok $((!$?)) "an unknown host is refused"
 s add me@dgx >/dev/null; ok $? "add records the host"
 grep -q '"ram_class": 128' "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "add keeps the host's profile"
 s hosts --json | grep -q me@dgx; ok $? "hosts lists it"
-eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\necho %s\n' "'{\"models\":{}}'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; cat >"$eng/omarchy-local-ai" <<'F'
+#!/bin/sh
+# The engine's recipe commands, as the fork's: validate prints its errors on stdout and exits 1, add's rejection is an
+# Error: on stderr, and remove refuses a recipe a model uses, naming the model.
+if [ "$1" = recipe ]; then
+  case "$2" in
+    validate) if grep -q BAD "$3"; then printf '%s\n' "recipes/bad: no name" "recipes/bad: no runtime"; exit 1; fi; echo "Recipe $(basename "$3" .toml) is valid";;
+    add) if grep -q BAD "$3"; then printf '%s\n' "Error: recipes/bad: no name" "recipes/bad: no runtime" >&2; exit 1; fi
+      cp "$3" "$HOME/added.toml"; basename "$3" >"$HOME/added.name"; echo "Added recipe $(basename "$3" .toml)";;
+    remove) if [ "$3" = used ]; then echo "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used" >&2; exit 1; fi; echo "Removed recipe $3";;
+    list) echo '[{"id":"mine","user":true,"source":"drafted"}]';;
+  esac
+  exit
+fi
+echo '{"models":{}}'
+F
+chmod +x "$eng/omarchy-local-ai"
 s status me@dgx | grep -q models; ok $? "status passes the engine's JSON through"
 # status says when the host's engine is older than the pin (the manifest records its tag), and only then
 pin=$(s engine | cut -d' ' -f2)
@@ -209,12 +228,45 @@ peak_gpu_gib = 58
 ctx = 262144
 peak_ram_gib = 91.5
 peak_gpu_gib = 90
+source = "estimated"
 F
-s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58}]))"
-ok $? "variants lists a recipe's measured contexts, largest first"
+s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90, 'source': 'estimated'}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58, 'source': 'measured'}]))"
+ok $? "variants lists a recipe's contexts, largest first, each with its source (measured unless the recipe says otherwise)"
 s variants me@dgx vr | grep -q '262144.*91.5'; ok $? "and as text without --json"
 s variants me@dgx nope --json >/dev/null 2>&1; ok $((!$?)) "a recipe the host doesn't have is an error"
 s variants me@dgx '../x' --json >/dev/null 2>&1; ok $((!$?)) "variants refuses what is no recipe id"
+# Recipes: a .toml on this computer goes over ssh on stdin to the engine's recipe commands, in a folder of its own, named
+# for its id (the engine takes the id from the file name).
+rd=$tmp/recipes; mkdir -p "$rd"
+printf 'name = "Mine"\n' >"$rd/mine.toml"; printf 'BAD = 1\n' >"$rd/bad.toml"
+out=$(s recipe validate me@dgx "$rd/mine.toml"); ok $? "recipe validate accepts a good file"
+same "$out" "Recipe mine is valid"; ok $? "and says what the engine said"
+grep -qF "recipe validate \"\$d\"/mine.toml" "$FAKE_LOG"; ok $? "it asks the engine to validate a copy named for the id"
+out=$(s recipe validate me@dgx "$rd/bad.toml" 2>&1 >/dev/null); ok $((!$?)) "recipe validate refuses a bad file"
+same "$out" "$(printf 'recipes/bad: no name\nrecipes/bad: no runtime')"; ok $? "and prints each of the engine's errors on its own line"
+s recipe validate me@dgx "$rd/bad.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d == {"ok": False, "id": "bad", "errors": ["recipes/bad: no name", "recipes/bad: no runtime"], "message": ""}))'
+ok $? "recipe validate --json gives the errors as a list, and exits 0, since the machine answered"
+rm -f "$FAKE_HOST/home/added.toml"
+s recipe validate me@dgx "$rd/mine.toml" >/dev/null; none_of "$FAKE_HOST/home/added.toml"; ok $? "validating changes nothing on the host"
+out=$(s recipe add me@dgx "$rd/mine.toml"); same "$out" "Added recipe mine"; ok $? "recipe add installs it under its id"
+cmp -s "$rd/mine.toml" "$FAKE_HOST/home/added.toml" && same "$(cat "$FAKE_HOST/home/added.name")" mine.toml; ok $? "the engine got the file's text on stdin, named mine.toml"
+s recipe add me@dgx "$rd/bad.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["ok"] is False and d["errors"] == ["recipes/bad: no name", "recipes/bad: no runtime"]))'
+ok $? "a rejected add lists the engine's errors, one each, without its Error: prefix"
+s recipe add me@dgx "$rd/mine.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d == {"ok": True, "id": "mine", "errors": [], "message": "Added recipe mine"}))'
+ok $? "recipe add --json says it was added"
+before=$(wc -l <"$FAKE_LOG")
+printf 'x' >"$rd/Not_An_Id.toml"; printf 'x' >"$rd/notes.txt"
+for f in "$rd/Not_An_Id.toml" "$rd/notes.txt" "$rd/missing.toml" "$rd"; do s recipe validate me@dgx "$f" >/dev/null 2>&1; ok $((!$?)) "recipe validate refuses $(basename "$f") without asking the host"; done
+same "$(wc -l <"$FAKE_LOG")" "$before"; ok $? "and sends the host nothing"
+head -c 300000 /dev/zero | tr '\0' 'a' >"$rd/huge.toml"; s recipe validate me@dgx "$rd/huge.toml" >/dev/null 2>&1; ok $((!$?)) "a file too big to be a recipe is refused"
+tilde='~'; (cd "$rd" && HOME=$rd s recipe validate me@dgx "$tilde/mine.toml" >/dev/null); ok $? "a leading ~ is this computer's home"
+s recipe list me@dgx --json | grep -q '"user":true'; ok $? "recipe list --json passes the engine's listing through"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe list --json$'; ok $? "asking the engine for it"
+out=$(s recipe remove me@dgx mine); same "$out" "Removed recipe mine"; ok $? "recipe remove removes an unused recipe"
+out=$(s recipe remove me@dgx used 2>&1); ok $((!$?)) "recipe remove of one a model uses fails"
+same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used"; ok $? "with the engine's message"
+s recipe remove me@dgx '../x' >/dev/null 2>&1; ok $((!$?)) "recipe remove refuses what is no recipe id"
+s recipe validate nobody@else "$rd/mine.toml" >/dev/null 2>&1; ok $((!$?)) "recipe commands refuse a machine that isn't added"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -847,6 +899,39 @@ ds delete --dry-run $c $flash >/dev/null 2>&1; ok $((!$?)) "demo delete --dry-ru
 now=$((t0 + 20)) out=$(ds delete $b $flash); same "$out" "Cancelled the setup of $flash"; ok $? "deleting a demo setup in progress cancels it"
 dj '"'$flash'" not in d["models"]' status $b; ok $? "and drops its row at once"
 
+# User recipes in demo mode: the engine's recipe commands on fixture files (demo/recipes), kept in the demo's state.
+rdir=$here/demo/recipes; llama=my-llama-8b draft=my-draft-70b
+was=$now; now=$((t0 + 4000))
+out=$(ds recipe validate $a "$rdir/$llama.toml"); same "$out" "Recipe $llama is valid"; ok $? "demo recipe validate accepts a good recipe"
+dj '"'$llama'" not in [r["id"] for r in d]' recipe list $a --json; ok $? "and adds nothing"
+out=$(ds recipe validate $a "$rdir/broken-recipe.toml" 2>&1 >/dev/null); ok $((!$?)) "demo recipe validate refuses a broken one"
+[ "$(echo "$out" | wc -l)" -ge 3 ] && echo "$out" | grep -q 'name' && echo "$out" | grep -q 'no-such-runtime' && echo "$out" | grep -q 'ctx'; ok $? "with each error on its own line"
+dj 'd["ok"] is False and len(d["errors"]) >= 3 and d["id"] == "broken-recipe"' recipe validate $a "$rdir/broken-recipe.toml" --json; ok $? "and as a list with --json"
+mkdir -p "$tmp/clash"; cp "$rdir/$llama.toml" "$tmp/clash/$nem.toml"
+out=$(ds recipe validate $a "$tmp/clash/$nem.toml" --json); echo "$out" | grep -q "clashes with the curated recipe '$nem'"; ok $? "an id equal to a curated recipe's is rejected, naming it"
+out=$(ds recipe add $a "$rdir/$llama.toml"); same "$out" "Added recipe $llama"; ok $? "demo recipe add adds it"
+dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True and {r["id"]: r for r in d}["'$llama'"]["source"] == "measured" and {r["id"]: r for r in d}["'$llama'"]["available"] and not {r["id"]: r for r in d}["'$nem'"]["user"]' recipe list $a --json
+ok $? "recipe list --json marks it user, measured and available, and a curated recipe not user"
+dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True' list $a; ok $? "so does the machine's list, which the model picker reads"
+ds recipe add $a "$rdir/$draft.toml" >/dev/null; ok $? "demo recipe add adds a drafted recipe"
+dj '{r["id"]: r for r in d}["'$draft'"]["source"] == "drafted" and not {r["id"]: r for r in d}["'$draft'"]["available"] and {r["id"]: r for r in d}["'$draft'"]["reason"]' list $a
+ok $? "which is not available, and says why"
+ds recipe add $a "$rdir/broken-recipe.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe add refuses a broken one"
+dj '[(v["ctx"], v["source"]) for v in d] == [(131072, "measured"), (32768, "measured")]' variants $a $llama --json; ok $? "demo variants reads a user recipe's own variants, with their sources"
+dj '[v["source"] for v in d] == ["drafted"]' variants $a $draft --json; ok $? "and a drafted one's"
+dj 'all(v["source"] == "measured" for v in d)' variants $a $qwen --json; ok $? "a curated recipe's are measured"
+ds recipe validate $c "$rdir/$llama.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe validate on a machine that doesn't answer fails"
+ds use --detach $a $llama >/dev/null; ok $? "a user recipe can be set up like any other"
+out=$(ds recipe remove $a $llama 2>&1); ok $((!$?)) "demo recipe remove of a recipe a model uses fails"
+echo "$out" | grep -q "Error: Recipe $llama is used by the model $llama (My Llama 8B)"; ok $? "naming the model"
+ds recipe add $a "$rdir/$llama.toml" >/dev/null 2>&1; ok $((!$?)) "and so does replacing it"
+ds delete $a $llama >/dev/null; out=$(ds recipe remove $a $llama); same "$out" "Removed recipe $llama"; ok $? "once the model is gone, demo recipe remove succeeds"
+dj '"'$llama'" not in [r["id"] for r in d]' list $a; ok $? "and the recipe is gone from the list"
+out=$(ds recipe remove $a $nem 2>&1); ok $((!$?)) "demo recipe remove refuses a curated recipe"
+echo "$out" | grep -q "curated recipe"; ok $? "and says it is one"
+ds recipe remove $a nothing-here >/dev/null 2>&1; ok $((!$?)) "and one that isn't there"
+ds recipe remove $a $draft >/dev/null; ok $? "an unused user recipe is removed"
+now=$was
 ds add demo@spark-d >/dev/null && dj '"demo@spark-d" in d' hosts --json; ok $? "demo add adds a discovered machine"
 dj 'd["models"] == {}' status demo@spark-d; ok $? "and its status works"
 ds add demo@spark-e >/dev/null 2>&1; ok $((!$?)) "demo add refuses a machine without the engine"

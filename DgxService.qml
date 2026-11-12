@@ -1,6 +1,6 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
 // machine has its own HostPoller (status poll, and its three command slots: a start, a share, and a stop, use or delete); the machine list,
-// adding, forgetting, discovery, a machine's catalog for the model picker, the uninstall and remove plans and the
+// adding, forgetting, discovery, a machine's catalog for the model picker, the Add recipe card's check, add and remove, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
 pragma ComponentBehavior: Bound
@@ -72,6 +72,22 @@ Item {
   property var variants: null
   property string variantsError: ""
   readonly property bool variantsLoading: variantsQuery.busy
+
+  // The Add recipe card: the answer to the last check or add ({ ok, id, errors, message, added }), a failure to ask at all,
+  // and what the card is doing (recipeStep: "checking" | "adding" | ""). The machine's own recipes are listed from it.
+  property string recipeHost: ""
+  property var recipeResult: null
+  property string recipeError: ""
+  property string recipeStep: ""
+  property bool recipeThenAdd: false
+  property int recipeSeq: 0
+  property var userRecipes: null
+  property string userRecipesError: ""
+  property string recipeRemoving: ""
+  property string recipeRemoveError: ""
+  // A write (an add or a removal) is running: the card waits, and nothing kills it.
+  readonly property bool recipeWriting: recipeAddProc.running || recipeRemoveProc.running
+  readonly property bool recipeBusy: service.recipeStep !== "" || service.recipeWriting
 
   // The remove card's plan (`delete HOST MODEL --dry-run --json`): what the removal frees, -1 until it is read.
   property string removeHost: ""
@@ -208,6 +224,53 @@ Item {
   function setContext(host, id, ctx) {
     const p = service.poller(host)
     if (p) p.run("context", id, service.entry(host, id), { ctx: ctx })
+  }
+
+  // Validates a recipe file on this computer on the machine (`recipe validate`, which changes nothing) and, when asked and
+  // it passes, adds it (`recipe add`). The path is only handed to bin/startdgx, which reads the file.
+  function checkRecipe(host, path, thenAdd) {
+    if (service.recipeWriting || Model.recipePathProblem(path) !== "") return
+    service.recipeHost = host
+    service.recipeResult = null
+    service.recipeError = ""
+    service.recipeThenAdd = thenAdd
+    service.recipeStep = "checking"
+    service.recipeSeq += 1
+    service.recipePathAsked = path.trim()
+    recipeQuery.ask(host + "\n" + service.recipeSeq, [service.script, "recipe", "validate", host, service.recipePathAsked, "--json", "--timeout", "60"])
+  }
+  property string recipePathAsked: ""
+
+  function finishRecipe(code, out, err, verb) {
+    const r = code === 0 ? Model.parseRecipeResult(out) : null
+    if (!r) {
+      service.recipeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+      service.recipeStep = ""
+      return
+    }
+    service.recipeStep = ""
+    service.recipeResult = Object.assign({}, r, { added: verb === "add" && r.ok })
+    if (verb === "add" && r.ok) {
+      service.notice = r.message
+      // The picker's catalog and the card's list now have a recipe more.
+      if (service.listHost === service.recipeHost) service.recipes = null
+      service.loadUserRecipes(service.recipeHost)
+    }
+  }
+
+  function loadUserRecipes(host) {
+    if (service.recipeHost !== host) { service.userRecipes = null; service.recipeHost = host }
+    service.userRecipesError = ""
+    userRecipesQuery.ask(host, [service.script, "recipe", "list", host, "--json", "--timeout", "60"])
+  }
+
+  function removeRecipe(host, id) {
+    if (service.recipeBusy) return
+    service.recipeRemoving = id
+    service.recipeRemoveError = ""
+    recipeRemoveProc.host = host
+    recipeRemoveProc.command = [service.script, "recipe", "remove", host, id, "--timeout", "60"]
+    recipeRemoveProc.running = true
   }
 
   function planRemove(host, id) {
@@ -384,6 +447,53 @@ Item {
       const found = code === 0 ? Model.parseVariants(out) : null
       if (found) service.variants = found
       else service.variantsError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+
+  // Validating is a question (a new one ends the old); adding and removing are writes, which nothing ends.
+  Query {
+    id: recipeQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.recipeHost + "\n" + service.recipeSeq) return
+      const r = code === 0 ? Model.parseRecipeResult(out) : null
+      if (r && r.ok && service.recipeThenAdd) {
+        service.recipeStep = "adding"
+        recipeAddProc.command = [service.script, "recipe", "add", service.recipeHost, service.recipePathAsked, "--json", "--timeout", "60"]
+        recipeAddProc.running = true
+      } else service.finishRecipe(code, out, err, "validate")
+    }
+  }
+
+  Process {
+    id: recipeAddProc
+    stdout: StdioCollector { id: recipeAddOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeAddErr; waitForEnd: true }
+    onExited: function (code) { service.finishRecipe(code, recipeAddOut.text, recipeAddErr.text, "add") }
+  }
+
+  Process {
+    id: recipeRemoveProc
+    property string host: ""
+    stdout: StdioCollector { id: recipeRemoveOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeRemoveErr; waitForEnd: true }
+    onExited: function (code) {
+      service.recipeRemoving = ""
+      if (code !== 0) service.recipeRemoveError = Model.errorLine(recipeRemoveErr.text, "The recipe could not be removed")
+      else {
+        service.notice = Model.lastLine(recipeRemoveOut.text)
+        if (service.listHost === recipeRemoveProc.host) service.recipes = null
+      }
+      service.loadUserRecipes(recipeRemoveProc.host)
+    }
+  }
+
+  Query {
+    id: userRecipesQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.recipeHost) return
+      const list = code === 0 ? Model.parseRecipes(out) : null
+      if (list) service.userRecipes = Model.userRecipes(list)
+      else service.userRecipesError = code === 0 ? "The machine's recipes could not be read" : Model.errorLine(err, "The machine's recipes could not be read")
     }
   }
 

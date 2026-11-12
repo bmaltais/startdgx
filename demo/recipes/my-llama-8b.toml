@@ -1,0 +1,16 @@
+# A recipe of your own, as the demo's engine would accept it.
+name = "My Llama 8B"
+summary = "Llama 3.1 8B Instruct, for quick drafts."
+runtime = "tensorfold"
+
+[[variant]]
+ctx = 131072
+peak_ram_gib = 24.5
+peak_gpu_gib = 22
+source = "measured"
+
+[[variant]]
+ctx = 32768
+peak_ram_gib = 18
+peak_gpu_gib = 16
+source = "measured"

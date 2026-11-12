@@ -1,0 +1,8 @@
+# Several things wrong at once, to see each error on its own row.
+summary = "No name here."
+runtime = "no-such-runtime"
+
+[[variant]]
+ctx = 0
+peak_ram_gib = 10
+source = "guessed"

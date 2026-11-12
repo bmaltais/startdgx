@@ -385,6 +385,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (away) return null
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
+  if (k === "e") return { type: "addRecipe", host: row.host }
   if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "context", host: row.host, id: row.id }
   if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
   if (k === "t" && row.kind === "model" && entry) {
@@ -566,12 +567,64 @@ function recipeOffers(list, status) {
     const best = r.best === true
     if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best, rank: entry.unit === "installing" ? 2 : 3 }
     if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best, rank: 3 }
-    if (r.available !== true) return { recipe: r, action: null, text: String(r.reason || "") || "Can't run on this machine", best: best, rank: 4 }
+    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best, rank: 4 }
     return { recipe: r, action: "use", text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
   })
   const label = function (o) { return String(o.recipe.name || o.recipe.id) }
   offers.sort(function (a, b) { return a.rank - b.rank || label(a).localeCompare(label(b)) || a.recipe.id.localeCompare(b.recipe.id) })
   return offers.map(function (o) { return { recipe: o.recipe, action: o.action, text: o.text, best: o.best } })
+}
+
+// ---- user recipes ----------------------------------------------------------------------------------------
+// A user recipe is one the person added (the engine marks it `user`); a curated one ships with the engine. A variant's
+// (and a listing row's) `source` says where its numbers come from: measured (the default, and what every curated recipe
+// has), estimated, or drafted, which never counts as fitting.
+
+var DRAFTED_TEXT = "Drafted: its numbers are not measured yet, so it is not yet fitting"
+
+// "measured" when none is given; a word we don't know is treated as the cautious one, drafted.
+function recipeSource(r) {
+  const s = r && r.source !== undefined && r.source !== null && r.source !== "" ? String(r.source) : "measured"
+  return s === "measured" || s === "estimated" ? s : "drafted"
+}
+
+function isUserRecipe(r) { return !!r && r.user === true }
+
+// The marks a recipe wears in the picker and the Add recipe card: "yours", then where its numbers come from when that isn't
+// measured. Curated recipes wear none.
+function recipeMarks(r) {
+  const marks = []
+  if (!isUserRecipe(r)) return marks
+  marks.push("yours")
+  const s = recipeSource(r)
+  if (s === "estimated") marks.push("estimated")
+  else if (s === "drafted") marks.push("drafted, not yet fitting")
+  return marks
+}
+
+function userRecipes(list) { return (Array.isArray(list) ? list : []).filter(isUserRecipe) }
+
+// `startdgx recipe validate|add HOST FILE --json`: { ok, id, errors, message }, or null when it isn't that. A rejection
+// has to say why.
+function parseRecipeResult(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || typeof p.ok !== "boolean" || !Array.isArray(p.errors)) return null
+  const errors = p.errors.map(String).filter(function (e) { return e !== "" })
+  if (!p.ok && errors.length === 0) return null
+  return { ok: p.ok, id: String(p.id || ""), errors: errors, message: String(p.message || "") }
+}
+
+// What is wrong with the path typed, before the machine is asked; "" when nothing.
+function recipePathProblem(path) {
+  const p = String(path || "").trim()
+  if (p === "") return "Type the path to a recipe file on this computer."
+  if (!/\.toml$/.test(p)) return "A recipe file ends in .toml, and its name (without it) is the recipe's id."
+  return ""
+}
+
+// "128K measured · 64K drafted": a recipe's variants and where each one's numbers come from.
+function variantsText(variants) {
+  return (Array.isArray(variants) ? variants : []).map(function (v) { return Math.round(Number(v.ctx) / 1024) + "K " + recipeSource(v) }).join(" · ")
 }
 
 // The facts under a recipe in the picker: the memory it takes, its context and its speed, measured on this machine class.
@@ -654,11 +707,14 @@ function parseVariants(text) {
 function contextChoices(variants, currentCtx, ramTotalGib) {
   return variants.map(function (v) {
     const need = Number(v.peak_ram_gib)
-    const fits = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+    const source = recipeSource(v)
+    const room = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+    const fits = room && source !== "drafted"
     return {
-      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx),
-      text: fits ? "Needs " + need + " GiB of memory"
-        : "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx), source: source,
+      text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
+        : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+        : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" : "Needs " + need + " GiB of memory"
     }
   })
 }
