@@ -398,13 +398,16 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
 }
 
 // ---- a machine's commands ----------------------------------------------------------------------------
-// Each machine runs at most two commands at once, each slot with its own queue: a start, which returns only once its
-// model has loaded (up to 15 minutes), and any other (stop, set up, remove). So a Stop never waits for a load to end.
+// Each machine runs at most three commands at once, each slot with its own queue: a start, which returns only once its
+// model has loaded (up to 15 minutes), a share (the engine's own lock, so it never waits for a removal either), and any
+// other (stop, set up, remove). So a Stop never waits for a load to end.
 // The engine's own lock still orders what it must: its start and remove take it, its stop and `use --detach` don't.
 // An action is { op, key, kind, shows }: op numbers the click it comes from, key is "host/model", kind is the command
 // (start, stop, use, delete, share, unshare; a share's key is shareKey) and shows the mark its row gets while it runs (a removal's stop shows as the removal).
 
-function newQueue() { return { starting: null, other: null, starts: [], others: [] } }
+function newQueue() { return { starting: null, other: null, sharing: null, starts: [], others: [], shares: [] } }
+
+function copyQueue(q) { return { starting: q.starting, other: q.other, sharing: q.sharing, starts: q.starts.slice(), others: q.others.slice(), shares: q.shares.slice() } }
 
 function sameKey(key) { return function (a) { return a.key === key } }
 
@@ -414,7 +417,7 @@ function sameKey(key) { return function (a) { return a.key === key } }
 // whose only start was taken back sends nothing. A start of a model being stopped or removed is dropped.
 function submit(q, action, entry) {
   const key = action.key
-  const out = { starting: q.starting, other: q.other, starts: q.starts.slice(), others: q.others.slice() }
+  const out = copyQueue(q)
   const busy = [out.other].concat(out.others).some(function (a) { return a && a.key === key && (a.kind === "stop" || a.kind === "delete") })
   if (action.kind === "start") {
     if (busy) return { queue: out, dropped: [action] }
@@ -425,7 +428,7 @@ function submit(q, action, entry) {
     const dropped = out.starts.filter(sameKey(key))
     out.starts = out.starts.filter(function (a) { return a.key !== key })
     // A removal takes back the model's shares still waiting: they would only fail, "isn't set up", once it is gone.
-    if (action.kind === "delete") out.others = out.others.filter(function (a) { return a.key !== shareKey(keyHost(key), keyModel(key)) })
+    if (action.kind === "delete") out.shares = out.shares.filter(function (a) { return a.key !== shareKey(keyHost(key), keyModel(key)) })
     const loading = !!out.starting && out.starting.key === key
     if (loading) out.starting = Object.assign({}, out.starting, { superseded: true })
     const unit = entry ? entry.unit : ""
@@ -435,22 +438,24 @@ function submit(q, action, entry) {
     out.others.push(action)
     return { queue: out, dropped: dropped }
   }
-  out.others.push(action)
+  if (action.kind === "share" || action.kind === "unshare") out.shares.push(action)
+  else out.others.push(action)
   return { queue: out, dropped: [] }
 }
 
 // What can begin now, on each free slot: { queue, run }.
 function launch(q) {
-  const out = { starting: q.starting, other: q.other, starts: q.starts.slice(), others: q.others.slice() }
+  const out = copyQueue(q)
   const run = []
   if (!out.starting && out.starts.length) { out.starting = out.starts.shift(); run.push(out.starting) }
   if (!out.other && out.others.length) { out.other = out.others.shift(); run.push(out.other) }
+  if (!out.sharing && out.shares.length) { out.sharing = out.shares.shift(); run.push(out.sharing) }
   return { queue: out, run: run }
 }
 
-// A slot's command ended ("start" or "other"): { queue, action } with the action that ran there, or null.
+// A slot's command ended ("start", "share" or "other"): { queue, action } with the action that ran there, or null.
 function finish(q, slot) {
-  const field = slot === "start" ? "starting" : "other"
+  const field = slot === "start" ? "starting" : slot === "share" ? "sharing" : "other"
   const out = Object.assign({}, q)
   const action = q[field] || null
   out[field] = null
@@ -465,10 +470,10 @@ function marks(q, done) {
   const out = {}
   const runningOp = {}
   for (const key in done) out[key] = done[key].shows
-  ;[q.starting, q.other].forEach(function (a) {
+  ;[q.starting, q.other, q.sharing].forEach(function (a) {
     if (a && !a.superseded) { out[a.key] = a.shows; runningOp[a.key] = a.op }
   })
-  q.starts.concat(q.others).forEach(function (a) {
+  q.starts.concat(q.others, q.shares).forEach(function (a) {
     if (a.kind === "use" || runningOp[a.key] === a.op) return
     out[a.key] = "queued " + a.shows
   })

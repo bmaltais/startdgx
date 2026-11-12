@@ -1,6 +1,6 @@
-// One machine's link to bin/startdgx: its status poller and its two command slots, each with its queue (see
-// DgxModel's submit): one for a start, which returns only once its model has loaded (minutes), and one for a stop,
-// set up or removal, so a Stop never waits for a load to end; and a machine that doesn't answer (an SSH timeout)
+// One machine's link to bin/startdgx: its status poller and its three command slots, each with its queue (see
+// DgxModel's submit): one for a start, which returns only once its model has loaded (minutes), one for a share, and one
+// for a stop, set up or removal, so a Stop never waits for a load to end, nor a share for a removal; and a machine that doesn't answer (an SSH timeout)
 // never holds up another machine. DgxService makes one per added host and keeps what it learns; this file only
 // runs the commands, and tells the service each model's mark (DgxModel.marks) whenever it changes.
 import QtQuick
@@ -15,7 +15,7 @@ Item {
 
   // As drawn, with the setups just asked for: one of those makes the machine busy, so it is polled quickly.
   readonly property var hostState: poller.owner.shownState[poller.host]
-  // The two slots and their queues (DgxModel.newQueue).
+  // The three slots (a start, a share, anything else) and their queues (DgxModel.newQueue).
   property var queue: Model.newQueue()
   property int lastOp: 0
   // Finished actions whose mark stays until a status read after them: "host/model" -> { shows, op }.
@@ -40,7 +40,7 @@ Item {
     const l = Model.launch(poller.queue)
     poller.queue = l.queue
     for (let i = 0; i < l.run.length; i++) {
-      const proc = l.run[i] === l.queue.starting ? startProc : otherProc
+      const proc = l.run[i] === l.queue.starting ? startProc : l.run[i] === l.queue.sharing ? shareProc : otherProc
       proc.command = [poller.owner.script].concat(Model.commandFor(poller.host, l.run[i]))
       proc.running = true
     }
@@ -105,6 +105,13 @@ Item {
     stdout: StdioCollector { id: startOut; waitForEnd: true }
     stderr: StdioCollector { id: startErr; waitForEnd: true }
     onExited: function (code) { poller.ended("start", code, startOut.text, startErr.text) }
+  }
+
+  Process {
+    id: shareProc
+    stdout: StdioCollector { id: shareOut; waitForEnd: true }
+    stderr: StdioCollector { id: shareErr; waitForEnd: true }
+    onExited: function (code) { poller.ended("share", code, shareOut.text, shareErr.text) }
   }
 
   Process {

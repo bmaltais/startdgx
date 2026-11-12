@@ -576,7 +576,7 @@ test("a share is its own mark: it never hides what the model is doing, nor its S
   assert.deepStrictEqual(M.marks(s.queue, {}), { "h1/a": "start", "h1/a#share": "share" }, "the load keeps its mark")
   // A stop while the share runs supersedes only the start, never the share.
   s = M.submit(s.queue, { op: 3, key: "h1/a", kind: "stop", shows: "stop" }, row({ unit: "activating" }))
-  assert.strictEqual(s.queue.other.key, "h1/a#share")
+  assert.strictEqual(s.queue.sharing.key, "h1/a#share")
   assert.strictEqual(s.queue.starting.superseded, true)
   // A second share click waits its turn, and is told so.
   const again = M.submit(M.launch(M.submit(M.newQueue(), sharing, null).queue).queue, Object.assign({}, sharing, { op: 4, kind: "unshare", shows: "unshare" }), null)
@@ -587,12 +587,29 @@ test("a removal takes back the model's shares still waiting their turn, and only
   const sh = (op, id) => ({ op: op, key: M.shareKey("h1", id), kind: "share", shows: "share" })
   let s = M.submit(M.newQueue(), act(1, "use", "z"), null)
   s = M.launch(s.queue)
+  s = M.submit(s.queue, sh(5, "z"), null)
+  s = M.launch(s.queue)
   s = M.submit(s.queue, sh(2, "a"), null)
   s = M.submit(s.queue, sh(3, "b"), null)
   s = M.submit(s.queue, act(4, "delete"), row({ unit: "inactive" }))
-  assert.deepStrictEqual(s.queue.others.map((a) => [a.kind, a.key]), [["share", "h1/b#share"], ["delete", "h1/a"]])
+  assert.deepStrictEqual(s.queue.shares.map((a) => a.key), ["h1/b#share"])
+  assert.deepStrictEqual(s.queue.others.map((a) => [a.kind, a.key]), [["delete", "h1/a"]])
   assert.deepStrictEqual(s.dropped.map((a) => a.key), [], "a share isn't a start: nothing for the caller to unmark")
   assert.strictEqual(M.marks(s.queue, {})["h1/a#share"], undefined)
+})
+
+test("a share has a slot of its own: a long removal doesn't hold it up, and it doesn't hold a stop up", () => {
+  let s = M.submit(M.newQueue(), act(1, "delete", "a"), row({ unit: "inactive" }))
+  let l = M.launch(s.queue)
+  assert.deepStrictEqual(l.run.map((a) => a.kind), ["delete"])
+  s = M.submit(l.queue, { op: 2, key: M.shareKey("h1", "b"), kind: "share", shows: "share" }, null)
+  l = M.launch(s.queue)
+  assert.deepStrictEqual(l.run.map((a) => a.kind), ["share"], "it runs beside the removal")
+  assert.strictEqual(l.queue.other.kind, "delete")
+  assert.strictEqual(M.finish(l.queue, "share").action.kind, "share")
+  assert.strictEqual(M.finish(l.queue, "share").queue.other.kind, "delete", "its end leaves the removal running")
+  s = M.submit(l.queue, act(3, "stop", "c"), row({ unit: "active" }))
+  assert.deepStrictEqual(s.queue.others.map((a) => a.kind), ["stop"], "a stop waits only for the other slot")
 })
 
 test("commandFor: a share and an unshare run share, with --off to stop", () => {

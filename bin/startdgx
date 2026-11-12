@@ -396,8 +396,21 @@ def cmd_use(args):
 
 
 def cmd_share(args):
-  argv = ["share", recipe(args.model)] + (["--off"] if args.off else [])
-  sys.stdout.write(ssh(target(args.host), *argv, timeout=args.timeout).stdout)
+  host, rid = target(args.host), recipe(args.model)
+  result = ssh(host, "share", rid, *(["--off"] if args.off else []), timeout=args.timeout, check=False)
+  if result.returncode == 0:
+    sys.stdout.write(result.stdout)
+    return
+  if result.returncode == 255:
+    raise Error(ssh_failure(host, result.stderr) if result.stderr.strip() else f"share failed on {host}")
+  # The engine saves a share before it publishes it, so one that failed to publish (Serve isn't enabled, no operator)
+  # would read as shared with no route: take it back, best effort, and say why in one line (its message spans several).
+  reason = " ".join(result.stderr.split()).removeprefix("Error: ") or f"share failed on {host}"
+  if args.off:
+    raise Error(reason)
+  with contextlib.suppress(Error):
+    ssh(host, "share", rid, "--off", timeout=60, check=False)
+  raise Error(f"{rid} is not shared: {reason}")
 
 
 def cmd_delete(args):

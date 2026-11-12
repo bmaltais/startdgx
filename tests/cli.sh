@@ -47,6 +47,9 @@ case "$cmd" in
     if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
     else : >"$FAKE_HOST.use-$rid"; echo "Setting up $rid in the background; follow it with: journalctl"; fi;;
   *"status --json"*) echo '{"models":{}}';;
+  # The engine's share when tailscale serve refuses: it has already saved the share, and says why over several lines.
+  *"share serve-off --off"*) echo "serve-off is no longer shared";;
+  *"share serve-off"*) printf '%s\n' "Error: tailscale serve /local-ai/serve-off: Serve is not enabled on your tailnet." "To enable, visit:" "  https://login.tailscale.com/f/serve?node=n1" >&2; exit 1;;
   *"fail"*) echo "Error: boom" >&2; exit 1;;
 esac
 F
@@ -167,6 +170,11 @@ s share me@dgx qwen3.8-27b-tensorfold >/dev/null; tail -1 "$FAKE_LOG" | grep -q 
 s share me@dgx qwen3.8-27b-tensorfold --off >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai share qwen3.8-27b-tensorfold --off$'; ok $? "share --off stops sharing it"
 before=$(wc -l <"$FAKE_LOG"); s share me@dgx '--off;x' >/dev/null 2>&1; ok $((!$?)) "share refuses what is no recipe id"
 same "$(wc -l <"$FAKE_LOG")" "$before"; ok $? "and sends the engine nothing"
+err=$(s share me@dgx serve-off 2>&1 >/dev/null); ok $((!$?)) "a share the engine refuses fails"
+same "$(echo "$err" | wc -l)" 1 && echo "$err" | grep -q '^Error: serve-off is not shared: tailscale serve /local-ai/serve-off: Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve?node=n1$'
+ok $? "with the engine's whole message on one line, saying the model is not shared"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai share serve-off --off$'; ok $? "and the share the engine had already saved is taken back"
+s share me@dgx serve-off --off >/dev/null; ok $? "so that unsharing it works"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
