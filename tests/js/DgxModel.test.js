@@ -1111,3 +1111,41 @@ test("hfSearchCommand hands the query after --, so a query starting with - is a 
   assert.deepStrictEqual(M.hfSearchCommand("  qwen "), ["hf", "search", "--json", "--", "qwen"])
   assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
 })
+
+// ---- Draft recipe… on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
+const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.8-27b-mlx-4bit-tensorfold", repo: "TensorFold/Qwen3.8-27B-MLX-4bit",
+  path: "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml", revision: "948c129", license: "apache-2.0",
+  weights_bytes: 16074529674, placeholder_gib: 15, source: "drafted", warnings: [] }, over))
+
+test("draftCommand asks the host about the id, so a clash is refused before anything is written, and the repo comes after --", () => {
+  assert.deepStrictEqual(M.draftCommand("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"),
+    ["recipe", "draft", "--host", "me@dgx", "--json", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
+})
+
+test("parseDraftResult keeps the file to add and the warnings, and refuses what isn't a draft", () => {
+  const d = M.parseDraftResult(draftJson({ warnings: ["License 'llama3' may restrict use: read its terms before you use it", ""] }))
+  assert.strictEqual(d.id, "qwen3.8-27b-mlx-4bit-tensorfold")
+  assert.strictEqual(d.path, "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml")
+  assert.deepStrictEqual(d.warnings, ["License 'llama3' may restrict use: read its terms before you use it"])
+  assert.deepStrictEqual(M.parseDraftResult(draftJson()).warnings, [])
+  assert.strictEqual(M.parseDraftResult(""), null)
+  assert.strictEqual(M.parseDraftResult("[]"), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ ok: false })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ path: "" })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ id: undefined })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ warnings: "x" })), null)
+})
+
+test("draftStatus says which step runs, and the outcome in words that call the recipe drafted and not yet fitting", () => {
+  assert.strictEqual(M.draftStatus("drafting", "me@dgx", "A/B"), "Drafting A/B…")
+  assert.strictEqual(M.draftStatus("checking", "me@dgx", "A/B"), "Asking dgx to check the draft…")
+  assert.strictEqual(M.draftStatus("adding", "me@dgx", "A/B"), "Adding the draft to dgx…")
+  assert.strictEqual(M.draftStatus("", "me@dgx", "A/B"), "")
+  assert.match(M.draftDone("me@dgx", "my-id"), /my-id.*dgx.*drafted, not yet fitting.*Measure/)
+})
+
+test("draftErrorText drops the CLI's --id advice, which the card can't act on", () => {
+  assert.strictEqual(M.draftErrorText("demo@spark-a already has a recipe 'x' (curated or yours): pick another id with --id"), "demo@spark-a already has a recipe 'x' (curated or yours)")
+  assert.strictEqual(M.draftErrorText("/d/x.toml already exists: pick another id with --id, or delete the file"), "/d/x.toml already exists: delete the file to draft it again")
+  assert.strictEqual(M.draftErrorText("Hugging Face did not answer"), "Hugging Face did not answer")
+})

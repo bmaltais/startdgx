@@ -1199,6 +1199,8 @@ printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -
 s add me@dgx >/dev/null 2>&1; : >"$FAKE_LOG"
 draft $tf --host me@dgx --id fresh-one >/dev/null; ok $? "an id the host doesn't have passes the host check"
 grep -q 'recipe list --json' "$FAKE_LOG"; ok $? "which asks the host only for its recipe list"
+out=$(draft --host me@dgx --id panel-order --json -- $tf 2>&1); ok $? "the panel's argument order (options, then -- and the repo) drafts with the host check"
+printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['source'] == 'drafted' and d['id'] == 'panel-order'))"; ok $? "and prints the JSON the panel parses"
 dd '"license" in d and d["warnings"] and "other" in d["warnings"][0]' LiquidAI/LFM2.5-24B-A2B-MLX-4bit --id lfm-a
 ok $? "a restrictive license warns and still writes the draft"
 dd 'd["license"] == "unknown" and d["warnings"] and "unknown" in d["warnings"][0]' someone/Gemma-4-31B-uncensored-MLX-4bit --id gemma-a
