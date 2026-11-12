@@ -9,7 +9,15 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
 - [ ] Omarchy plugin: manager window and bar widget, reusing the model controls of the `agents` plugin
-- [ ] Discovery of Sparks on the tailnet (GB10 / DGX OS signature over SSH)
+- [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS]`: lists the tailnet's online Linux peers
+  (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5`
+  with the install's read-only Spark probe (GB10 in `nvidia-smi`, DGX name in `/etc/dgx-release`), 8 at a time. It
+  installs and writes nothing; the UI offers Install per machine. `--user` is the ssh user (default: this
+  machine's). A peer that refuses key-based ssh, or doesn't answer, is `reachable: false` with a `reason`; a tailnet
+  name that isn't a valid ssh target never reaches ssh. `--json` prints a list sorted by `name`, one object per peer:
+  `name` (tailnet short name), `target` (`user@name`, what `add` and `install` take), `reachable` (bool), `reason`
+  (string when unreachable, else null), `spark`, `installed` (startdgx's manifest exists there), `engine` (the engine
+  directory exists there), all three null when unreachable, and `added` (the target is in hosts.json).
 - [x] `startdgx install [--dry-run] [--engine-path DIR] [--replace-engine] <host>`: installs the pinned fork tag
   (`startdgx engine`) with the engine's own host setup (one `sudo` on the host, which asks for its password at your
   terminal), and records what was there before and what it changed in `~/.local/share/startdgx/manifest.json` on the

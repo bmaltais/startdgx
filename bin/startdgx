@@ -8,7 +8,9 @@ import argparse
 import ast
 import base64
 import contextlib
+import concurrent.futures
 import datetime
+import getpass
 import json
 import os
 import re
@@ -26,6 +28,8 @@ RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]*$")
 HOME_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+DISCOVER_SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+DISCOVER_WORKERS = 8
 
 # What the engine's host setup (HOST_SETUP + MACHINE_SETUP_TAIL in its agent_local.py) may create or change as root.
 ROOT_FILES = (
@@ -138,6 +142,10 @@ for name, value in (("PACKAGES", " ".join(PACKAGES)), ("ROOT_FILES", " ".join(RO
   PROBE = PROBE.replace(f"@{name}@", value)
 
 
+# Discover's probe: the install's own read-only PROBE, plus whether startdgx's manifest is there.
+DISCOVER_PROBE = PROBE + f'if [ -f "$HOME/{STARTDGX_DIR}/manifest.json" ]; then echo startdgx=yes; else echo startdgx=; fi\n'
+
+
 class Error(Exception):
   pass
 
@@ -174,9 +182,9 @@ def ssh(host, *argv, timeout=None, check=True):
   return ssh_raw(host, f"{ENGINE} {shlex.join(argv)}", timeout=timeout, check=check, what=argv[0])
 
 
-def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command"):
+def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command", opts=SSH_OPTS):
   """Runs a fixed shell command on the host; anything variable in it must already be shlex-quoted."""
-  cmd = ["ssh", *SSH_OPTS, "--", host, command]
+  cmd = ["ssh", *opts, "--", host, command]
   try:
     result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
   except subprocess.TimeoutExpired as error:
@@ -259,7 +267,11 @@ def cmd_delete(args):
 def probe(host):
   """The host's state as a dict, from the read-only PROBE; a key given twice keeps its last value."""
   out = ssh_raw(host, "bash -s", stdin=PROBE, timeout=60, what="probe").stdout
-  return checked_user(host, dict(line.split("=", 1) for line in out.splitlines() if "=" in line))
+  return checked_user(host, parse_probe(out))
+
+
+def parse_probe(out):
+  return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
 def checked_user(host, state):
@@ -271,6 +283,63 @@ def checked_user(host, state):
 
 def is_spark(state):
   return "GB10" in state.get("gpu", "") or "Spark" in state.get("dgx_name", "")
+
+
+def tailnet_peers():
+  """The online Linux peers in `tailscale status --json`, as sorted unique short names."""
+  try:
+    result = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=30, check=False)
+  except (OSError, subprocess.TimeoutExpired) as error:
+    raise Error(f"Can't run tailscale: {error}") from error
+  if result.returncode != 0:
+    raise Error((result.stderr.strip().splitlines() or ["tailscale status failed"])[-1])
+  try:
+    peers = json.loads(result.stdout).get("Peer") or {}
+    names = {(p.get("DNSName") or "").split(".")[0] or p.get("HostName") or ""
+             for p in peers.values() if p.get("Online") and str(p.get("OS", "")).lower() == "linux"}
+  except (ValueError, AttributeError) as error:
+    raise Error("tailscale status gave unexpected JSON") from error
+  return sorted(names - {""})
+
+
+def discover_peer(name, user, timeout, added):
+  """One peer's record. Pure: it reads nothing shared and writes nothing, so peers can be probed in parallel."""
+  host = f"{user}@{name}"
+  record = {"name": name, "target": host, "reachable": False, "reason": None, "spark": None, "installed": None, "engine": None,
+            "added": host in added}
+  if not TARGET_RE.match(name) or name.startswith("-") or not TARGET_RE.match(host):
+    record["reason"] = "not a valid ssh name"
+    return record
+  try:
+    result = ssh_raw(host, "bash -s", stdin=DISCOVER_PROBE, timeout=timeout, check=False, what="probe", opts=DISCOVER_SSH_OPTS)
+  except Error as error:
+    record["reason"] = str(error)
+    return record
+  if result.returncode != 0:
+    record["reason"] = (result.stderr.strip().splitlines() or ["ssh failed"])[-1]
+    return record
+  state = parse_probe(result.stdout)
+  record.update(reachable=True, spark=is_spark(state), installed=bool(state.get("startdgx")), engine=bool(state.get("engine")))
+  return record
+
+
+def cmd_discover(args):
+  user = args.user or getpass.getuser()
+  if not TARGET_RE.match(user) or user.startswith("-") or "@" in user:
+    raise Error("Not a valid user name")
+  names, added = tailnet_peers(), set(load_hosts())
+  with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVER_WORKERS) as pool:
+    records = list(pool.map(lambda name: discover_peer(name, user, args.timeout, added), names))
+  if args.json:
+    print(json.dumps(records, indent=2))
+    return
+  for r in records:
+    if not r["reachable"]:
+      print(f"{r['name']}  {r['target']}  unreachable ({r['reason']})")
+    else:
+      flags = [("spark" if r["spark"] else "not a Spark"), ("installed" if r["installed"] else "not installed"),
+               ("engine" if r["engine"] else "no engine"), ("added" if r["added"] else "not added")]
+      print(f"{r['name']}  {r['target']}  {', '.join(flags)}")
 
 
 def engine_entry(state):
@@ -808,6 +877,12 @@ def build_parser():
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
+  d = sub.add_parser("discover", description="List the tailnet's online Linux machines and probe each over ssh, read-only, "
+                     "for a DGX Spark. Installs nothing and adds nothing.")
+  d.add_argument("--json", action="store_true")
+  d.add_argument("--user", help="the ssh user on the peers (default: this machine's user)")
+  d.add_argument("--timeout", type=int, default=20, help="seconds to wait for each peer")
+  d.set_defaults(fn=cmd_discover)
   add("forget", cmd_remove_host)
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)
   add("status", cmd_status)

@@ -477,4 +477,67 @@ echo "$out" | grep -q 'git push fork v0.6.3-dgx.2'; ok $? "release-engine prints
 echo "$out" | grep -q "$(g rev-parse 'v0.6.3-dgx.2^{commit}')"; ok $? "release-engine prints the tag's commit"
 git -C "$tmp/fork-remote.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to fork"
 git -C "$tmp/origin.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to origin"
+
+# discover, against a fake tailscale and a fake ssh that answers per peer from $tmp/disco/peers
+disco=$tmp/disco; mkdir -p "$disco/bin" "$disco/peers"
+cat >"$disco/bin/tailscale" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "tailscale $*" >>"$DISCO_LOG"
+[ "$*" = "status --json" ] || exit 2
+cat "$DISCO_STATUS"
+F
+cat >"$disco/bin/ssh" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$DISCO_LOG"
+host=${*: -2:1}; peer=$DISCO_PEERS/$host
+case "$*" in "-o BatchMode=yes -o ConnectTimeout=5 -- "*) ;; *) exit 99;; esac
+[ -e "$peer" ] || { echo "ssh: Could not resolve hostname" >&2; exit 255; }
+case "$(head -1 "$peer")" in
+  refuse) echo "$host: Permission denied (publickey)." >&2; exit 255;;
+  hang) sleep 30;;
+  *) cat >/dev/null; cat "$peer";;
+esac
+F
+chmod +x "$disco/bin/"*
+export DISCO_LOG=$disco/log DISCO_STATUS=$disco/status.json DISCO_PEERS=$disco/peers
+python3 - "$DISCO_STATUS" <<'F'
+import json, sys
+def peer(name, os="linux", online=True):
+  return {"HostName": name, "DNSName": f"{name}.tail1234.ts.net.", "OS": os, "Online": online}
+peers = [peer("gx10-spark"), peer("gx10-fresh"), peer("pc-linux"), peer("locked-down"), peer("sleepy"),
+         peer("gone", online=False), peer("laptop", os="macOS"), peer("phone", os="iOS"), peer("-oProxyCommand=x")]
+json.dump({"Self": peer("this-machine"), "Peer": {f"nodekey:{i}": p for i, p in enumerate(peers)}}, open(sys.argv[1], "w"))
+F
+{ spark startdgx=yes engine=abc; } >"$disco/peers/me@gx10-spark"
+spark >"$disco/peers/me@gx10-fresh"
+spark "gpu=AMD Radeon" dgx_name= >"$disco/peers/me@pc-linux"
+echo refuse >"$disco/peers/me@locked-down"
+echo hang >"$disco/peers/me@sleepy"
+mkdir -p "$tmp/empty" "$XDG_CONFIG_HOME/startdgx"; echo '{"me@gx10-fresh": {}}' >"$XDG_CONFIG_HOME/startdgx/hosts.json"
+hosts_before=$(cat "$XDG_CONFIG_HOME/startdgx/hosts.json")
+d() { PATH=$disco/bin:$PATH s discover --user me "$@"; }
+dj() { PATH=$disco/bin:$PATH s discover --json --user me --timeout 2 | python3 -c "import json,sys; d={p['name']: p for p in json.load(sys.stdin)}; sys.exit(not ($1))"; }
+: >"$DISCO_LOG"
+out=$(d --json --user me --timeout 2); ok $? "discover --json succeeds with dead and refusing peers"
+echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (isinstance(d, list) and [p["name"] for p in d] == sorted(p["name"] for p in d)))'; ok $? "discover --json is a list sorted by name"
+dj 'set(d) == {"gx10-spark", "gx10-fresh", "pc-linux", "locked-down", "sleepy", "-oProxyCommand=x"}'; ok $? "discover leaves out offline and non-Linux peers and this machine"
+dj 'all(set(p) == {"name", "target", "reachable", "reason", "spark", "installed", "engine", "added"} for p in d.values())'; ok $? "every peer has exactly the documented keys"
+dj 'd["gx10-spark"]["target"] == "me@gx10-spark" and d["gx10-spark"]["spark"] is True and d["gx10-spark"]["installed"] is True and d["gx10-spark"]["engine"] is True and d["gx10-spark"]["added"] is False and d["gx10-spark"]["reachable"] is True and d["gx10-spark"]["reason"] is None'; ok $? "an installed Spark is reported as such"
+dj 'd["gx10-fresh"]["spark"] is True and d["gx10-fresh"]["installed"] is False and d["gx10-fresh"]["engine"] is False and d["gx10-fresh"]["added"] is True'; ok $? "a fresh Spark is not installed, and is added when hosts.json has it"
+dj 'd["pc-linux"]["spark"] is False and d["pc-linux"]["reachable"] is True'; ok $? "a Linux machine without the Spark signature is not a Spark"
+dj 'd["locked-down"]["reachable"] is False and "Permission denied" in d["locked-down"]["reason"] and d["locked-down"]["spark"] is None and d["locked-down"]["installed"] is None'; ok $? "a peer that refuses BatchMode ssh is unreachable, with the reason"
+dj 'd["sleepy"]["reachable"] is False and d["sleepy"]["reason"]'; ok $? "a peer that never answers times out as unreachable"
+dj 'd["-oProxyCommand=x"]["reachable"] is False and "name" in d["-oProxyCommand=x"]["reason"]'; ok $? "a hostile tailnet name is reported unreachable"
+! grep -q -e ProxyCommand "$DISCO_LOG"; ok $? "a hostile tailnet name never reaches ssh"
+! grep -e '^-o' "$DISCO_LOG" | grep -vq 'BatchMode=yes -o ConnectTimeout=5 -- '; ok $? "every probe is BatchMode with a 5 second connect timeout"
+: >"$DISCO_LOG"; d --json --timeout 2 >/dev/null
+[ "$(grep -c '^tailscale' "$DISCO_LOG")" = 1 ] && ! grep -q -e rsync -e sudo "$DISCO_LOG"; ok $? "discover asks tailscale once and runs nothing but the probe"
+same "$(cat "$XDG_CONFIG_HOME/startdgx/hosts.json")" "$hosts_before"; ok $? "discover never writes hosts.json"
+PATH=$disco/bin:$PATH s discover --user bob --json --timeout 2 | grep -q '"target": "bob@gx10-spark"'; ok $? "--user sets the user the probe goes to"
+PATH=$disco/bin:$PATH s discover --json --timeout 2 | grep -q "\"target\": \"$(id -un)@gx10-spark\""; ok $? "the user defaults to the local one"
+PATH=$disco/bin:$PATH s discover --user 'x y' --json >/dev/null 2>&1; ok $((!$?)) "--user is validated"
+d --timeout 2 | grep -q 'gx10-spark.*me@gx10-spark.*spark.*installed'; ok $? "discover prints human lines by default"
+d --timeout 2 | grep -q 'locked-down.*unreachable.*Permission denied'; ok $? "the human output says why a peer is unreachable"
+echo 'not json' >"$DISCO_STATUS"; d >/dev/null 2>&1; ok $((!$?)) "an unreadable tailscale status is an error"
+PATH=$tmp/empty s discover >/dev/null 2>&1; ok $((!$?)) "discover without tailscale is an error"
 echo "1..$n"; exit $bad
