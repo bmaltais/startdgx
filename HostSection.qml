@@ -23,7 +23,7 @@ ColumnLayout {
   signal revealRequested(var item)     // the row under the cursor, to scroll into sight
 
   readonly property bool loaded: !!section.hostState && section.hostState.loaded
-  readonly property bool away: section.loaded && !section.hostState.online
+  readonly property bool away: Model.isAway(section.hostState)
   readonly property var entries: Model.modelList(section.hostState ? section.hostState.status : null)
   // The rows are made per model id and kept across polls (a new list would rebuild them, and lose a bar that
   // is filling to its end), so the list is only replaced when the ids change.
@@ -116,7 +116,7 @@ ColumnLayout {
       TextLink {
         Layout.alignment: Qt.AlignVCenter
         visible: section.loaded && !section.away
-        text: "Logs"
+        text: "Logs…"
         tooltip: "Open the logs of the model started last, in a terminal  (l)"
         onClicked: section.actionRequested({ type: "logs", host: section.host, id: "" })
       }

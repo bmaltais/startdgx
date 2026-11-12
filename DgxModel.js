@@ -165,6 +165,11 @@ function formatAgo(ms) {
   return Math.floor(ms / 86400e3) + " d ago"
 }
 
+// A machine that answered no (one not heard from yet isn't away).
+function isAway(hs) {
+  return !!hs && !!hs.loaded && !hs.online
+}
+
 // A machine that doesn't answer: why, and when it last did.
 function offlineText(error, lastSeenMs, nowMs) {
   const why = String(error || "") || "Not answering"
@@ -273,14 +278,16 @@ function rows(hostList, hostStates) {
 }
 
 // A key typed in the manager ("enter" for Return). `row` is the one under the cursor (or null), `entry` its
-// model's status row and `pending` a start or stop already asked for. A model's row acts for its machine too.
-function keyAction(key, row, entry, pending) {
+// model's status row, `pending` a start or stop already asked for, and `away` whether its machine isn't
+// answering (it then has no Start, Stop or Logs). A model's row acts for its machine too.
+function keyAction(key, row, entry, pending, away) {
   const k = String(key).toLowerCase()
   if (k === "r") return { type: "refresh" }
   if (k === "n") return { type: "addMachine" }
   if (!row) return null
   if (k === "u") return { type: "uninstall", host: row.host }
   if (k === "f") return { type: "forget", host: row.host }
+  if (away) return null
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if ((k === "s" || k === "enter") && row.kind === "model" && entry) {
     const action = toggleAction(entry, pending)

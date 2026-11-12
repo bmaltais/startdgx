@@ -19,7 +19,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 │ ▣ StartDGX                                         [⟳] ✕ │  header
 │   3 MACHINES · 1 RUNNING · 1 FAILED · 1 NOT ANSWERING     │
 │ MACHINES                                                  │
-│ ● spark-a  demo@spark-a · DGX Spark · 128 GB  Logs Uninstall… Forget │  a machine
+│ ● spark-a  demo@spark-a · DGX Spark · 128 GB  Logs… Uninstall… Forget │  a machine
 │   ┌─────────────────────────────────────────────────────┐ │
 │   │ ◆ Qwen3.8 27B                              [▤] [⏸]  │ │  a model
 │   │   ● Running · 128K context                          │ │
@@ -31,17 +31,17 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 ```
 
 - **Header.** The chip mark, the name, the count line in small capitals (red while a machine doesn't answer or a model failed), and look again (refresh). The words come from `DgxModel.subtitle`.
-- **A machine.** A dot (accent when it answers, red when it doesn't, muted before its first answer), its name, its SSH target and what it is (`DgxModel.hostLine`). Under it: "Asking the machine…", "No models set up yet", or why it doesn't answer and when it last did (`offlineText`). On the right, quiet text links: **Logs** (the model started last), **Uninstall…** and **Forget**. A machine that doesn't answer keeps its last known models, dimmed and without buttons.
-- **A model.** Its maker's mark, its name (the endpoint on hover), a status dot and line (`DgxModel.modelState`: Running, Loading, Stopping, Removing, Downloading, Failed, Not enough memory, Stopped) with its context and the memory it took, then **Logs** and **Start/Stop**. A model that doesn't fit has its play button greyed out with the reason as its tooltip. Under it, a meter (`DgxModel.meter`): memory while it runs; progress while it loads, stops or is removed, against how long that took last time; the download while it is set up. A failure's reason is a red link to its logs.
+- **A machine.** A dot (accent when it answers, red when it doesn't, muted before its first answer), its name, its SSH target and what it is (`DgxModel.hostLine`). Under it: "Asking the machine…", "No models set up yet", or why it doesn't answer and when it last did (`offlineText`). On the right, quiet text links: **Logs…** (the model started last), **Uninstall…** and **Forget**. A machine that doesn't answer keeps its last known models, dimmed and without buttons.
+- **A model.** Its maker's mark, its name (the endpoint on hover), a status dot and line (`DgxModel.modelState`: Running, Loading, Stopping, Removing, Downloading, Failed, Not enough memory, Stopped) with its context and the memory it took, then **Logs…** and **Start/Stop**. A model that doesn't fit has its play button greyed out with the reason as its tooltip. Under it, a meter (`DgxModel.meter`): memory while it runs; progress while it loads, stops or is removed, against how long that took last time; the download while it is set up. A failure's reason is a red link to its logs.
 - **Start and stop** show at once ("pending"), and the machine's next answer after the command replaces it.
 - **Footer.** **Add machine…** on the left, the latest message (six seconds, red for an error) or "Esc to close" on the right.
-- **Keyboard.** The keys are `DgxModel.keyAction`, so a key and a button cannot disagree; each button's tooltip names its key.
+- **Keyboard.** The keys are `DgxModel.keyAction`, so a key and a button cannot disagree (a machine that isn't answering has no Start, Stop or Logs either way); each button's tooltip names its key.
 
 | Key | Does |
 |---|---|
 | Up, Down, `k`, `j` | Move the cursor over machines and models |
 | Enter, `s` | Start or stop the model under the cursor |
-| `l` | Its logs (a machine's row: the model started last) |
+| `l` | Its logs… (a machine's row: the model started last) |
 | `u` | Uninstall the machine… |
 | `f` | Forget the machine |
 | `n` | Add machine… |
@@ -58,7 +58,7 @@ Lists `startdgx discover --json` (it installs and writes nothing): each machine 
 
 ## Terminals
 
-Install, uninstall and logs need a person at a terminal, so they run in Omarchy's floating terminal through `startdgx launch`, and the window closes to get out of the way. What the launch says back (an error, or in demo mode what it would have run) is a notification, since the window is gone.
+Install, uninstall and logs need a person at a terminal, so they run in Omarchy's floating terminal through `startdgx launch`, started detached, and the window closes to get out of the way. Nothing comes back to the manager: the terminal shows the result (Omarchy's Done/Failed prompt), and in demo mode, where the launch only prints what it would run, nothing is shown at all.
 
 ## Words
 
@@ -84,7 +84,7 @@ Newest first. One line each: what was decided, and why.
 | Date | Decision | Why |
 |---|---|---|
 | 2026-11-11 | Start and stop queue per machine, one at a time, while each machine polls on its own | A real `start` returns only once the model has loaded (minutes), so one queue for all would freeze every other machine's Stop. A Stop of a model on the same machine still waits for a start there to return. |
-| 2026-11-11 | Launches report back as a notification, not in the footer | The window closes so the terminal is on top; a notification is what the kit says for a window that is gone. |
+| 2026-11-11 | Terminal launches are detached and report nothing back; their actions end in an ellipsis (Logs…, Install…, Uninstall…) | The launcher's `uwsm-app` runs the terminal as a scope in the foreground, so a Process would live as long as the terminal and kill it on a shell restart. The terminal itself shows the result. |
 | 2026-11-11 | Uninstall shows the dry-run plan in a card and asks before it opens the terminal | `launch uninstall` runs the real uninstall at once; the plan is read with BatchMode ssh, which needs no terminal. |
 | 2026-11-11 | Add machine and uninstall are cards over the manager that neither move nor resize | They are short questions, not settings windows; the stacking and closing rules still hold. |
 | 2026-11-11 | Size and position are not remembered across restarts | There is no `startdgx window` or config file yet; drag and resize work for the session. Add both with a settings window. |

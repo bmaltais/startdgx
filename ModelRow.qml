@@ -137,7 +137,7 @@ Rectangle {
         Layout.alignment: Qt.AlignVCenter
         visible: !row.away && row.entry.unit !== "installing"
         iconText: "\udb80\udd8d"
-        tooltipText: "Logs  (l)"
+        tooltipText: "Logs…  (l)"
         onClicked: row.logsRequested()
       }
 

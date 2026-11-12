@@ -158,11 +158,11 @@ Item {
   }
 
   // Install, uninstall and logs need a person at a terminal (sudo asks for a password there), so they open
-  // Omarchy's floating terminal. The window has closed by then, so what comes back is a notification.
+  // Omarchy's floating terminal, detached: the launcher runs the terminal in the foreground for as long as it is
+  // open, and a Process here would hold it (and kill it on a shell restart). Nothing comes back; in demo mode the
+  // launch only prints what it would run, which goes nowhere.
   function launch(verb, host, id) {
-    if (launchProc.running) return
-    launchProc.command = [service.script, "launch", verb, host].concat(id ? [id] : [])
-    launchProc.running = true
+    Quickshell.execDetached([service.script, "launch", verb, host].concat(id ? [id] : []))
   }
 
   // Keeps one poller per added machine; a ListModel, so a machine added or forgotten leaves the others' work alone.
@@ -250,18 +250,6 @@ Item {
     onExited: function (code) {
       if (code === 0) service.planText = String(planOut.text || "").trim()
       else service.planError = Model.errorLine(planErr.text, "The uninstall plan could not be read")
-    }
-  }
-
-  Process {
-    id: launchProc
-    stdout: StdioCollector { id: launchOut; waitForEnd: true }
-    stderr: StdioCollector { id: launchErr; waitForEnd: true }
-    onExited: function (code) {
-      const said = code !== 0 ? Model.errorLine(launchErr.text, "The terminal could not be opened") : Model.lastLine(launchOut.text)
-      // A real launch prints nothing (the terminal has it); demo mode says what it would have run.
-      if (said !== "") Quickshell.execDetached(["notify-send", "--app-name=StartDGX", code !== 0 ? "--urgency=critical" : "--urgency=normal",
-        code !== 0 ? "The terminal did not open" : "StartDGX", said])
     }
   }
 }

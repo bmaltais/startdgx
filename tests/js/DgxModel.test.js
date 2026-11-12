@@ -247,6 +247,18 @@ test("keyAction: a key and the button it matches cannot disagree", () => {
   assert.strictEqual(M.keyAction("x", model, a), null)
 })
 
+test("keyAction: a machine that isn't answering has no Start, Stop or Logs, by key either", () => {
+  const model = { kind: "model", host: "h1", id: "a" }
+  const host = { kind: "host", host: "h1" }
+  assert.strictEqual(M.keyAction("s", model, a, "", true), null)
+  assert.strictEqual(M.keyAction("enter", model, b, "", true), null)
+  assert.strictEqual(M.keyAction("l", model, a, "", true), null)
+  assert.strictEqual(M.keyAction("l", host, null, "", true), null)
+  assert.deepStrictEqual(M.keyAction("u", host, null, "", true), { type: "uninstall", host: "h1" })
+  assert.deepStrictEqual(M.keyAction("f", model, a, "", true), { type: "forget", host: "h1" })
+  assert.deepStrictEqual(M.keyAction("r", host, null, "", true), { type: "refresh" })
+})
+
 test("alerts: a model that fails is said once, and again if it fails again", () => {
   const failed = row({ recipe: "f", name: "Nemotron", unit: "failed", error: "CUDA error: out of memory" })
   let r = M.alerts(["demo@h1"], { "demo@h1": up(models(a, failed)) }, {})
@@ -261,4 +273,11 @@ test("alerts: a model that fails is said once, and again if it fails again", () 
   assert.strictEqual(M.alerts(["h1"], { h1: up(models(setup)) }, {}).list[0].title, "GPT could not be set up on h1")
   const away = M.alerts(["h1"], { h1: up(models(failed), { online: false }) }, { "h1/f:CUDA error: out of memory": true })
   assert.deepStrictEqual([away.list, away.announced], [[], { "h1/f:CUDA error: out of memory": true }], "an away machine says nothing new and forgets nothing")
+})
+
+test("isAway: a machine that answered no, not one not heard from yet", () => {
+  assert.strictEqual(M.isAway(up({}, { online: false })), true)
+  assert.strictEqual(M.isAway(up({})), false)
+  assert.strictEqual(M.isAway(undefined), false)
+  assert.strictEqual(M.isAway({ loaded: false, online: false }), false)
 })
