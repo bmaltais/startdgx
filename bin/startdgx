@@ -40,18 +40,19 @@ ENGINE_DIR = ".local/share/omarchy-local-ai"
 STARTDGX_DIR = ".local/share/startdgx"
 MANIFEST = f"~/{STARTDGX_DIR}/manifest.json"
 BACKUP_DIR = f"{STARTDGX_DIR}/backup"
-# Files the root setup overwrites that may predate it (NVIDIA's docs have users generate /etc/cdi/nvidia.yaml; a
-# plain file may sit where the agent link goes), copied as the user before it runs; an earlier copy is kept.
-BACKUPS = {("file", "/etc/cdi/nvidia.yaml"): "etc_cdi_nvidia.yaml", ("symlink", AGENT_LINK): "usr_local_bin_omarchy-agent-local"}
-BACKUP = f'''
-set -e
-mkdir -p ~/{BACKUP_DIR}
-cd ~/{BACKUP_DIR}
-if [ -f /etc/cdi/nvidia.yaml ] && [ ! -e etc_cdi_nvidia.yaml ]; then cp -p /etc/cdi/nvidia.yaml etc_cdi_nvidia.yaml; fi
-if [ -f {AGENT_LINK} ] && [ ! -L {AGENT_LINK} ] && [ ! -e usr_local_bin_omarchy-agent-local ]; then
-  cp -p {AGENT_LINK} usr_local_bin_omarchy-agent-local
-fi
-'''
+
+
+def backup_name(path):
+  return path.strip("/").replace("/", "_")
+
+
+# The root files the setup may overwrite or create, any of which may predate it (NVIDIA's docs have users generate
+# /etc/cdi/nvidia.yaml; a plain file may sit where the agent link goes, while a symlink there is only recorded):
+# copied as the user before it runs, keeping an earlier copy.
+BACKUPS = {**{("file", path): backup_name(path) for path in ROOT_FILES}, ("symlink", AGENT_LINK): backup_name(AGENT_LINK)}
+BACKUP = f"set -eu\nmkdir -p ~/{BACKUP_DIR}\ncd ~/{BACKUP_DIR}\n" + "".join(
+  f"if [ -f {path} ]{' && [ ! -L ' + path + ' ]' if kind == 'symlink' else ''} && [ ! -e {name} ]; then cp -p {path} {name}; fi\n"
+  for (kind, path), name in BACKUPS.items())
 
 # What the engine creates under the user's home once installed (its use and share), relative to it.
 ENGINE_STATE = ".local/state/omarchy/agent-local"
@@ -106,7 +107,7 @@ echo "user=$(id -un)"
 echo "home=$HOME"
 echo "gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 echo "dgx_name=$(sed -n 's/^DGX_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/dgx-release 2>/dev/null | head -1)"
-for tool in podman rsync python3; do
+for tool in @PACKAGES@; do
   if command -v "$tool" >/dev/null; then echo "$tool=yes"; else echo "$tool=no"; fi
 done
 echo "linger=$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
@@ -116,21 +117,24 @@ if grep -qs '^\*[[:space:]]*hard[[:space:]]*memlock[[:space:]]*unlimited' /etc/s
   echo memlock_limits=yes; else echo memlock_limits=no; fi
 for path in @ROOT_FILES@; do
   if [ -e "$path" ]; then
-    if head -2 "$path" | grep -q -e 'RDMA between paired DGX Sparks' -e 'Written by omarchy-local-ai'; then owner=engine; else owner=other; fi
+    if head -2 "$path" | grep -qF -e @RDMA_HEADER@ -e @COMPAT_HEADER@; then owner=engine; else owner=other; fi
     echo "file:$path=$(sha256sum <"$path" | cut -c1-64) $owner"
   else
     echo "file:$path="
   fi
 done
-link=/usr/local/bin/omarchy-agent-local
+link=@AGENT_LINK@
 if [ -L "$link" ]; then echo link_kind=symlink; echo "link_target=$(readlink "$link")"
-elif [ -e "$link" ]; then echo link_kind=file; echo link_target=
+elif [ -e "$link" ]; then echo link_kind=file; echo link_target=; echo "link_sha=$(sha256sum <"$link" | cut -c1-64)"
 else echo link_kind=none; echo link_target=; fi
-engine=$HOME/.local/share/omarchy-local-ai
+engine=$HOME/@ENGINE_DIR@
 if [ -f "$engine/agent_local.py" ]; then echo "engine=$(sha256sum <"$engine/agent_local.py" | cut -c1-64)"
 elif [ -d "$engine" ]; then echo engine=present
 else echo engine=; fi
-'''.replace("@ROOT_FILES@", " ".join(ROOT_FILES))
+'''
+for name, value in (("PACKAGES", " ".join(PACKAGES)), ("ROOT_FILES", " ".join(ROOT_FILES)), ("RDMA_HEADER", shlex.quote(RDMA_HEADER)),
+                    ("COMPAT_HEADER", shlex.quote(COMPAT_HEADER)), ("AGENT_LINK", AGENT_LINK), ("ENGINE_DIR", ENGINE_DIR)):
+  PROBE = PROBE.replace(f"@{name}@", value)
 
 
 class Error(Exception):
@@ -354,6 +358,8 @@ def snapshot(state):
     items[("package", tool)] = {"installed": state.get(tool) == "yes"}
   items[("linger", state["user"])] = {"linger": state.get("linger", "")}
   items[("symlink", AGENT_LINK)] = {"type": state.get("link_kind", "none"), "target": state.get("link_target") or None}
+  if state.get("link_kind") == "file":
+    items[("symlink", AGENT_LINK)]["sha256"] = state.get("link_sha") or None
   engine = state.get("engine", "")
   items[("engine", f"{state['home']}/{ENGINE_DIR}")] = {"exists": bool(engine), "agent_local_sha256": engine if len(engine) == 64 else None}
   return items
@@ -371,16 +377,28 @@ def with_backup(key, previous, home):
   return previous
 
 
+def existed(kind, snap):
+  """Whether the item was there in this snapshot; a snapshot that doesn't say counts as there."""
+  if kind == "package":
+    return snap.get("installed") is not False
+  if kind == "linger":
+    return snap.get("linger") == "yes"
+  if kind == "symlink":
+    return snap.get("type") != "none"
+  return snap.get("exists") is not False
+
+
 def build_manifest(old, before, now, engine):
-  """The manifest after an install: each item keeps the earliest `previous` any install recorded, and is ours
-  when it differs from that now."""
+  """The manifest after an install: each item keeps the earliest `previous` any install recorded, and differs
+  from that now either because the install created it (it wasn't there) or because it changed what was there."""
   earliest = {item_key(item): item["previous"] for item in old.get("items", [])}
   start, current = snapshot(before), snapshot(now)
   items = []
   for (kind, ref), state in current.items():
     previous = earliest.get((kind, ref)) or with_backup((kind, ref), start[(kind, ref)], before["home"])
-    ours = {k: v for k, v in previous.items() if k != "backup"} != state
-    items.append({"kind": kind, "name" if kind in NAMED_KINDS else "path": ref, "created_by_us": ours, "previous": previous})
+    differs, was = {k: v for k, v in previous.items() if k != "backup"} != state, existed(kind, previous)
+    items.append({"kind": kind, "name" if kind in NAMED_KINDS else "path": ref, "created_by_us": differs and not was,
+                  "changed_by_us": differs and was, "previous": previous})
   items += [item for item in old.get("items", []) if item_key(item) not in current]
   stamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
   return {"schema_version": 1, "engine": engine, "installed_at": old.get("installed_at") or stamp, "updated_at": stamp,
@@ -420,7 +438,7 @@ def cmd_install(args):
   with engine_source(args) as src:
     script, old, engine = engine_setup_script(src), read_manifest(host), engine_record(args, before)
     # Recorded before anything changes, so an install that fails halfway still knows what was there.
-    ssh_raw(host, BACKUP, what="backup")
+    ssh_raw(host, "bash -s -- startdgx-backup", stdin=BACKUP, what="backup")
     write_manifest(host, build_manifest(old, before, before, engine))
     print(f"Preparing {host} (sudo there asks for your password)")
     run_root(host, script, ["startdgx-install", before["user"], engine_entry(before)], "Preparing")
@@ -534,46 +552,67 @@ def previous_of(item):
   return previous if isinstance(previous, dict) else {}
 
 
+def ours(manifest, flag):
+  """The manifest's items it marks with flag, by key: created_by_us for what wasn't there before the install,
+  changed_by_us for what was. The manifest is the user's to edit, so an item whose `previous` disagrees is left out."""
+  return {item_key(item): item for item in manifest["items"] if isinstance(item, dict) and "kind" in item and item.get(flag) is True
+          and existed(item["kind"], previous_of(item)) == (flag == "changed_by_us")}
+
+
+def sha_of(path):
+  return f'"$(sha256sum 2>/dev/null <{shlex.quote(path)} | cut -c1-64)"'
+
+
+def restore(path, backup, sha, put_back):
+  """Shell that runs put_back when backup is still the file that was at path before the install; one already put
+  back counts as done, and a backup that is missing or changed fails the script once the other steps have run, so
+  the backups and the manifest stay."""
+  return (f"if [ {sha_of(path)} = {sha} ] && [ ! -L {path} ]; then :; elif [ {sha_of(backup)} = {sha} ]; then {put_back}; "
+          f'else echo "  left {path}: its backup {backup} is missing or changed" >&2; failed=1; fi')
+
+
 def root_plan(manifest, state, args):
-  """The root steps, for what the manifest marks created_by_us only, and what is kept. Only paths and names
-  of our own are acted on, each checked again on the host: the manifest is the user's to edit."""
+  """The root steps, which undo only what the manifest marks created_by_us or changed_by_us, and what is kept.
+  Only paths and names of our own are acted on, each checked again on the host: the manifest is the user's to edit."""
   q, home, user = shlex.quote, state["home"], state["user"]
-  items = {item_key(item): item for item in manifest["items"] if isinstance(item, dict) and "kind" in item and item.get("created_by_us") is True}
+  created, changed = ours(manifest, "created_by_us"), ours(manifest, "changed_by_us")
   steps, kept = [], []
   limits, user_conf, compat, dropin, cdi = ROOT_FILES
-  for path in (limits, user_conf):
-    if ("file", path) in items:
-      steps.append((f"remove {path}", f"if head -1 {path} 2>/dev/null | grep -qF {q(RDMA_HEADER)}; then rm -f {path}; fi"))
-  if ("file", compat) in items:
-    steps.append((f"remove {compat}", f"if head -2 {compat} 2>/dev/null | grep -qF {q(COMPAT_HEADER)}; then rm -f {compat}; fi"))
-  if ("file", dropin) in items:
-    steps.append((f"remove {dropin}", f"if grep -qsx {q('ExecStartPost=' + compat)} {dropin}; then rm -f {dropin}; "
-                                     f"rmdir --ignore-fail-on-non-empty {os.path.dirname(dropin)}; fi"))
-  if ("file", compat) in items or ("file", dropin) in items:
+  # How each file the engine writes is known to be its own, so that a created one is removed only while it still is.
+  own = {limits: f"head -1 {limits} | grep -qF {q(RDMA_HEADER)}", user_conf: f"head -1 {user_conf} | grep -qF {q(RDMA_HEADER)}",
+         compat: f"head -2 {compat} | grep -qF {q(COMPAT_HEADER)}", dropin: f"grep -qx {q('ExecStartPost=' + compat)} {dropin}", cdi: "true"}
+  for path in ROOT_FILES:
+    if ("file", path) in created:
+      steps.append((f"remove {path}", f'if [ ! -e {path} ]; then :; elif {own[path]}; then rm -f {path}; '
+                                     f'else echo "  left {path}: it is no longer the one the install wrote"; fi'))
+      if path == dropin:
+        steps.append((None, f"if [ -d {os.path.dirname(dropin)} ]; then rmdir --ignore-fail-on-non-empty {os.path.dirname(dropin)}; fi"))
+    elif ("file", path) in changed:
+      sha, backup = str(previous_of(changed[("file", path)]).get("sha256")), f"{home}/{BACKUP_DIR}/{BACKUPS[('file', path)]}"
+      if SHA_RE.match(sha):
+        steps.append((f"restore {path} from {backup}", restore(path, backup, sha, f"mkdir -p {os.path.dirname(path)} && cp {q(backup)} {path}")))
+      else:
+        kept.append(f"keep {path}: the manifest has no checksum for the one before")
+  if {("file", compat), ("file", dropin)} & (created.keys() | changed.keys()):
     steps.append(("reload systemd", "systemctl daemon-reload"))
-  if ("file", cdi) in items:
-    previous = previous_of(items[("file", cdi)])
-    backup = f"{home}/{BACKUP_DIR}/{BACKUPS[('file', cdi)]}"
-    if not previous.get("exists"):
-      steps.append((f"remove {cdi}, which the install wrote", f"rm -f {cdi}"))
-    elif SHA_RE.match(str(previous.get("sha256"))):
-      steps.append((f"restore {cdi} from {backup}", f'if [ "$(sha256sum 2>/dev/null <{q(backup)} | cut -c1-64)" = {previous["sha256"]} ]; then '
-                                                   f'cp {q(backup)} {cdi}; else echo "  left {cdi}: its backup is missing or changed" >&2; fi'))
-    else:
-      kept.append(f"keep {cdi}: the manifest has no checksum for the one before")
-  if ("linger", user) in items:
+  if ("linger", user) in created:
     steps.append((f"disable linger for {user}", f"loginctl disable-linger {q(user)}"))
-  if ("symlink", AGENT_LINK) in items:
-    previous, ours = previous_of(items[("symlink", AGENT_LINK)]), f'[ "$(readlink {AGENT_LINK})" = {q(engine_entry(state))} ]'
-    backup = f"{home}/{BACKUP_DIR}/{BACKUPS[('symlink', AGENT_LINK)]}"
-    if previous.get("type") == "symlink" and HOME_RE.match(str(previous.get("target"))):
-      steps.append((f"point {AGENT_LINK} back at {previous['target']}", f"if {ours}; then ln -sfn {q(previous['target'])} {AGENT_LINK}; fi"))
-    elif previous.get("type") == "file":
-      steps.append((f"restore {AGENT_LINK} from {backup}", f"if {ours} && [ -f {q(backup)} ]; then rm -f {AGENT_LINK} && cp {q(backup)} {AGENT_LINK}; fi"))
-    elif previous.get("type") == "none":
-      steps.append((f"remove {AGENT_LINK}", f"if {ours}; then rm -f {AGENT_LINK}; fi"))
+  at_engine = f'[ "$(readlink {AGENT_LINK})" = {q(engine_entry(state))} ]'
+  left = f'echo "  left {AGENT_LINK}: it no longer points at the engine"'
+  if ("symlink", AGENT_LINK) in created:
+    steps.append((f"remove {AGENT_LINK}", f"if {at_engine}; then rm -f {AGENT_LINK}; elif [ -L {AGENT_LINK} ] || [ -e {AGENT_LINK} ]; then {left}; fi"))
+  elif ("symlink", AGENT_LINK) in changed:
+    previous, backup = previous_of(changed[("symlink", AGENT_LINK)]), f"{home}/{BACKUP_DIR}/{BACKUPS[('symlink', AGENT_LINK)]}"
+    target, sha = str(previous.get("target")), str(previous.get("sha256"))
+    if previous.get("type") == "symlink" and HOME_RE.match(target):
+      steps.append((f"point {AGENT_LINK} back at {target}", f'if [ "$(readlink {AGENT_LINK})" = {q(target)} ]; then :; '
+                                                            f"elif {at_engine}; then ln -sfn {q(target)} {AGENT_LINK}; else {left}; fi"))
+    elif previous.get("type") == "file" and SHA_RE.match(sha):
+      put_back = f"if {at_engine}; then rm -f {AGENT_LINK} && cp {q(backup)} {AGENT_LINK}; else {left}; fi"
+      steps.append((f"restore {AGENT_LINK} from {backup}", restore(AGENT_LINK, backup, sha, put_back)))
     else:
       kept.append(f"keep {AGENT_LINK}: the manifest doesn't say what was there before")
+  items = created
   packages = [name for name in PACKAGES if ("package", name) in items]
   if packages and args.remove_packages:
     names = " ".join(packages)
@@ -585,11 +624,12 @@ def root_plan(manifest, state, args):
 
 
 def step_script(steps, preamble=""):
-  """A bash script that says each step, then runs it, and stops at the first that fails."""
-  lines = ["set -eu", preamble]
+  """A bash script that says each step, then runs it, and stops at the first that fails; a step that sets failed
+  lets the others run, then fails the script."""
+  lines = ["set -eu", "failed=0", preamble]
   for what, shell in steps:
     lines += ([f"echo {shlex.quote('  ' + what)}"] if what else []) + [shell]
-  return "\n".join(lines) + "\n"
+  return "\n".join(lines + ['exit "$failed"']) + "\n"
 
 
 SERVE_OFF = '''serve_off() {

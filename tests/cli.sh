@@ -5,18 +5,27 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export XDG_CONFIG_HOME=$tmp/config PATH=$tmp/bin:$PATH
 mkdir -p "$tmp/bin"
-# The fake host: $FAKE_HOST/probe is what the read-only probe reports, replaced by probe.after once
-# the root script has run (which then fails when FAKE_ROOT_FAIL is set); the host user's home is
-# $FAKE_HOST/home, which holds the manifest.
+# The fake host. The host user's home is $FAKE_HOST/home, which holds the manifest, and $FAKE_HOST/root stands
+# in for / under /etc and /usr/local. startdgx's own scripts (the backup, uninstall's phases and its root part) run
+# for real against those two, with stubs that only log for the host's tools. The read-only probe reports
+# $FAKE_HOST/probe, with the root files and agent link it really finds in the fake root on top; probe.after replaces
+# that file once the install's root script has run. That script, the engine's, is only recorded: in its place
+# $FAKE_HOST/engine-root, if there, writes to the fake root (as $root), then it fails when FAKE_ROOT_FAIL is set.
 cat >"$tmp/bin/ssh" <<'F'
 #!/usr/bin/env bash
 cmd=${*: -1}
 printf '%s\n' "$cmd" >>"$FAKE_LOG"
+root=$FAKE_HOST/root; [ "$root" != /root ] || exit 99
+rooted() { sed "s#/etc/#$root/etc/#g; s#/usr/local/#$root/usr/local/#g"; }
+host() { HOME=$FAKE_HOST/home PATH=$FAKE_HOSTBIN:$PATH "$@"; }
 case "$cmd" in
-  "bash -s") cat >/dev/null; cat "$FAKE_HOST/probe";;
-  # Uninstall's scripts run for real against the fake home, with stubs that only log for the host's tools.
-  "bash -s -- startdgx-uninstall-"*) HOME=$FAKE_HOST/home PATH=$FAKE_HOSTBIN:$PATH bash -s;;
-  "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/probe.after" ]; then cp "$FAKE_HOST/probe.after" "$FAKE_HOST/probe"; fi
+  "bash -s") found=$(rooted | host bash -s 2>/dev/null | sed "s#$root##g"); cat "$FAKE_HOST/probe"
+    printf '%s\n' "$found" | grep -E '^file:.*=.'; printf '%s\n' "$found" | grep -qx link_kind=none || printf '%s\n' "$found" | grep '^link_';;
+  "bash -s -- startdgx-"*) rooted | host bash -s;;
+  "sudo bash -c "*" startdgx-uninstall") printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi
+    script=$(printf '%s' "${cmd#sudo }" | rooted); host eval "$script";;
+  "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/engine-root" ]; then root=$root bash "$FAKE_HOST/engine-root"; fi
+    if [ -f "$FAKE_HOST/probe.after" ]; then cp "$FAKE_HOST/probe.after" "$FAKE_HOST/probe"; fi
     if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi;;
   *"cat > "*manifest*) mkdir -p "${FAKE_MANIFEST%/*}"; cat >"$FAKE_MANIFEST";;
   *"cat "*manifest.json*) cat "$FAKE_MANIFEST" 2>/dev/null; true;;
@@ -42,6 +51,17 @@ printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
 F
 for tool in systemctl loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; done
 printf '#!/usr/bin/env bash\necho me\n' >"$FAKE_HOSTBIN/id"
+# The user's systemd manager is running.
+{ cat "$tmp/stub"; echo 'echo 4242'; } >"$FAKE_HOSTBIN/pgrep"
+# apt-get -s prints what apt would remove: the named packages, and those in $FAKE_HOST/apt-also.
+cat >"$FAKE_HOSTBIN/apt-get" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "apt-get $*" >>"$FAKE_HOST/calls"
+if [ "$1" = -s ]; then
+  echo "NOTE: This is only a simulation!"
+  for pkg in "${@:3}" $(cat "$FAKE_HOST/apt-also" 2>/dev/null); do [ "$pkg" = -- ] || echo "Remv $pkg [1.0-1]"; done
+fi
+F
 cat >"$FAKE_HOSTBIN/podman" <<'F'
 #!/usr/bin/env bash
 printf '%s\n' "podman $*" >>"$FAKE_HOST/calls"
@@ -93,7 +113,10 @@ spark() {
   printf '%s\n' user=me home=/home/me "gpu=NVIDIA GB10" "dgx_name=DGX Spark" podman=yes rsync=yes python3=yes \
     linger=no podman_major=4 var_cdi_gids=yes memlock_limits=no link_kind=none link_target= engine= "$@"
 }
-fresh_host() { rm -rf "$FAKE_HOST"; mkdir -p "$FAKE_HOST/home"; spark "$@" >"$FAKE_HOST/probe"; }
+fresh_host() { rm -rf "$FAKE_HOST"; mkdir -p "$FAKE_HOST/home" "$FAKE_HOST/root"; spark "$@" >"$FAKE_HOST/probe"; }
+# put PATH CONTENT: writes a file in the fake root.
+put() { mkdir -p "$FAKE_HOST/root${1%/*}"; printf '%s\n' "$2" >"$FAKE_HOST/root$1"; }
+sha() { sha256sum <"$FAKE_HOST/root$1" | cut -c1-64; }
 after() { spark "$@" >"$FAKE_HOST/probe.after"; }
 engine=$tmp/engine; mkdir -p "$engine"
 cat >"$engine/agent_local.py" <<'F'
@@ -159,7 +182,9 @@ m 'not item("linger", "me")["created_by_us"] and item("linger", "me")["previous"
 m 'item("package", "podman")["created_by_us"] and not item("package", "rsync")["created_by_us"]'; ok $? "only the packages that were missing are marked ours"
 m 'item("file", "'$limits'")["created_by_us"] and item("file", "'$limits'")["previous"]["exists"] is False'; ok $? "a root file the install created is marked ours"
 m 'not item("file", "/etc/cdi/nvidia.yaml")["created_by_us"]'; ok $? "an unchanged root file isn't marked ours"
-m 'item("symlink", "/usr/local/bin/omarchy-agent-local")["previous"]["target"] == "/opt/old/agent" and item("symlink", "/usr/local/bin/omarchy-agent-local")["created_by_us"]'; ok $? "the agent link's previous target is kept"
+link=/usr/local/bin/omarchy-agent-local
+m 'item("symlink", "'$link'")["previous"]["target"] == "/opt/old/agent" and item("symlink", "'$link'")["changed_by_us"] and not item("symlink", "'$link'")["created_by_us"]'
+ok $? "a re-pointed agent link keeps its previous target, and is marked changed, not created"
 m 'item("engine", "/home/me/.local/share/omarchy-local-ai")["created_by_us"]'; ok $? "the engine copy is marked ours"
 grep -q '"me@spark"' "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "install adds the host"
 
@@ -174,13 +199,25 @@ FAKE_ROOT_FAIL=1 s install me@spark --engine-path "$engine" >/dev/null 2>&1; ok 
 m 'item("linger", "me")["previous"] == {"linger": "no"}'; ok $? "a failed install still records what was there before"
 s install me@spark --engine-path "$engine" >/dev/null; m 'item("linger", "me")["created_by_us"]'; ok $? "a rerun after a failure marks what the failed run changed as ours"
 
-cdi=/etc/cdi/nvidia.yaml; fresh_host "file:$cdi=y1 other"; : >"$FAKE_LOG"
+cdi=/etc/cdi/nvidia.yaml compat=/usr/local/sbin/nvidia-cdi-podman-compat bk=$FAKE_HOST/home/.local/share/startdgx/backup
+fresh_host; put $cdi 'cdiVersion: 0.6.0'; put $compat '#!/bin/sh'; put /etc/other 'not ours'
+spark "file:$cdi=$(sha $cdi) other" "file:$compat=$(sha $compat) other" >"$FAKE_HOST/probe"; : >"$FAKE_LOG"
 s install me@spark --engine-path "$engine" >/dev/null
+cmp -s "$FAKE_HOST/root$cdi" "$bk/etc_cdi_nvidia.yaml" && cmp -s "$FAKE_HOST/root$compat" "$bk/usr_local_sbin_nvidia-cdi-podman-compat" \
+  && same "$(ls "$bk")" "$(printf '%s\n' etc_cdi_nvidia.yaml usr_local_sbin_nvidia-cdi-podman-compat)"; ok $? "install backs up the root files that were there before, and only those"
 m 'item("file", "'$cdi'")["previous"]["backup"] == "/home/me/.local/share/startdgx/backup/etc_cdi_nvidia.yaml" and not item("file", "'$cdi'")["created_by_us"]'
-ok $? "a root file that was there before is backed up, and isn't marked ours for it"
+ok $? "a root file that was there before is recorded with its backup, and isn't marked ours"
+fresh_host "file:$cdi=$(printf '%064d' 1) other" "file:$limits=$(printf '%064d' 2) engine"
+after "file:$cdi=$(printf '%064d' 3) engine" "file:$limits=$(printf '%064d' 2) engine"
+s install me@spark --engine-path "$engine" >/dev/null
+m 'not item("file", "'$cdi'")["created_by_us"] and item("file", "'$cdi'")["changed_by_us"] and not item("file", "'$limits'")["changed_by_us"]'
+ok $? "a root file that was there before and that the install changed is marked changed, not created"
+fresh_host; put $cdi 'cdiVersion: 0.6.0'; spark "file:$cdi=$(sha $cdi) other" >"$FAKE_HOST/probe"; s install me@spark --engine-path "$engine" >/dev/null
+put $cdi 'changed since'; s install me@spark --engine-path "$engine" >/dev/null
+same "$(cat "$bk/etc_cdi_nvidia.yaml")" 'cdiVersion: 0.6.0'; ok $? "a second install keeps the first backup"
 first_line() { grep -n -m1 -e "$1" "$FAKE_LOG" | cut -d: -f1; }
 earlier() { [ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]; }
-earlier "$(first_line startdgx/backup)" "$(first_line '^sudo bash -c')"; ok $? "the backup is taken before the root script runs"
+earlier "$(first_line startdgx-backup)" "$(first_line '^sudo bash -c')"; ok $? "the backup is taken before the root script runs"
 
 # Without --engine-path, the pinned tag is cloned here (a fake git, on this test's PATH only, copies $engine).
 mkdir -p "$tmp/fakegit"
@@ -201,15 +238,24 @@ out=$(s uninstall me@spark 2>&1); ok $((!$?)) "uninstall refuses a host without 
 echo "$out" | grep -q 'No install manifest' && echo "$out" | grep -q 'startdgx install'; ok $? "uninstall says the manifest is missing"
 same "$(wc -l <"$FAKE_LOG")" 1 && none_of "$FAKE_HOST/root-call" "$FAKE_HOST/calls"; ok $? "uninstall without a manifest only reads it"
 
-# installed [probe overrides]: a host startdgx installed (enabling linger, writing the limits file and the agent
-# link, and whatever ${changed[@]} sets), where the engine then set up two models on one image, shared one, and
-# left 1 MiB of weights.
+# installed [probe overrides]: a host startdgx installed, with $before_root in the fake root before it, where the
+# engine's root script enabled linger, wrote the limits file and the agent link, and ran $engine_root (with
+# ${changed[@]} on top of the probe after it), and where the engine then set up two models on one image, shared
+# one, and left 1 MiB of weights.
 h=$FAKE_HOST/home q=$FAKE_HOST/home/.config/containers/systemd
 fentry=$h/.local/share/omarchy-local-ai/omarchy-local-ai
 img=ghcr.io/omacom/tensorfold@sha256:$(printf '%064d' 7)
+rdma='# RDMA between paired DGX Sparks registers large buffers as locked memory.'
+before_root='' engine_root='' changed=()
 installed() {
-  fresh_host "home=$h" "$@"
-  after "home=$h" "$@" linger=yes "file:$limits=abc123 engine" link_kind=symlink "link_target=$fentry" engine=e1 "${changed[@]}"
+  fresh_host "home=$h" "$@"; eval "$before_root"
+  after "home=$h" "$@" linger=yes engine=e1 "${changed[@]}"
+  cat >"$FAKE_HOST/engine-root" <<E
+mkdir -p "\$root/etc/security/limits.d" "\$root/usr/local/bin"
+printf '%s\\n' '$rdma' >"\$root$limits"
+ln -sfn '$fentry' "\$root/usr/local/bin/omarchy-agent-local"
+$engine_root
+E
   s install me@spark --engine-path "$engine" >/dev/null || echo "installed: install failed" >&2
   mkdir -p "$q" "$h/.config/omarchy/agent-local" "$h/.config/omarchy/other" "$h/.local/state/omarchy/agent-local" \
     "$h/.local/share/omarchy/agent-local/models/q1" "$h/.config/systemd/user" "$FAKE_HOST/podman" "${fentry%/*}"
@@ -226,7 +272,6 @@ installed() {
   printf '{"Web": {"spark.ts.net:443": {"Handlers": {"/local-ai/q1": {"Proxy": "http://127.0.0.1:11430/q1"}, "/local-ai/models.json": {"Text": "{}"}, "/mine": {"Proxy": "http://127.0.0.1:8080"}}}}}' >"$FAKE_HOST/serve.json"
   : >"$FAKE_LOG"; rm -f "$FAKE_HOST/calls" "$FAKE_HOST/root-call"
 }
-changed=()
 tree() { (cd "$FAKE_HOST" && find . -path ./calls -prune -o -print | sort && find . -type f ! -name calls -exec md5sum {} + | sort); }
 installed; before=$(tree)
 out=$(s uninstall --dry-run me@spark); ok $? "uninstall --dry-run succeeds"
@@ -250,24 +295,43 @@ none_of "$q"/omarchy-agent-local* "$h/.config/omarchy/agent-local" "$h/.local/st
 ok $? "uninstall removes the engine, its quadlets, state, config, network, secret and image"
 present "$q/mine.container" "$h/.config/omarchy/other"; ok $? "uninstall keeps what isn't the engine's"
 [ -f "$h/.local/share/omarchy/agent-local/models/q1/blob" ] && echo "$out" | grep -q 'keep .*1.0 MiB'; ok $? "uninstall keeps the model weights by default and says how much"
-grep -q 'loginctl disable-linger me' "$FAKE_HOST/root-call" && grep -q "rm -f $limits" "$FAKE_HOST/root-call" \
-  && grep -q "readlink /usr/local/bin/omarchy-agent-local)\" = $fentry ]; then rm -f /usr/local/bin/omarchy-agent-local" "$FAKE_HOST/root-call"
-ok $? "uninstall undoes as root what the install changed"
+r=$FAKE_HOST/root
+grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link"; ok $? "uninstall undoes as root what the install created"
 grep -qx -- -t "$FAKE_HOST/root-call" && tail -1 "$FAKE_HOST/root-call" | grep -q " startdgx-uninstall$"; ok $? "the root part is one sudo script run with a terminal"
 none_of "$h/.local/share/startdgx" && ! grep -q me@spark "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "uninstall deletes the manifest and forgets the host"
-! grep -q -e /etc/cdi -e apt-get "$FAKE_HOST/root-call"; ok $? "uninstall leaves the root files and packages the install didn't change"
 
-backup=$h/.local/share/startdgx/backup/etc_cdi_nvidia.yaml
-printf 'cdiVersion: 0.6.0\n' >"$tmp/cdi.yaml"; csha=$(sha256sum <"$tmp/cdi.yaml" | cut -c1-64)
-changed=("file:$cdi=$(printf '%064d' 1) other" podman=yes)
-installed linger=yes link_kind=symlink link_target=/opt/old/agent "file:$cdi=$csha other" podman=no; changed=()
-mkdir -p "${backup%/*}"; cp "$tmp/cdi.yaml" "$backup"
+before_root="put $cdi 'cdiVersion: 0.6.0'; put /etc/systemd/user.conf.d/99-rdma-memlock.conf '$rdma'"; installed; before_root=''
+s uninstall me@spark >/dev/null 2>&1
+same "$(cat "$r$cdi")" 'cdiVersion: 0.6.0' && present "$r/etc/systemd/user.conf.d/99-rdma-memlock.conf" && ! grep -q apt-get "$FAKE_HOST/calls"
+ok $? "uninstall leaves the root files and packages the install didn't change, even with the engine's header"
+
+before_root="put $cdi 'cdiVersion: 0.6.0'; mkdir -p $r/usr/local/bin; ln -s /opt/old/agent $r$link"
+engine_root="printf 'cdiVersion: 0.7.0\\n' >\"\$root$cdi\""; changed=(podman=yes)
+installed linger=yes podman=no; before_root='' engine_root='' changed=()
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install changed what was there"
-! grep -q disable-linger "$FAKE_HOST/root-call"; ok $? "linger that was already on stays on"
-grep -qF "= $csha ]; then cp $backup /etc/cdi/nvidia.yaml;" "$FAKE_HOST/root-call"; ok $? "a CDI spec the install overwrote is restored from its backup, if it is the same"
-grep -qF "; then ln -sfn /opt/old/agent /usr/local/bin/omarchy-agent-local;" "$FAKE_HOST/root-call"; ok $? "the agent link goes back to its previous target"
-! grep -q apt-get "$FAKE_HOST/root-call" && echo "$out" | grep -q 'keep the packages podman'; ok $? "packages the install added are kept by default"
+! grep -q disable-linger "$FAKE_HOST/calls"; ok $? "linger that was already on stays on"
+same "$(cat "$r$cdi")" 'cdiVersion: 0.6.0'; ok $? "a CDI spec the install overwrote is restored from its backup"
+same "$(readlink "$r$link")" /opt/old/agent; ok $? "the agent link goes back to its previous target"
+! grep -q apt-get "$FAKE_HOST/calls" && echo "$out" | grep -q 'keep the packages podman'; ok $? "packages the install added are kept by default"
 
+before_root="put $cdi 'cdiVersion: 0.6.0'"; engine_root="printf 'cdiVersion: 0.7.0\\n' >\"\$root$cdi\""
+installed; before_root='' engine_root=''
+echo tampered >"$h/.local/share/startdgx/backup/etc_cdi_nvidia.yaml"
+out=$(s uninstall me@spark 2>&1); ok $((!$?)) "uninstall fails when a backup to restore has changed"
+same "$(cat "$r$cdi")" 'cdiVersion: 0.7.0' && echo "$out" | grep -q "backup .* is missing or changed" && none_of "$r$limits"
+ok $? "it leaves that file, says why, and still reverts the rest"
+present "$FAKE_MANIFEST" "$h/.local/share/startdgx/backup/etc_cdi_nvidia.yaml" && grep -q '"me@spark"' "$XDG_CONFIG_HOME/startdgx/hosts.json"
+ok $? "a failed restore keeps the manifest, the backups and the host"
+
+before_root="put $link '#!/bin/sh old agent'"; installed; before_root=''
+m 'item("symlink", "'$link'")["changed_by_us"] and item("symlink", "'$link'")["previous"]["type"] == "file"'; ok $? "a plain file where the agent link goes is recorded as changed"
+s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where the agent link replaced a plain file"
+[ ! -L "$r$link" ] && same "$(cat "$r$link")" '#!/bin/sh old agent'; ok $? "the plain file is restored from its backup"
+
+engine_root="ln -sfn /opt/someone-else \"\$root$link\""; installed; engine_root=''
+printf '# mine now\n' >"$r$limits"
+s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where files it created were changed since"
+present "$r$limits" && same "$(readlink "$r$link")" /opt/someone-else; ok $? "a created file without the engine's header, and an agent link not at the engine, are left"
 changed=(podman=yes); installed podman=no; changed=()
 s uninstall --delete-models --remove-packages me@spark >/dev/null; ok $? "uninstall --delete-models --remove-packages succeeds"
 none_of "$h/.local/share/omarchy"; ok $? "--delete-models deletes the model weights"
