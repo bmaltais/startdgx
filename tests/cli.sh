@@ -22,6 +22,8 @@ case "$cmd" in
   "bash -s") found=$(rooted | host bash -s 2>/dev/null | sed "s#$root##g"); cat "$FAKE_HOST/probe"
     printf '%s\n' "$found" | grep -E '^file:.*=.'; printf '%s\n' "$found" | grep -qx link_kind=none || printf '%s\n' "$found" | grep '^link_';;
   "bash -s -- startdgx-"*) rooted | host bash -s;;
+  # delete --dry-run's read-only probe, run against the fake home.
+  "python3 -I - "*) host bash -c "$cmd";;
   "sudo bash -c "*" startdgx-uninstall") printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi
     script=$(printf '%s' "${cmd#sudo }" | rooted); FAKE_AS_ROOT=1 host eval "$script";;
   "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/engine-root" ]; then root=$root bash "$FAKE_HOST/engine-root"; fi
@@ -152,6 +154,25 @@ s start me@dgx qwen3.8-27b-tensorfold >/dev/null; ok $? "start runs on the host"
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai start qwen3.8-27b-tensorfold'; ok $? "start sends the recipe to the engine"
 s stop me@dgx >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai stop$'; ok $? "stop without a model stops every one"
 s delete me@dgx qwen3.8-27b-tensorfold >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'remove qwen3.8-27b-tensorfold'; ok $? "delete maps to the engine's remove"
+# delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
+# blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
+ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
+mkdir -p "$ed/blobs/sha256" "$ed/models/m1" "$ed/models/m2" "$ed/staging" "$es/models" "$es/installing"
+head -c 3000 /dev/zero >"$ed/blobs/sha256/own"; head -c 500 /dev/zero >"$ed/blobs/sha256/shared"
+ln "$ed/blobs/sha256/own" "$ed/models/m1/weights"; ln "$ed/blobs/sha256/shared" "$ed/models/m1/tokenizer"; ln "$ed/blobs/sha256/shared" "$ed/models/m2/tokenizer"
+echo '{}' >"$es/models/m1.json"; echo '{}' >"$es/models/m2.json"
+part=$(printf 'a%.0s' {1..64}).part; head -c 700 /dev/zero >"$ed/staging/$part"
+printf '{"phase": "downloading", "partials": ["%s", "../../escape.part"]}\n' "$part" >"$es/installing/m3.json"
+: >"$FAKE_LOG"
+same "$(s delete --dry-run --json me@dgx m1)" '{"recipe": "m1", "setting_up": false, "bytes": 3000}'; ok $? "delete --dry-run --json counts what only that model links"
+same "$(s delete --dry-run --json me@dgx m2)" '{"recipe": "m2", "setting_up": false, "bytes": 0}'; ok $? "and nothing for weights another model shares"
+same "$(s delete --dry-run --json me@dgx m3)" '{"recipe": "m3", "setting_up": true, "bytes": 700}'; ok $? "a setup in progress frees what it downloaded so far"
+same "$(s delete --dry-run me@dgx m1)" "Removing m1 would free 2.9 KiB"; ok $? "delete --dry-run says it in one line"
+same "$(s delete --dry-run me@dgx m3)" "Cancelling the setup of m3 would delete the 700 B downloaded so far"; ok $? "and for a setup, that it cancels it"
+out=$(s delete --dry-run me@dgx m4 2>&1); ok $((!$?)) "delete --dry-run refuses a model that isn't set up"
+same "$out" "Error: m4 isn't set up on me@dgx"; ok $? "and says so"
+! grep -q remove "$FAKE_LOG" && present "$ed/blobs/sha256/own" "$ed/models/m1/weights" "$es/models/m1.json" "$ed/staging/$part"; ok $? "delete --dry-run removes nothing"
+s delete --dry-run me@dgx 'x;reboot' >/dev/null 2>&1; ok $((!$?)) "delete --dry-run refuses a recipe id with shell characters"
 s start me@dgx 'x; rm -rf ~' >/dev/null 2>&1; ok $((!$?)) "a recipe id with shell characters is refused"
 s add -oProxyCommand=x >/dev/null 2>&1; ok $((!$?)) "a host that looks like an ssh option is refused"
 : >"$FAKE_LOG"; s add me@dgx:x >/dev/null 2>&1; ok $((!$?)) "a host with a colon is refused"
@@ -649,10 +670,14 @@ now=$((t0 + 15)); dj '0 < d["models"]["'$flash'"]["install"]["done_bytes"] < d["
 dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "a model being set up isn't installed yet"
 now=$((t0 + 3600)); row $a $flash active; ok $? "a finished demo setup loads and runs the model"
 dj '[r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "and the list shows it installed"
+dj 'd == {"recipe": "'$flash'", "setting_up": False, "bytes": 95 * 2**29}' delete --dry-run --json $a $flash; ok $? "demo delete --dry-run frees what its setup downloaded"
+row $a $flash active; ok $? "and changes nothing"
 out=$(ds delete $a $flash); ok $? "demo delete succeeds"
 row $a $flash removing; ok $? "a deleted demo model is being removed"
 now=$((t0 + 3700)); dj '"'$flash'" not in d["models"]' status $a; ok $? "and is gone once its removal time has passed"
 dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "the demo list no longer shows it installed"
+now=$((t0 + 20)) dj 'd["setting_up"] and d["bytes"] > 0' delete --dry-run --json $b $flash; ok $? "demo delete --dry-run of a setup counts what is downloaded so far"
+ds delete --dry-run $c $flash >/dev/null 2>&1; ok $((!$?)) "demo delete --dry-run on a machine that doesn't answer fails"
 now=$((t0 + 20)) out=$(ds delete $b $flash); same "$out" "Cancelled the setup of $flash"; ok $? "deleting a demo setup in progress cancels it"
 dj '"'$flash'" not in d["models"]' status $b; ok $? "and drops its row at once"
 

@@ -111,6 +111,49 @@ if [ -d ~/{ENGINE_DATA} ]; then echo "models_bytes=$(du -sb ~/{ENGINE_DATA} | cu
 exit 0
 '''
 
+# Read-only, for delete --dry-run: what the engine's remove of the recipe (argv[1]) would free, as its _remove_files
+# counts it: each blob that no other model's files link and that nothing else holds, and for a setup in progress the
+# half-downloaded files its record lists. Prints {"set_up", "setting_up", "bytes"}.
+REMOVE_PROBE = f'''
+import json, os, re, sys
+rid, home = sys.argv[1], os.path.expanduser("~")
+data, state = os.path.join(home, "{ENGINE_DATA}"), os.path.join(home, "{ENGINE_STATE}")
+def stats(top):
+  for directory, _, names in os.walk(top):
+    for name in names:
+      try:
+        yield os.stat(os.path.join(directory, name))
+      except OSError:
+        pass
+mine, others = {{}}, set()
+models = os.path.join(data, "models")
+for entry in sorted(os.listdir(models)) if os.path.isdir(models) else []:
+  for info in stats(os.path.join(models, entry)):
+    key = (info.st_dev, info.st_ino)
+    if entry == rid:
+      mine[key] = mine.get(key, 0) + 1
+    else:
+      others.add(key)
+freed = 0
+for info in stats(os.path.join(data, "blobs")):
+  key = (info.st_dev, info.st_ino)
+  if key not in others and info.st_nlink - mine.get(key, 0) == 1:
+    freed += info.st_size
+set_up = os.path.exists(os.path.join(state, "models", rid + ".json"))
+try:
+  with open(os.path.join(state, "installing", rid + ".json")) as handle:
+    record = json.load(handle)
+except (OSError, ValueError):
+  record = None
+setting_up = not set_up and isinstance(record, dict)
+for name in (record.get("partials") or []) if setting_up else []:
+  if isinstance(name, str) and re.fullmatch(r"[0-9a-f]{{40}}|[0-9a-f]{{64}}", name.removesuffix(".part")):
+    path = os.path.join(data, "staging", name)
+    if os.path.isfile(path):
+      freed += os.path.getsize(path)
+print(json.dumps({{"set_up": set_up, "setting_up": setting_up, "bytes": freed}}))
+'''
+
 # Read-only: prints key=value lines about the host. Bash, since python3 may be one of the missing tools.
 PROBE = USER_PROBE + r'''
 echo "gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
@@ -274,7 +317,29 @@ def cmd_use(args):
 
 
 def cmd_delete(args):
+  if args.dry_run:
+    rid, host = recipe(args.model), target(args.host)
+    out = ssh_raw(host, f"python3 -I - {shlex.quote(rid)}", stdin=REMOVE_PROBE, timeout=args.timeout, what="probe").stdout
+    try:
+      found = json.loads(out.strip().splitlines()[-1])
+      plan = {"recipe": rid, "setting_up": bool(found["setting_up"]), "bytes": int(found["bytes"])}
+      set_up = bool(found["set_up"])
+    except (ValueError, IndexError, KeyError, TypeError) as error:
+      raise Error(f"{host} gave an answer startdgx can't read") from error
+    if not (set_up or plan["setting_up"]):
+      raise Error(f"{rid} isn't set up on {host}")
+    print_remove_plan(plan, args.json)
+    return
   sys.stdout.write(ssh(target(args.host), "remove", recipe(args.model), timeout=args.timeout).stdout)
+
+
+def print_remove_plan(plan, as_json):
+  if as_json:
+    print(json.dumps(plan))
+  elif plan["setting_up"]:
+    print(f"Cancelling the setup of {plan['recipe']} would delete the {size_text(plan['bytes'])} downloaded so far")
+  else:
+    print(f"Removing {plan['recipe']} would free {size_text(plan['bytes'])}")
 
 
 def probe(host):
@@ -595,7 +660,10 @@ def serve_paths(state):
 
 
 def size_text(n):
-  return f"{n / 2**30:.1f} GiB" if n >= 2**30 else f"{n / 2**20:.1f} MiB"
+  for unit, size in (("GiB", 2**30), ("MiB", 2**20), ("KiB", 2**10)):
+    if n >= size:
+      return f"{n / size:.1f} {unit}"
+  return f"{n} B"
 
 
 def engine_is_ours(manifest, state):
@@ -1100,6 +1168,21 @@ def demo_use(args):
 
 
 def demo_delete(args):
+  if args.dry_run:
+    rid = recipe(args.model)
+    with demo_state() as state:
+      machine = demo_host(state, args.host)
+    row = machine["status"]["models"].get(rid)
+    if row is None:
+      raise Error(f"{rid} isn't set up on {args.host}")
+    if row["unit"] == "installing":
+      plan = {"recipe": rid, "setting_up": True, "bytes": row["install"]["done_bytes"]}
+    else:
+      # What a demo setup of it downloads (demo_use), so the two agree.
+      r = next((r for r in machine["list"] if r["id"] == rid), {})
+      plan = {"recipe": rid, "setting_up": False, "bytes": int((r.get("memory_gib") or 30) * 2**29)}
+    print_remove_plan(plan, args.json)
+    return
   with demo_state(write=True) as state:
     models = demo_host(state, args.host)["status"]["models"]
     if models.get(recipe(args.model), {}).get("unit") == "installing":
@@ -1192,7 +1275,9 @@ def build_parser():
   add("stop", cmd_stop, optional_model=True)
   us = add("use", cmd_use, model=True, timeout=None, timeout_help="3600, or 120 with --detach")
   us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
-  add("delete", cmd_delete, model=True)
+  de = add("delete", cmd_delete, model=True)
+  de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
+  de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
   la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
                       "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
