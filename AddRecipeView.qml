@@ -139,27 +139,10 @@ FocusScope {
     // Each error the engine found, on its own row.
     Repeater {
       model: card.result && !card.result.ok ? card.result.errors.slice(0, card.shownErrors) : []
-      delegate: Rectangle {
-        id: errorRow
+      delegate: ErrorRow {
         required property string modelData
         Layout.fillWidth: true
-        implicitHeight: errorText.implicitHeight + Style.spacing.md * 2
-        radius: Math.max(Style.cornerRadius, Style.space(6))
-        color: Util.alpha(Color.urgent, 0.10)
-        Text {
-          id: errorText
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.lg
-          anchors.rightMargin: Style.spacing.lg
-          textFormat: Text.PlainText
-          wrapMode: Text.Wrap
-          text: errorRow.modelData
-          color: Color.urgent
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
+        message: modelData
       }
     }
     Text {

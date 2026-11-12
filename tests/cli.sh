@@ -1210,7 +1210,14 @@ printf '%s' "$out" | grep -q -- '--id'; ok $? "and the clash asks for --id"
 grep -q '^# mine$' "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "and keeps their edit"
 : >"$drafts/hand-made.toml"
 draft $tf --id hand-made >/dev/null 2>&1; ok $((!$?)) "a file startdgx never wrote is never overwritten"
-eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\nif [ "$2" = validate ] && [ -e "$HOME/reject" ]; then echo "recipes/x: rejected by the engine"; exit 1; fi\necho %s\n' "'[{\"id\":\"mine\",\"user\":true},{\"id\":\"qwen3.8-27b-tensorfold\"}]'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"
+# A host engine that lists two recipes and, while $HOME/reject exists, rejects every validate.
+cat >"$eng/omarchy-local-ai" <<'F'
+#!/bin/sh
+if [ "$2" = validate ] && [ -e "$HOME/reject" ]; then echo "recipes/x: rejected by the engine"; exit 1; fi
+echo '[{"id":"mine","user":true},{"id":"qwen3.8-27b-tensorfold"}]'
+F
+chmod +x "$eng/omarchy-local-ai"
 s add me@dgx >/dev/null 2>&1
 out=$(draft $tf --host me@dgx --id mine 2>&1); ok $((!$?)) "an id the host already has fails"
 printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -q mine; ok $? "naming the id and asking for --id"

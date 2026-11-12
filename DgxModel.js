@@ -876,7 +876,9 @@ function hfShown(rows, showDerivatives) {
   return (Array.isArray(rows) ? rows : []).filter(function (r) { return showDerivatives || hfLabel(r) === "" })
 }
 
-function hfDerivativeCount(rows) { return hfShown(rows, true).length - hfShown(rows, false).length }
+function hfDerivativeCount(rows) {
+  return (Array.isArray(rows) ? rows : []).reduce(function (n, r) { return n + (hfLabel(r) !== "" ? 1 : 0) }, 0)
+}
 
 // The toggle's words; "" when no row is labelled, so there is nothing to toggle.
 function hfToggleText(rows, showDerivatives) {
@@ -901,7 +903,7 @@ function hfMemoryLine(row, ramGib) {
   return (Number(ramGib) || 0) > 0 ? weights + "; this host has " + Math.round(ramGib) + " GiB" : weights
 }
 
-// ---- Draft recipe… on a result -------------------------------------------------------------------------------
+// ---- Draft recipe on a result -------------------------------------------------------------------------------
 // One action puts a repo on a machine: `recipe draft` writes the file (asked with --host, so an id the machine already has is
 // refused before anything is written), then the Add recipe path (`recipe add`) validates and adds it. Never a fit verdict:
 // the variant is drafted until a measuring run (docs/adr/0001).

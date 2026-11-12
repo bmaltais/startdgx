@@ -45,7 +45,11 @@ FocusScope {
       event.accepted = true
     }
     else if (event.text === "r") { card.dgx.listRecipes(card.host); event.accepted = true }
-    else if (event.text === "f") { card.svc.dispatch({ type: "findModel", host: card.host }); event.accepted = true }
+    else if (event.text === "f") {
+      // A held f would reopen the card it just opened.
+      if (!event.isAutoRepeat) card.svc.dispatch({ type: "findModel", host: card.host })
+      event.accepted = true
+    }
     else if (event.text === "e") { card.svc.dispatch({ type: "addRecipe", host: card.host }); event.accepted = true }
   }
 

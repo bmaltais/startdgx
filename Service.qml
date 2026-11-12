@@ -80,16 +80,18 @@ Item {
   }
   function ensureManager() { if (!root.shown) root.showManager() }
 
-  function close() {
+  // Ends what the open card was asking before it goes.
+  function dropCard() {
     if (root.card === "add") core.cancelDiscover()
     if (root.card === "find") core.cancelHf()
     root.card = ""
+  }
+  function close() {
+    root.dropCard()
     root.shown = false
   }
   function closeCard() {
-    if (root.card === "add") core.cancelDiscover()
-    if (root.card === "find") core.cancelHf()
-    root.card = ""
+    root.dropCard()
     Qt.callLater(function () { managerView.focusList() })
   }
 

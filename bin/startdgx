@@ -1347,8 +1347,8 @@ LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True, "author": Tr
 
 
 def cmd_launch(args):
-  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and
-  uninstall). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
+  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and uninstall; author
+  runs an agent). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
   if args.verb not in LAUNCH_VERBS:
     raise Error(f"launch: '{args.verb}' isn't one of {', '.join(LAUNCH_VERBS)}")
   if args.model and not LAUNCH_VERBS[args.verb]:
@@ -2446,8 +2446,8 @@ def build_parser():
   hs.add_argument("query")
   hs.add_argument("--json", action="store_true", help="as [{repo, params, size_bytes, license, base_model, label}]")
   hs.set_defaults(fn=cmd_hf_search)
-  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
-                      "logs HOST [MODEL], or recipe author HOST REPO, for the panel: sudo there can ask for a password.")
+  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST, "
+                      "logs HOST [MODEL] or author HOST REPO (recipe author --agent --here), for the panel: sudo there can ask for a password.")
   la.add_argument("verb", metavar="install|uninstall|logs|author")
   la.add_argument("host")
   la.add_argument("model", nargs="?")

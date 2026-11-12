@@ -66,7 +66,7 @@ Item {
   property string recipesError: ""
   readonly property bool listing: listQuery.busy
 
-  // Draft recipe… on a search result: the repo being put on recipeHost, the step ("drafting" while the CLI writes the file; the
+  // Draft recipe on a search result: the repo being put on recipeHost, the step ("drafting" while the CLI writes the file; the
   // check and the add are then recipeStep), what went wrong before there was a file, and the draft's warnings. The result of
   // the check or add is recipeResult, for the id drafted.
   property string draftRepo: ""
