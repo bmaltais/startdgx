@@ -850,6 +850,57 @@ function notifyCommand(alert) {
   return ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", String(alert.title), body]
 }
 
+// ---- Find on Hugging Face ----------------------------------------------------------------------------------
+// `startdgx hf search --json` rows: { repo, params, size_bytes, license, base_model, label }. The card states facts and
+// never says a model fits: no number in a recipe comes from a guess (docs/adr/0001).
+
+function parseHfRows(text) {
+  const parsed = parseJson(text)
+  if (!Array.isArray(parsed)) return null
+  for (let i = 0; i < parsed.length; i++) {
+    if (!isPlainObject(parsed[i]) || typeof parsed[i].repo !== "string" || parsed[i].repo === "") return null
+  }
+  return parsed
+}
+
+// The CLI's arguments for a query, after `--` so a query that starts with - is a query.
+function hfSearchCommand(query) {
+  return ["hf", "search", "--json", "--", String(query).trim()]
+}
+
+// "abliterated" or "uncensored" on a derivative, "" on the rest.
+function hfLabel(row) { return row && typeof row.label === "string" ? row.label : "" }
+
+// The rows to show: all of them, or without the labelled ones.
+function hfShown(rows, showDerivatives) {
+  return (Array.isArray(rows) ? rows : []).filter(function (r) { return showDerivatives || hfLabel(r) === "" })
+}
+
+function hfDerivativeCount(rows) { return hfShown(rows, true).length - hfShown(rows, false).length }
+
+// The toggle's words; "" when no row is labelled, so there is nothing to toggle.
+function hfToggleText(rows, showDerivatives) {
+  const n = hfDerivativeCount(rows)
+  return n === 0 ? "" : (showDerivatives ? "Hide" : "Show") + " abliterated and uncensored (" + n + ")"
+}
+
+// Parameters, license and base model, as facts; nothing about memory.
+function hfRowText(row) {
+  const parts = []
+  const params = Number(row.params) || 0
+  if (params > 0) parts.push((params / 1e9).toFixed(1) + "B")
+  parts.push(row.license ? String(row.license) : "license unknown")
+  if (row.base_model) parts.push("from " + row.base_model)
+  return parts.join(" · ")
+}
+
+// "weights 15.4 GiB; this host has 128 GiB": the two numbers, no verdict. `ramGib` is 0 when no host is known.
+function hfMemoryLine(row, ramGib) {
+  const bytes = Number(row.size_bytes) || 0
+  const weights = bytes > 0 ? "weights " + sizeText(bytes) : "weights size unknown"
+  return (Number(ramGib) || 0) > 0 ? weights + "; this host has " + Math.round(ramGib) + " GiB" : weights
+}
+
 // ---- a query ----------------------------------------------------------------------------------------------
 // One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
 // A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come

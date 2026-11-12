@@ -47,6 +47,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 | `t` | Share the model under the cursor with the tailnet, or stop sharing it |
 | `a` | Add a model to the machine… |
 | `e` | Add a recipe of your own to the machine… (in the model picker too) |
+| `f` | In the model picker: Find on Hugging Face… (in the manager `f` is Forget…) |
 | `d`, Delete | Remove the model… (or cancel its setup) |
 | `l` | Its logs… (a machine's row: the model started last) |
 | `u` | Uninstall the machine… |
@@ -62,6 +63,10 @@ Lists `startdgx discover --json` (it installs nothing and changes nothing on the
 ## Add model
 
 A machine's model picker: every recipe of its catalog (`startdgx list HOST`), sorted by `DgxModel.recipeOffers`: the engine's recommendation first (marked *recommended*, its own `best`), then what the machine can run and doesn't have, what it has (*On this machine*) or is setting up, and what it can't run, dimmed, with the engine's reason. Each shows its maker's mark, the memory it takes, its context and speed on this machine class (`recipeFacts`) and its summary. **Set up** (Enter) runs `use --detach`, closes the card and puts the cursor on the new row, which shows at once as *Waiting to download* (`withSetups`) until the machine lists it, then follows the download through the status poll, then loads. A failure (exit code non-zero) takes the row away again and puts the CLI's last stderr line in the footer. **Look again** (`r`) reads the catalog again. **Add recipe…** (`e`) opens the Add recipe card. A user recipe wears a *yours* mark, and one whose numbers aren't measured says so (*estimated*, *drafted, not yet fitting*); a drafted recipe is dimmed, can't be set up, and says why. Up/Down, Enter, `r`, `e`, Esc.
+
+## Find on Hugging Face
+
+The model picker's **Find on Hugging Face…** (`f` there; IPC `findModel HOST [QUERY]`, `scripts/dev find HOST [QUERY]`) opens a card with a query field (Enter or **Search** runs `startdgx hf search --json`, on this computer: no host is asked, and Esc drops the typed query before it closes the card), one row per repo and a toggle. A row (`DgxModel.hfRowText`, `hfMemoryLine`) has the repo, then parameters, license (or "license unknown") and the base model, then the memory line as two plain facts: "weights 15.4 GiB; this host has 128 GiB" (the host's `ram_total_gib`, rounded; "weights size unknown" when the repo lists none). An abliterated or uncensored repo wears its label beside its name. **Show/Hide abliterated and uncensored (N)** (`hfToggleText`) is on by default and shown only when a row is labelled; hiding touches no other row. A search that found nothing says so apart from one that did not run (the CLI's message, in red: offline, rate limited). The card has no Draft recipe… button yet (#36).
 
 ## Add recipe
 
@@ -128,6 +133,7 @@ Newest first. One line each: what was decided, and why.
 | 2026-11-11 | notify-send and the status folder's mkdir stay in the QML; AGENTS.md's Layout rule now says so | The smaller of the two fixes the review allowed: moving them into the CLI would add two commands, and demo mode's wall (which refuses every process) would then take the nested session's notifications away. Neither reaches a machine; notify-send gets `--` before its text and the body's `&<>` escaped (`DgxModel.notifyCommand`). |
 | 2026-11-11 | The uninstall card offers `--delete-models` and `--remove-packages` as opt-ins, off by default, read from a new `uninstall --dry-run --json` | They were command-line only; each states its cost (the space, the packages), and the plan is asked again with them so what the terminal does is what was shown. |
 | 2026-11-11 | Forget asks in a card; a held key acts once | No single key should be destructive: `f` alone took a machine off the list, and a held Enter or `s` started and stopped a model again and again. |
+| 2026-11-12 | The Find on Hugging Face card never says a row fits: it prints the weights' size beside the host's memory, as two numbers | A fit verdict before a measuring run is what ADR 0001 forbids, and Hugging Face metadata says neither the quant format nor the real peak reliably. The size is the repo's .safetensors files, the memory is what the machine reported; the reader compares. The derivative toggle (shown by default) is the maintainer's decision in #31; the card is host-scoped only for that memory line, and the search touches no machine. |
 | 2026-11-11 | A Spark with an engine startdgx didn't install offers Add and Install…; a Set up that fails for want of the root setup offers Install… on its machine | Add works with that engine as it is; Install (`--replace-engine`, harmless where the engine is startdgx's) is the way to the root setup the engine asks for in a terminal. |
 | 2026-11-11 | Add machine has a User on the machines field (discover `--user`), not a free-form target | Discover asked only as this machine's user; a typed user keeps the card's list, host keys and offers. |
 | 2026-11-11 | Discover's ssh takes a never-seen machine's host key (`accept-new`), and only discover's | With BatchMode alone a Spark this machine never reached was unreachable and got no Install. Its peers are the tailnet's, which the user chose to list; a changed key is still refused and says so. Add and install check against the key it saved. |
