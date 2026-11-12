@@ -13,7 +13,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop, Logs and Remove… per
   model, an Add model… picker per machine over its catalog (`list`; Set up runs `use --detach` and the row follows the
   download), an Add machine card over `discover` (Add, or Install… in a terminal, with `--replace-engine` where an engine startdgx didn't install is there; the ssh user can be typed in), an Install… offer on a machine whose engine says it needs its root setup, Uninstall… that shows the dry-run
-  plan and asks first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
+  plan (with opt-ins to delete the weights and remove the packages the install added) and asks first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
   `docs/ui-standards.md`; testing in the nested session, in demo mode: `docs/testing.md`.
 - [x] Add and remove models from the manager (`use --detach`, `delete`), issue #6: the picker lists every recipe of the
   machine's catalog, best first, with why one can't run there; Remove… (Cancel the setup… on a download in progress)
@@ -33,7 +33,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   host. The root files it may overwrite are backed up first. It refuses a host that already has an engine it didn't
   install unless `--replace-engine` is given, which backs that engine up for uninstall to put back. A failed install
   still records what it changed, so an uninstall can undo it.
-- [x] `startdgx uninstall [--dry-run] [--delete-models] [--remove-packages] <host>`: reverses the install from its
+- [x] `startdgx uninstall [--dry-run [--json]] [--delete-models] [--remove-packages] <host>`: (`--dry-run --json` prints `{host, steps, kept, manual, models_bytes, packages}`, for the panel's card) reverses the install from its
   manifest. It stops sharing and stops the engine's units, then removes only the `/local-ai` tailscale serve routes,
   the engine's quadlets, network, secret and images (an image a container still uses stays), its state and config,
   and finally the engine. Then, in one `sudo`, it reverts only what the install changed: what it created goes, files
@@ -58,9 +58,10 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
     a read-only probe over BatchMode ssh counts the blobs no other model links (what the engine's remove frees), and
     for a setup in progress the half-downloaded files it lists. `--json` prints `{"recipe", "setting_up", "bytes"}`.
     `delete` of a setup in progress cancels it (the engine stops its unit and deletes what it downloaded).
-  - `startdgx launch install|uninstall|logs <host> [model] [--replace-engine]` opens a floating Omarchy terminal
-    running that startdgx command, so sudo can ask for a password. The verb is allow-listed, the host and model are
-    checked and shell-quoted, and `--replace-engine` goes only with `install`.
+  - `startdgx launch install|uninstall|logs <host> [model] [--replace-engine] [--delete-models] [--remove-packages]` opens a
+    floating Omarchy terminal running that startdgx command, so sudo can ask for a password. The verb is allow-listed,
+    the host and model are checked and shell-quoted, `--replace-engine` goes only with `install`, and the other two only
+    with `uninstall`.
   - Demo mode (`STARTDGX_DEMO=1`, or the file `~/.config/startdgx/demo/ENABLED`) runs no process at all: every way to
     run one raises. It serves the fixtures in `demo/` (three machines, one unreachable, plus `discover` peers) and
     keeps its own state, hosts included, in `$XDG_STATE_HOME/startdgx-demo`. `start`, `stop`, `use` and `delete`
@@ -70,4 +71,4 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 
 ## Credits
 
-Parts of the panel are adapted from Omarchy's `agents` plugin, MIT, Copyright (c) David Heinemeier Hansson.
+Parts of the panel are adapted from Omarchy's `agents` plugin, MIT, Copyright (c) David Heinemeier Hansson; its images in `assets/` keep their notice in `assets/NOTICE`, and the model makers' logos there are their companies' trademarks.

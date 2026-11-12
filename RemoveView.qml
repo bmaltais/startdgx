@@ -28,13 +28,14 @@ FocusScope {
   // The model went (removed elsewhere), or can't be removed now (it began stopping): nothing to ask. A setup
   // that finished meanwhile frees another amount, so the machine is asked again. After the change has settled,
   // not while the binding that saw it is being worked out.
-  property string planned: ""
-  Component.onCompleted: card.planned = card.action
+  // The removal ("remove" or "cancel") the machine was last asked about.
+  property string askedFor: ""
+  Component.onCompleted: card.askedFor = card.action
   onActionChanged: Qt.callLater(card.follow)
   function follow() {
     if (card.action === "") { card.svc.closeCard(); return }
-    if (card.planned !== "" && card.planned !== card.action) card.dgx.planRemove(card.host, card.model)
-    card.planned = card.action
+    if (card.askedFor !== "" && card.askedFor !== card.action) card.dgx.planRemove(card.host, card.model)
+    card.askedFor = card.action
   }
 
   function confirm() {

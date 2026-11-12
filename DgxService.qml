@@ -43,9 +43,11 @@ Item {
   property string peersError: ""
   readonly property bool discovering: discoverProc.running
 
-  // The uninstall plan (`uninstall HOST --dry-run`), for the uninstall card.
+  // The uninstall plan (`uninstall HOST --dry-run --json` with the card's opt-ins), for the uninstall card:
+  // planKey is the host and the flags it was asked with.
   property string planHost: ""
-  property string planText: ""
+  property string planKey: ""
+  property var uninstallPlan: null
   property string planError: ""
   readonly property bool planning: planProc.running
 
@@ -218,12 +220,14 @@ Item {
     discoverProc.running = true
   }
 
-  function plan(host) {
+  // flags: the opt-ins the plan is asked with (--delete-models, --remove-packages).
+  function plan(host, flags) {
     service.planHost = host
-    service.planText = ""
+    service.planKey = [host].concat(flags).join(" ")
+    service.uninstallPlan = null
     service.planError = ""
     planProc.running = false
-    planProc.command = [service.script, "uninstall", host, "--dry-run", "--timeout", "60"]
+    planProc.command = [service.script, "uninstall", host, "--dry-run", "--json", "--timeout", "60"].concat(flags)
     planProc.running = true
   }
 
@@ -344,8 +348,9 @@ Item {
     stdout: StdioCollector { id: planOut; waitForEnd: true }
     stderr: StdioCollector { id: planErr; waitForEnd: true }
     onExited: function (code) {
-      if (code === 0) service.planText = String(planOut.text || "").trim()
-      else service.planError = Model.errorLine(planErr.text, "The uninstall plan could not be read")
+      const plan = code === 0 ? Model.parseUninstallPlan(planOut.text) : null
+      if (plan) service.uninstallPlan = plan
+      else service.planError = code === 0 ? "The machine's plan could not be read" : Model.errorLine(planErr.text, "The uninstall plan could not be read")
     }
   }
 }

@@ -85,7 +85,7 @@ Item {
     root.ensureManager()
     root.cardHost = host
     root.card = "uninstall"
-    core.plan(host)
+    core.plan(host, [])
   }
 
   function showForget(host) {
@@ -131,7 +131,7 @@ Item {
     case "addMachine": root.showAddMachine(); break
     case "addHost": core.addHost(action.host); break
     case "install": core.launch("install", action.host, "", action.replace ? ["--replace-engine"] : []); root.close(); break
-    case "uninstallNow": core.launch("uninstall", action.host, ""); root.close(); break
+    case "uninstallNow": core.launch("uninstall", action.host, "", action.flags || []); root.close(); break
     case "addModel": root.showAddModel(action.host); break
     case "use": root.setUp(action.host, action.recipe); break
     case "removeModel": root.showRemove(action.host, action.id); break

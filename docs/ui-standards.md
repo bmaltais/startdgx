@@ -71,7 +71,7 @@ A machine's **Forget…** (`f`) asks in a card: it takes the machine off this li
 
 ## Uninstall
 
-`startdgx launch uninstall` runs the real uninstall at once, so the card is the confirmation: it first shows the plan (`startdgx uninstall HOST --dry-run`, which changes nothing), and its **Uninstall…** pill (danger, enabled only once a plan has been read) opens the terminal that does it. **Cancel**, Esc or a click outside close it and nothing happens. The weights are kept; `--delete-models` is left to the command line.
+`startdgx launch uninstall` runs the real uninstall at once, so the card is the confirmation: it first shows the plan (`startdgx uninstall HOST --dry-run --json`, which changes nothing), and its **Uninstall…** pill (danger, enabled only once the plan for the chosen opt-ins has been read) opens the terminal that does it. Two opt-ins, off by default and shown only where they would do something (`DgxModel.uninstallChoices`), say what they cost: **Also delete the model weights** (`--delete-models`, with the space it frees) and **Also remove the packages the install added** (`--remove-packages`, naming them; anything else that uses them stops working, python3 always stays). Each change asks for the plan again; a removal apt would widen fails there and keeps the pill off. **Cancel**, Esc or a click outside close it and nothing happens.
 
 ## Terminals
 
@@ -92,7 +92,7 @@ A model that fails, or a setup that does, is a critical notification, once per f
 
 ## Shared UI code
 
-`ScrollTrack.qml` and `SettingsPill.qml` are StartDrive's, unchanged. `Meter.qml`, `TextLink.qml`, `VendorIcon.qml` and `ModelRow.qml` are adapted from Omarchy's agents plugin (MIT, David Heinemeier Hansson; each says so in its header), with the shell's theme colours in place of the bar's and literal English in place of the agents strings.
+`ScrollTrack.qml` and `SettingsPill.qml` are StartDrive's, unchanged. `Meter.qml`, `TextLink.qml`, `VendorIcon.qml`, `ModelRow.qml` and `AddModelView.qml` (its recipe rows) are adapted from Omarchy's agents plugin, and so are parts of `DgxModel.js` (the status validation, the start and stop progress curve, the download figures); each says so in its header, with DHH's line in `LICENSE`. They use the shell's theme colours in place of the bar's and literal English in place of the agents strings. The images in `assets/` are the agents plugin's, unchanged: `assets/NOTICE` carries its MIT notice and says the makers' logos are their companies' trademarks, used only to name each model's maker.
 
 ## Decision log
 
@@ -100,6 +100,7 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-11 | The uninstall card offers `--delete-models` and `--remove-packages` as opt-ins, off by default, read from a new `uninstall --dry-run --json` | They were command-line only; each states its cost (the space, the packages), and the plan is asked again with them so what the terminal does is what was shown. |
 | 2026-11-11 | Forget asks in a card; a held key acts once | No single key should be destructive: `f` alone took a machine off the list, and a held Enter or `s` started and stopped a model again and again. |
 | 2026-11-11 | A Spark with an engine startdgx didn't install offers Add and Install…; a Set up that fails for want of the root setup offers Install… on its machine | Add works with that engine as it is; Install (`--replace-engine`, harmless where the engine is startdgx's) is the way to the root setup the engine asks for in a terminal. |
 | 2026-11-11 | Add machine has a User on the machines field (discover `--user`), not a free-form target | Discover asked only as this machine's user; a typed user keeps the card's list, host keys and offers. |

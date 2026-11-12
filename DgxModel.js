@@ -627,3 +627,36 @@ function parseRemovePlan(text) {
   if (!isPlainObject(parsed) || typeof parsed.recipe !== "string" || typeof parsed.bytes !== "number" || !(parsed.bytes >= 0)) return null
   return parsed
 }
+
+// ---- uninstalling ------------------------------------------------------------------------------------------
+
+function stringList(value) {
+  return Array.isArray(value) && value.every(function (s) { return typeof s === "string" })
+}
+
+// `startdgx uninstall HOST --dry-run --json`: { host, steps, kept, manual, models_bytes, packages }, or null.
+function parseUninstallPlan(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || !stringList(p.steps) || !stringList(p.kept) || !stringList(p.manual) || !stringList(p.packages)) return null
+  if (p.models_bytes !== null && !(typeof p.models_bytes === "number" && p.models_bytes >= 0)) return null
+  return p
+}
+
+// The plan as the uninstall card shows it: what it does, what it keeps, then what is left for you.
+function uninstallText(plan) {
+  return plan.steps.concat(plan.kept, ["", "Left for you to do:"], plan.manual).join("\n")
+}
+
+// What the uninstall card lets you opt into, each off by default and only where it would do something: deleting the
+// model weights (--delete-models) and removing the packages the install added (--remove-packages).
+function uninstallChoices(plan) {
+  const out = []
+  if (plan.models_bytes !== null && plan.models_bytes > 0) {
+    out.push({ flag: "--delete-models", label: "Also delete the model weights", description: "Frees " + sizeText(plan.models_bytes) + ". Setting a model up again downloads it again." })
+  }
+  if (plan.packages.length > 0) {
+    out.push({ flag: "--remove-packages", label: "Also remove the packages the install added",
+      description: plan.packages.join(", ") + ". Anything else on the machine that uses them stops working; python3 always stays." })
+  }
+  return out
+}

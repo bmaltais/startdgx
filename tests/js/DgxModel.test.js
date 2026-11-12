@@ -641,3 +641,36 @@ test("keyAction: f asks before it forgets, and a held key acts once", () => {
   }
   assert.deepStrictEqual(M.keyAction("r", host, null, "", false, true), { type: "refresh" }, "a held r only looks again")
 })
+
+// `startdgx uninstall HOST --dry-run --json`, as the CLI prints it (tests/cli.sh checks the CLI's side).
+const uninstallPlan = (over) => Object.assign({
+  host: "me@spark", steps: ["stop the engine's units (omarchy-agent-local-*.service)", "delete the engine ~/.local/share/omarchy-local-ai", "forget me@spark here"],
+  kept: ["keep ~/.local/share/omarchy/agent-local (47.5 GiB of model weights; --delete-models deletes them)", "keep the packages podman rsync (the install added them; --remove-packages removes them)"],
+  manual: ["on each Omarchy machine paired with me@spark, run: omarchy agent local forget <its tailnet name>"],
+  models_bytes: 47.5 * 2 ** 30, packages: ["podman", "rsync"]
+}, over)
+
+test("parseUninstallPlan keeps the uninstall's plan, and refuses anything else", () => {
+  assert.strictEqual(M.parseUninstallPlan(JSON.stringify(uninstallPlan())).steps.length, 3)
+  assert.strictEqual(M.parseUninstallPlan(JSON.stringify(uninstallPlan({ models_bytes: null }))).models_bytes, null)
+  assert.strictEqual(M.parseUninstallPlan(JSON.stringify(uninstallPlan({ steps: "x" }))), null)
+  assert.strictEqual(M.parseUninstallPlan(JSON.stringify(uninstallPlan({ packages: [1] }))), null)
+  assert.strictEqual(M.parseUninstallPlan(JSON.stringify(uninstallPlan({ models_bytes: -1 }))), null)
+  assert.strictEqual(M.parseUninstallPlan("Would, on me@spark:"), null)
+})
+
+test("uninstallText: the plan as the card shows it, as the CLI's dry run says it", () => {
+  assert.strictEqual(M.uninstallText(uninstallPlan()), [
+    "stop the engine's units (omarchy-agent-local-*.service)", "delete the engine ~/.local/share/omarchy-local-ai", "forget me@spark here",
+    "keep ~/.local/share/omarchy/agent-local (47.5 GiB of model weights; --delete-models deletes them)",
+    "keep the packages podman rsync (the install added them; --remove-packages removes them)",
+    "", "Left for you to do:", "on each Omarchy machine paired with me@spark, run: omarchy agent local forget <its tailnet name>"].join("\n"))
+})
+
+test("uninstallChoices: what the card lets you opt into, off by default, with what it costs", () => {
+  assert.deepStrictEqual(M.uninstallChoices(uninstallPlan()), [
+    { flag: "--delete-models", label: "Also delete the model weights", description: "Frees 47.5 GiB. Setting a model up again downloads it again." },
+    { flag: "--remove-packages", label: "Also remove the packages the install added", description: "podman, rsync. Anything else on the machine that uses them stops working; python3 always stays." },
+  ])
+  assert.deepStrictEqual(M.uninstallChoices(uninstallPlan({ models_bytes: null, packages: [] })), [], "nothing to opt into")
+})

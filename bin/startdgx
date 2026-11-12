@@ -897,6 +897,19 @@ def cmd_uninstall(args):
   if args.remove_packages and removable_packages(manifest):
     check_apt_removal(host, removable_packages(manifest))
   final = [f"delete {MANIFEST} and the backups", f"forget {host} here"]
+  if args.dry_run and args.json:
+    weights = state.get("models_bytes", "")
+    print(json.dumps({
+      "host": host,
+      "steps": [what for what, _ in user_steps if what] + [f"as root: {what}" for what, _ in root_steps] + final,
+      "kept": user_kept + root_kept,
+      "manual": manual_steps(host),
+      # What --delete-models would delete (None: nothing, or weights that are another engine's), and the packages
+      # --remove-packages would remove.
+      "models_bytes": int(weights) if ENGINE_DATA in state["exists"] and weights.isdigit() and engine_is_ours(manifest, state) else None,
+      "packages": removable_packages(manifest),
+    }))
+    return
   if args.dry_run:
     print(f"Would, on {host}:")
     for what in [what for what, _ in user_steps if what] + [f"as root: {what}" for what, _ in root_steps] + final:
@@ -925,12 +938,17 @@ def cmd_uninstall(args):
     cmd_remove_host(args)
 
 
-def print_manual_steps(host):
+def manual_steps(host):
   """What uninstall can't do from here: the paired clients and the host's SSH access are someone else's."""
+  return [f"on each Omarchy machine paired with {host}, run: omarchy agent local forget <its tailnet name>",
+          f"{host}:~/.ssh/authorized_keys still has the keys of the machines that reach it over SSH (this one, and any "
+          "Omarchy machine that paired with it); remove their lines yourself if they shouldn't any more"]
+
+
+def print_manual_steps(host):
   print("Left for you to do:")
-  print(f"  on each Omarchy machine paired with {host}, run: omarchy agent local forget <its tailnet name>")
-  print(f"  {host}:~/.ssh/authorized_keys still has the keys of the machines that reach it over SSH (this one, and any "
-        "Omarchy machine that paired with it); remove their lines yourself if they shouldn't any more")
+  for step in manual_steps(host):
+    print(f"  {step}")
 
 
 def run_steps(host, phase, script, timeout):
@@ -955,9 +973,13 @@ def cmd_launch(args):
     raise Error(f"launch {args.verb} takes no model")
   if args.replace_engine and args.verb != "install":
     raise Error("--replace-engine goes only with launch install")
+  if (args.delete_models or args.remove_packages) and args.verb != "uninstall":
+    raise Error("--delete-models and --remove-packages go only with launch uninstall")
   argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
   argv += [recipe(args.model)] if args.model else []
   argv += ["--replace-engine"] if args.replace_engine else []
+  argv += ["--delete-models"] if args.delete_models else []
+  argv += ["--remove-packages"] if args.remove_packages else []
   if DEMO:
     print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
     return
@@ -1265,6 +1287,29 @@ def demo_says(verb):
   return run
 
 
+def demo_uninstall(args):
+  """The uninstall's plan, as an install startdgx made would have it (podman added, the models' weights kept unless
+  --delete-models); anything else only says what it would do."""
+  if not (args.dry_run and args.json):
+    return demo_says("uninstall from")(args)
+  with demo_state() as state:
+    machine = demo_host(state, args.host)
+  installed = [r for r in machine["list"] if r["id"] in machine["status"]["models"]]
+  weights = sum(int((r.get("memory_gib") or 30) * 2**29) for r in installed)
+  where = f"~/{ENGINE_DATA} ({size_text(weights)} of model weights"
+  steps = ["stop the engine's units (omarchy-agent-local-*.service)", f"remove ~/{QUADLET_DIR}/omarchy-agent-local.network",
+           f"remove the podman network {NETWORK}", f"remove the podman secret {SECRET}",
+           f"delete ~/{ENGINE_STATE} (the engine's state)", f"delete ~/{ENGINE_CONFIG} (the engine's key, overlays and shares)"]
+  steps += [f"delete {where})"] if args.delete_models else []
+  steps += [f"delete the engine ~/{ENGINE_DIR}", "as root: disable linger for demo", f"as root: remove {AGENT_LINK}"]
+  steps += ["as root: remove the packages podman"] if args.remove_packages else []
+  steps += [f"delete {MANIFEST} and the backups", f"forget {args.host} here"]
+  kept = ([] if args.delete_models else [f"keep {where}; --delete-models deletes them)"])
+  kept += [] if args.remove_packages else ["keep the packages podman (the install added them; --remove-packages removes them)"]
+  print(json.dumps({"host": args.host, "steps": steps, "kept": kept, "manual": manual_steps(args.host), "models_bytes": weights,
+                    "packages": ["podman"]}))
+
+
 def demo_logs(args):
   with demo_state() as state:
     status = demo_host(state, args.host)["status"]
@@ -1275,7 +1320,7 @@ def demo_logs(args):
 
 
 DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "use": demo_use, "delete": demo_delete,
-                 "add": demo_add, "install": demo_says("install on"), "uninstall": demo_says("uninstall from"), "logs": demo_logs}
+                 "add": demo_add, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
 
 
 def build_parser():
@@ -1308,6 +1353,7 @@ def build_parser():
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
+  u.add_argument("--json", action="store_true", help="with --dry-run: as {host, steps, kept, manual, models_bytes, packages}")
   d = sub.add_parser("discover", description="List the tailnet's online Linux machines and probe each over ssh, read-only, "
                      "for a DGX Spark. Installs nothing and adds nothing; it saves the host key of a machine ssh has never seen "
                      "(StrictHostKeyChecking=accept-new).")
@@ -1334,6 +1380,8 @@ def build_parser():
   la.add_argument("host")
   la.add_argument("model", nargs="?")
   la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")
+  la.add_argument("--delete-models", action="store_true", help="with uninstall: also delete the model weights")
+  la.add_argument("--remove-packages", action="store_true", help="with uninstall: also remove the packages the install added")
   la.set_defaults(fn=cmd_launch)
   return p
 

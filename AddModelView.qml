@@ -1,5 +1,5 @@
-// Recipe rows adapted from Omarchy's agents plugin (shell/plugins/agents/Panel.qml, its AddView), MIT, Copyright (c)
-// David Heinemeier Hansson: the maker's mark, the name with the engine's recommendation, and the facts line.
+// Adapted from Omarchy's agents plugin (shell/plugins/agents/Panel.qml, component AddView: its recipe rows), MIT,
+// Copyright (c) David Heinemeier Hansson: the maker's mark, the name with the engine's recommendation, and the facts line.
 // A machine's model picker, over the manager: its catalog (`startdgx list HOST`), best first, each recipe with
 // whether it runs there (and why not), whether it is set up, what it takes and what it is. Set up starts the
 // setup on the machine (`use --detach`), closes the card and puts the cursor on the new row, which follows the

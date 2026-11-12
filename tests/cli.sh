@@ -205,10 +205,11 @@ launched() { : >"$FAKE_LAUNCH"; s launch "$@" >/dev/null 2>&1 && cat "$FAKE_LAUN
 same "$(launched install me@spark)" "$(printf '1\n%s\n' "$cli install me@spark")"; ok $? "launch install opens a terminal running startdgx install"
 same "$(launched install me@spark --replace-engine)" "$(printf '1\n%s\n' "$cli install me@spark --replace-engine")"; ok $? "launch install --replace-engine passes it on"
 same "$(launched uninstall me@spark)" "$(printf '1\n%s\n' "$cli uninstall me@spark")"; ok $? "launch uninstall opens a terminal running startdgx uninstall"
+same "$(launched uninstall me@spark --delete-models --remove-packages)" "$(printf '1\n%s\n' "$cli uninstall me@spark --delete-models --remove-packages")"; ok $? "launch uninstall passes on --delete-models and --remove-packages"
 same "$(launched logs me@dgx q1)" "$(printf '1\n%s\n' "$cli logs me@dgx q1")"; ok $? "launch logs opens a terminal on a model's logs"
 same "$(launched logs me@dgx)" "$(printf '1\n%s\n' "$cli logs me@dgx")"; ok $? "launch logs without a model shows the last one started"
 for refused in "delete me@dgx q1" "start me@dgx q1" "install me@spark q1" "uninstall me@spark q1" "uninstall me@spark --replace-engine" \
-               "logs me@dgx q1 --replace-engine"; do
+               "logs me@dgx q1 --replace-engine" "install me@spark --delete-models" "logs me@dgx --remove-packages"; do
   read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
   same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens no terminal: $refused"
 done
@@ -386,6 +387,14 @@ echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/model
   && [ "$(echo "$out" | grep -c "$img")" = 1 ] && echo "$out" | grep -q 'disable linger for me' \
   && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
+uj() { s uninstall --dry-run --json "$@" me@spark | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+cond='sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "steps"] and d["host"] == "me@spark" and d["models_bytes"] == 1048576 and d["packages"] == []'
+uj; ok $? "uninstall --dry-run --json says the plan, the weights' size and the packages it could remove"
+cond='any("share q1 --off" in step for step in d["steps"]) and any("1.0 MiB" in k for k in d["kept"]) and any("forget" in m for m in d["manual"])'
+uj; ok $? "with the same steps, what it keeps and what is left for you, as the text plan"
+cond='any("delete ~/.local/share/omarchy/agent-local" in step for step in d["steps"]) and not any("1.0 MiB" in k for k in d["kept"])'
+uj --delete-models; ok $? "and with --delete-models, the weights go in the steps"
+same "$(tree)" "$before" && none_of "$FAKE_HOST/root-call"; ok $? "uninstall --dry-run --json writes nothing"
 out=$(FAKE_ID='me;x' s uninstall --dry-run me@spark 2>&1); ok $((!$?)) "uninstall refuses a host that reports an odd user"
 echo "$out" | grep -q 'unexpected user'; ok $? "and says so, before comparing it with the manifest's"
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
@@ -498,6 +507,8 @@ none_of "$h/.local/share/omarchy"; ok $? "--delete-models deletes the model weig
 grep -qx 'apt-get remove -y -qq podman' "$FAKE_HOST/calls"; ok $? "--remove-packages removes the packages the install added"
 ! grep -q 'apt-get remove.*python3' "$FAKE_HOST/calls" && echo "$out" | grep -q 'keep python3'; ok $? "--remove-packages never removes python3, and says so"
 ! grep -q pacman "$FAKE_HOST/root-call"; ok $? "the root part only knows apt (install only supports DGX OS)"
+changed=(podman=yes); installed podman=no; changed=()
+cond='d["packages"] == ["podman"]'; uj; ok $? "uninstall --dry-run --json names the packages --remove-packages would remove"
 
 changed=(podman=yes); installed podman=no; changed=(); echo podman-docker >"$FAKE_HOST/apt-also"; before=$(tree)
 out=$(s uninstall --dry-run --remove-packages me@spark 2>&1); ok $((!$?)) "uninstall --dry-run --remove-packages refuses when apt would remove more"
@@ -705,6 +716,10 @@ ds forget demo@spark-f >/dev/null
 ds forget demo@spark-d >/dev/null && dj '"demo@spark-d" not in d' hosts --json; ok $? "demo forget drops it"
 out=$(ds launch install demo@spark-e); same "$out" "Demo: would run 'install demo@spark-e' in a terminal"; ok $? "demo launch says what it would run"
 ds logs $a $nem >/dev/null; ok $? "demo logs succeeds"
+dj 'sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "steps"] and d["models_bytes"] > 0 and d["packages"] == ["podman"] and any("--delete-models" in k for k in d["kept"])' uninstall --dry-run --json $a
+ok $? "demo uninstall --dry-run --json gives a plan the uninstall card can show"
+dj 'any("model weights" in s for s in d["steps"]) and any("podman" in s for s in d["steps"]) and d["kept"] == []' uninstall --dry-run --json --delete-models --remove-packages $a
+ok $? "and its opt-ins move into the steps"
 ds install --dry-run demo@spark-e >/dev/null && ds install demo@spark-e >/dev/null && ds uninstall --dry-run $a >/dev/null && ds uninstall $a >/dev/null
 ok $? "demo install and uninstall only say what they would do"
 ds engine >/dev/null; ds hosts >/dev/null; ds discover >/dev/null; ds list $c >/dev/null 2>&1; ds stop $a >/dev/null
