@@ -10,7 +10,10 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
 - [ ] Omarchy plugin: manager window and bar widget, reusing the model controls of the `agents` plugin
 - [ ] Discovery of Sparks on the tailnet (GB10 / DGX OS signature over SSH)
-- [ ] Install of the pinned fork tag with a manifest of what it changed; `uninstall` that reverses it
+- [x] `startdgx install [--dry-run] [--engine-path DIR] <host>`: installs the pinned fork tag (`startdgx engine`) with the
+  engine's own host setup (one `sudo` on the host, which asks for its password at your terminal), and records what
+  was there before and what it changed in `~/.local/share/startdgx/manifest.json` on the host
+- [ ] `uninstall` that reverses it from the manifest
 
 ## Credits
 
