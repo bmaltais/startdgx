@@ -49,6 +49,10 @@ Item {
   property string planError: ""
   readonly property bool planning: planProc.running
 
+  // target -> true: a setup there failed because the machine needs its one-time root setup (Model.setupNeeded), so
+  // its section offers Install…, until that is launched.
+  property var setupNeeded: ({})
+
   // Failures already told to the desktop; see Model.alerts.
   property var announced: ({})
 
@@ -150,12 +154,23 @@ Item {
     p.run("use", r.id, null)
   }
   // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
-  // settled by the next status read, as on success).
-  function actionFailed(key, kind) {
-    if (kind !== "use" || !service.setups[key]) return
+  // settled by the next status read, as on success); one that failed for want of the machine's root setup makes
+  // its section offer Install….
+  function actionFailed(key, kind, error) {
+    if (kind !== "use") return
+    const host = key.substring(0, key.lastIndexOf("/"))
+    if (Model.setupNeeded(error)) service.markSetupNeeded(host, true)
+    if (!service.setups[key]) return
     const next = Object.assign({}, service.setups)
     delete next[key]
     service.setups = next
+  }
+
+  function markSetupNeeded(host, needed) {
+    const next = Object.assign({}, service.setupNeeded)
+    if (needed) next[host] = true
+    else delete next[host]
+    service.setupNeeded = next
   }
 
   function listRecipes(host) {
@@ -195,9 +210,11 @@ Item {
   function addHost(target) { service.run(["add", target]) }
   function forget(host) { service.run(["forget", host]) }
 
-  function discover() {
+  // `user`: the ssh user on the machines, or "" for this machine's.
+  function discover(user) {
     if (discoverProc.running) return
     service.peersError = ""
+    discoverProc.command = [service.script, "discover", "--json"].concat(user ? ["--user", user] : [])
     discoverProc.running = true
   }
 
@@ -214,8 +231,9 @@ Item {
   // Omarchy's floating terminal, detached: the launcher runs the terminal in the foreground for as long as it is
   // open, and a Process here would hold it (and kill it on a shell restart). Nothing comes back; in demo mode the
   // launch only prints what it would run, which goes nowhere.
-  function launch(verb, host, id) {
-    Quickshell.execDetached([service.script, "launch", verb, host].concat(id ? [id] : []))
+  function launch(verb, host, id, flags) {
+    if (verb === "install") service.markSetupNeeded(host, false)
+    Quickshell.execDetached([service.script, "launch", verb, host].concat(id ? [id] : [], flags || []))
   }
 
   // Keeps one poller per added machine; a ListModel, so a machine added or forgotten leaves the others' work alone.
@@ -290,7 +308,6 @@ Item {
 
   Process {
     id: discoverProc
-    command: [service.script, "discover", "--json"]
     stdout: StdioCollector { id: discoverOut; waitForEnd: true }
     stderr: StdioCollector { id: discoverErr; waitForEnd: true }
     onExited: function (code) {

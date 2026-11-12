@@ -75,8 +75,10 @@ Item {
   function showAddMachine() {
     root.ensureManager()
     root.card = "add"
-    core.discover()
+    core.discover(root.discoverUser)
   }
+  // The ssh user typed in the Add machine card, kept while the shell runs ("" is this machine's).
+  property string discoverUser: ""
   function showUninstall(host) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -119,7 +121,7 @@ Item {
     case "refresh": core.refreshAll(); break
     case "addMachine": root.showAddMachine(); break
     case "addHost": core.addHost(action.host); break
-    case "install": core.launch("install", action.host, ""); root.close(); break
+    case "install": core.launch("install", action.host, "", action.replace ? ["--replace-engine"] : []); root.close(); break
     case "uninstallNow": core.launch("uninstall", action.host, ""); root.close(); break
     case "addModel": root.showAddModel(action.host); break
     case "use": root.setUp(action.host, action.recipe); break

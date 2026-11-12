@@ -12,7 +12,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   manager window listing each added machine (answering, or why not and when it last did) and its models (running,
   loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop, Logs and Remove… per
   model, an Add model… picker per machine over its catalog (`list`; Set up runs `use --detach` and the row follows the
-  download), an Add machine card over `discover` (Add, or Install… in a terminal), Uninstall… that shows the dry-run
+  download), an Add machine card over `discover` (Add, or Install… in a terminal, with `--replace-engine` where an engine startdgx didn't install is there; the ssh user can be typed in), an Install… offer on a machine whose engine says it needs its root setup, Uninstall… that shows the dry-run
   plan and asks first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
   `docs/ui-standards.md`; testing in the nested session, in demo mode: `docs/testing.md`.
 - [x] Add and remove models from the manager (`use --detach`, `delete`), issue #6: the picker lists every recipe of the

@@ -1,7 +1,10 @@
 // The Add machine card, over the manager: the machines of your tailnet (`startdgx discover --json`, which
-// installs and changes nothing on them; it saves a never-seen machine's host key) and what each can do. A DGX Spark with the engine is added at once; one
-// without is installed in a terminal, where sudo asks for its password. Keyboard: Up/Down (or j/k) move,
-// Enter adds or installs the machine under the cursor, r looks again, Esc closes the card.
+// installs and changes nothing on them; it saves a never-seen machine's host key) and what each can do
+// (DgxModel.peerOffer). A DGX Spark with startdgx's engine is added at once; one with another engine can be added as
+// it is, or installed over (the engine there is backed up first); one with none is installed in a terminal, where
+// sudo asks for its password. The machines are asked as this machine's user, or the one typed in User on the
+// machines. Keyboard: Up/Down (or j/k) move, Enter adds or installs the machine under the cursor, r looks again,
+// Esc closes the card; in the user field, Enter looks again as that user.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -22,7 +25,14 @@ FocusScope {
   function act(peer) {
     const offer = Model.peerOffer(peer)
     if (offer.action === "add") card.svc.dispatch({ type: "addHost", host: peer.target })
-    else if (offer.action === "install") card.svc.dispatch({ type: "install", host: peer.target })
+    else if (offer.action === "install") card.install(peer)
+  }
+  function install(peer) {
+    card.svc.dispatch({ type: "install", host: peer.target, replace: Model.peerOffer(peer).install === "replace" })
+  }
+  function lookAgain() {
+    card.svc.discoverUser = userField.text.trim()
+    card.dgx.discover(card.svc.discoverUser)
   }
 
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
@@ -33,8 +43,12 @@ FocusScope {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
     else if (event.key === Qt.Key_Up || event.text === "k") { card.cursor = Math.max(0, card.cursor - 1); event.accepted = true }
     else if (event.key === Qt.Key_Down || event.text === "j") { card.cursor = Math.min(card.peers.length - 1, card.cursor + 1); event.accepted = true }
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { if (card.peers.length) card.act(card.peers[card.cursor]); event.accepted = true }
-    else if (event.text === "r") { card.dgx.discover(); event.accepted = true }
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      // A held Enter would add or install the next machine too.
+      if (!event.isAutoRepeat && card.peers.length) card.act(card.peers[card.cursor])
+      event.accepted = true
+    }
+    else if (event.text === "r") { card.lookAgain(); event.accepted = true }
   }
 
   ColumnLayout {
@@ -62,6 +76,27 @@ FocusScope {
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
+      }
+    }
+
+    // The ssh user the machines are asked as: this machine's by default.
+    RowLayout {
+      Layout.fillWidth: true
+      spacing: Style.spacing.lg
+      Text {
+        text: "User on the machines"
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+      }
+      TextField {
+        id: userField
+        Layout.fillWidth: true
+        text: card.svc.discoverUser
+        placeholderText: "the same as here"
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        onAccepted: { card.lookAgain(); card.forceActiveFocus() }
       }
     }
 
@@ -160,7 +195,7 @@ FocusScope {
                 color: peerRow.offer.action !== null || peerRow.modelData.added ? Color.foreground : Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
               }
             }
 
@@ -173,11 +208,13 @@ FocusScope {
               onClicked: card.act(peerRow.modelData)
             }
             Button {
-              visible: peerRow.offer.action === "install"
+              visible: peerRow.offer.install !== ""
               text: "Install…"
               bordered: true
-              tooltipText: "Install the engine on " + peerRow.modelData.name + " in a terminal; sudo there asks for its password"
-              onClicked: card.act(peerRow.modelData)
+              tooltipText: peerRow.offer.install === "replace"
+                ? "Back up the engine on " + peerRow.modelData.name + " (uninstall puts it back) and install startdgx's, in a terminal; sudo there asks for its password"
+                : "Install the engine on " + peerRow.modelData.name + " in a terminal; sudo there asks for its password"
+              onClicked: card.install(peerRow.modelData)
             }
           }
         }
@@ -197,8 +234,8 @@ FocusScope {
         text: "Look again"
         bordered: true
         enabled: !card.scanning
-        tooltipText: "Ask the tailnet again  (r)"
-        onClicked: card.dgx.discover()
+        tooltipText: "Ask the tailnet again, as the user above  (r)"
+        onClicked: card.lookAgain()
       }
       Text {
         Layout.fillWidth: true

@@ -17,6 +17,7 @@ ColumnLayout {
   property var pending: ({})          // "host/model" -> "start" | "stop" | "delete"
   property real nowMs: 0
   property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model" or "host#add"
+  property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
 
   signal selectRequested(string key)
   signal actionRequested(var action)
@@ -111,6 +112,24 @@ ColumnLayout {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
         }
+        Text {
+          Layout.fillWidth: true
+          visible: section.needsSetup
+          textFormat: Text.PlainText
+          text: "A model can't be set up here until the machine has its one-time root setup. Install… runs it in a terminal, where sudo asks for the password; an engine startdgx didn't install is backed up first."
+          color: Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+        }
+      }
+
+      TextLink {
+        Layout.alignment: Qt.AlignVCenter
+        visible: section.needsSetup
+        text: "Install…"
+        tooltip: "Set up " + section.machine + " as root in a terminal, backing up an engine startdgx didn't install (uninstall puts it back)"
+        onClicked: section.actionRequested({ type: "install", host: section.host, replace: true })
       }
 
       TextLink {

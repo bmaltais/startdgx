@@ -1057,7 +1057,9 @@ def demo_seed(folder):
         row["_then"] = demo_model_row(status, listing, rid)
       elif row["unit"] in ("activating", "deactivating", "removing"):
         row["since_ms"] = row["since_ms"] or now
-    state["hosts"][name] = {"status": status, "list": listing}
+    # A machine with the file needs-setup has an engine startdgx didn't install, and isn't set up as root.
+    needs_setup = os.path.exists(os.path.join(DEMO_FIXTURES, "hosts", name, "needs-setup"))
+    state["hosts"][name] = {"status": status, "list": listing, **({"needs_setup": True} if needs_setup else {})}
   return state
 
 
@@ -1199,6 +1201,9 @@ def demo_use(args):
       raise Error(f"{rid} is already set up: start it with startdgx start {args.host} {rid}")
     if not r["available"]:
       raise Error(r["reason"] or f"{rid} can't run on {args.host}")
+    if machine.get("needs_setup"):
+      # The engine's prepare_host, on a machine whose engine startdgx didn't install and that isn't set up as root.
+      raise Error("This machine needs Podman set up as root first: run this same command once in a terminal, where sudo can ask for your password")
     now = demo_now_ms()
     models[rid] = {"error": "", "fits": True, "fit_reason": "", "recipe": rid, "name": r["name"], "vendor": r["vendor"], "runtime": "",
                    "image": "", "ctx": None, "unit": "installing", "sub_state": "", "result": "", "port": None, "endpoint": "",

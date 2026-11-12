@@ -291,16 +291,43 @@ function parsePeers(text) {
   return parsed
 }
 
-// What the Add machine card offers for a peer: { action: "add" | "install" | null, text }. A Spark with an
-// engine can be added (add only asks the engine for its profile); one without is installed, in a terminal.
+// What the Add machine card offers for a peer: { action, install, text }. `action` is what Enter does ("add",
+// "install" or null), `install` the Install… button it has ("install", "replace" for an engine startdgx didn't
+// install, which `install --replace-engine` backs up first, or ""). A Spark with startdgx's engine is added (add only
+// asks the engine for its profile); one with another engine can be added as it is or installed over; one with none
+// is installed, in a terminal.
 function peerOffer(peer) {
-  if (!peer.reachable) return { action: null, text: String(peer.reason || "") || "Not answering" }
-  if (peer.added) return { action: null, text: "Added" }
-  if (!peer.spark) return { action: null, text: "Not a DGX Spark" }
-  if (peer.engine || peer.installed) {
-    return { action: "add", text: peer.installed ? "DGX Spark · ready to add" : "DGX Spark · has an engine startdgx didn't install" }
+  const none = function (text) { return { action: null, install: "", text: text } }
+  if (!peer.reachable) return none(String(peer.reason || "") || "Not answering")
+  if (peer.added) return none("Added")
+  if (!peer.spark) return none("Not a DGX Spark")
+  if (peer.installed) return { action: "add", install: "", text: "DGX Spark · ready to add" }
+  if (peer.engine) {
+    return { action: "add", install: "replace", text: "DGX Spark · an engine startdgx didn't install is here; Install… backs it up first" }
   }
-  return { action: "install", text: "DGX Spark · not set up yet" }
+  return { action: "install", install: "install", text: "DGX Spark · not set up yet" }
+}
+
+// Whether a failed command's error is the engine saying the machine needs its one-time root setup (prepare_host:
+// Podman for NVIDIA), which a person must run in a terminal, where sudo can ask: the manager then offers Install….
+function setupNeeded(error) {
+  const e = String(error || "")
+  return e.indexOf("needs Podman set up as root first") >= 0 || e.indexOf("Run setup once in a terminal") >= 0
+}
+
+// The footer's line when a command failed: its error, or, when the machine needs its root setup, where to start it
+// (the machine's row says the rest).
+function actionError(stderr, host) {
+  const line = errorLine(stderr, "The action failed")
+  return setupNeeded(line) ? hostName(host) + " needs its one-time root setup: Install… on its row runs it" : line
+}
+
+// The footer's line after a command: its last line, without the engine's pointers elsewhere (the agents panel, a
+// journalctl command), since the row itself follows a setup.
+function actionNotice(kind, stdout) {
+  const line = lastLine(stdout)
+  if (kind !== "use") return line
+  return line.replace(/; (the agents panel shows its progress, or )?follow it with: journalctl.*$/, "")
 }
 
 // ---- keyboard ----------------------------------------------------------------------------------------

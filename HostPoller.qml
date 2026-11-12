@@ -54,9 +54,9 @@ Item {
     const a = f.action
     if (a && !a.superseded) {
       if (code !== 0) {
-        poller.owner.error = Model.errorLine(err, "The action failed")
-        poller.owner.actionFailed(a.key, a.kind, poller.owner.error)
-      } else poller.owner.notice = Model.lastLine(out)
+        poller.owner.error = Model.actionError(err, poller.host)
+        poller.owner.actionFailed(a.key, a.kind, Model.errorLine(err, ""))
+      } else poller.owner.notice = Model.actionNotice(a.kind, out)
       // A removal's own stop leaves its mark to the removal; a setup has its row instead of a mark.
       if (a.kind === a.shows && a.kind !== "use") {
         const next = Object.assign({}, poller.done)

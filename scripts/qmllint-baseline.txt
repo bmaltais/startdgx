@@ -1,6 +1,7 @@
 AddMachineView.qml	import	Button was not found. Did you add all imports and dependencies?
 AddMachineView.qml	import	Failed to import qs.Commons. Are your import paths set up properly?
 AddMachineView.qml	import	Failed to import qs.Ui. Are your import paths set up properly?
+AddMachineView.qml	import	TextField was not found. Did you add all imports and dependencies?
 AddMachineView.qml	import	Warnings occurred while importing module "qs.Commons":
 AddMachineView.qml	import	Warnings occurred while importing module "qs.Ui":
 AddMachineView.qml	missing-property	Member "accent" not found on type "QQuickColor"
@@ -9,6 +10,8 @@ AddMachineView.qml	missing-property	Member "muted" not found on type "QQuickColo
 AddMachineView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
 AddMachineView.qml	unqualified	Style
 AddMachineView.qml	unqualified	Util
+AddMachineView.qml	unqualified	font
+AddMachineView.qml	unresolved-type	Type font is used but it is not resolved
 AddModelView.qml	import	Button was not found. Did you add all imports and dependencies?
 AddModelView.qml	missing-property	Member "accent" not found on type "QQuickColor"
 AddModelView.qml	missing-property	Member "foreground" not found on type "QQuickColor"

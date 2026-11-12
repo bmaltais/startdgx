@@ -203,7 +203,7 @@ test("pollInterval: quick while you look or something moves, slow otherwise, slo
 const peers = require("../../demo/discover.json")
 
 test("parsePeers keeps discover's list, and refuses anything else", () => {
-  assert.strictEqual(M.parsePeers(JSON.stringify(peers)).length, 6)
+  assert.strictEqual(M.parsePeers(JSON.stringify(peers)).length, 7)
   assert.deepStrictEqual(M.parsePeers("[]"), [])
   assert.strictEqual(M.parsePeers("{}"), null)
   assert.strictEqual(M.parsePeers(JSON.stringify([{ name: "x" }])), null, "a peer with no target")
@@ -212,13 +212,19 @@ test("parsePeers keeps discover's list, and refuses anything else", () => {
 
 test("peerOffer: what the Add machine card offers for each machine of the tailnet", () => {
   const offer = (name, over) => M.peerOffer(Object.assign({}, peers.find((p) => p.name === name), over))
-  assert.deepStrictEqual(offer("spark-d"), { action: "add", text: "DGX Spark · ready to add" })
-  assert.deepStrictEqual(offer("spark-e"), { action: "install", text: "DGX Spark · not set up yet" })
-  assert.deepStrictEqual(offer("spark-c"), { action: null, text: "ssh: connect to host spark-c port 22: Connection timed out" })
-  assert.deepStrictEqual(offer("workstation"), { action: null, text: "Not a DGX Spark" })
-  assert.deepStrictEqual(offer("spark-a", { added: true }), { action: null, text: "Added" })
-  assert.deepStrictEqual(offer("spark-e", { engine: true }), { action: "add", text: "DGX Spark · has an engine startdgx didn't install" })
-  assert.deepStrictEqual(offer("spark-c", { reason: null }), { action: null, text: "Not answering" })
+  assert.deepStrictEqual(offer("spark-d"), { action: "add", install: "", text: "DGX Spark · ready to add" })
+  assert.deepStrictEqual(offer("spark-e"), { action: "install", install: "install", text: "DGX Spark · not set up yet" })
+  assert.deepStrictEqual(offer("spark-c"), { action: null, install: "", text: "ssh: connect to host spark-c port 22: Connection timed out" })
+  assert.deepStrictEqual(offer("workstation"), { action: null, install: "", text: "Not a DGX Spark" })
+  assert.deepStrictEqual(offer("spark-a", { added: true }), { action: null, install: "", text: "Added" })
+  assert.deepStrictEqual(offer("spark-c", { reason: null }), { action: null, install: "", text: "Not answering" })
+})
+
+test("peerOffer: a Spark with an engine startdgx didn't install can be added as it is, or installed over it", () => {
+  const foreign = peers.find((p) => p.name === "spark-f")
+  assert.deepStrictEqual([foreign.engine, foreign.installed], [true, false], "the demo has one")
+  assert.deepStrictEqual(M.peerOffer(foreign), { action: "add", install: "replace",
+    text: "DGX Spark · an engine startdgx didn't install is here; Install… backs it up first" })
 })
 
 test("rows: the keyboard cursor's list, each machine then its models, then Add model on one that answers", () => {
@@ -588,4 +594,29 @@ test("statusAnswer: what a status read says, and an answer that can't be read is
   assert.deepStrictEqual(M.statusAnswer(0, "half a docu", "", "me@gx10"), { status: null, error: "me@gx10 sent an unreadable status" })
   assert.deepStrictEqual(M.statusAnswer(1, "", "Error: me@gx10 didn't answer in time\n", "me@gx10"), { status: null, error: "me@gx10 didn't answer in time" })
   assert.deepStrictEqual(M.statusAnswer(255, "", "", "me@gx10"), { status: null, error: "me@gx10 didn't answer" })
+})
+
+test("setupNeeded: the engine's answer when a machine needs its root setup before a model can be set up", () => {
+  // agent_local.py prepare_host, at v0.6.3-dgx.1: printed as "Error: <message>" on stderr, which the CLI passes on.
+  const engine = "This machine needs Podman set up as root first: run this same command once in a terminal, where sudo can ask for your password"
+  assert.strictEqual(M.setupNeeded(engine), true)
+  assert.strictEqual(M.setupNeeded("Run setup once in a terminal"), true, "its short form, as the agents panel shows it")
+  assert.strictEqual(M.setupNeeded("me@gx10 didn't answer in time"), false)
+  assert.strictEqual(M.setupNeeded(""), false)
+})
+
+test("actionNotice: the footer's line after a command, without the engine's pointers to the agents panel and journalctl", () => {
+  const unit = "omarchy-agent-local-use-qwen3.8-flash-next-tensorfold.service"
+  assert.strictEqual(M.actionNotice("use", "Recipe x: 3 file(s)\nSetting up qwen3.8-flash-next-tensorfold in the background; the agents panel shows its progress, or follow it with: journalctl --user -u " + unit + " -f\n"),
+    "Setting up qwen3.8-flash-next-tensorfold in the background")
+  assert.strictEqual(M.actionNotice("use", "qwen3.8-flash-next-tensorfold is already being set up; follow it with: journalctl --user -u " + unit + " -f"),
+    "qwen3.8-flash-next-tensorfold is already being set up")
+  assert.strictEqual(M.actionNotice("stop", "Stopped a"), "Stopped a")
+})
+
+test("actionError: the footer's line when a command failed, short when the machine's row says the rest", () => {
+  assert.strictEqual(M.actionError("Error: This machine needs Podman set up as root first: run this same command once in a terminal, where sudo can ask for your password\n", "demo@spark-f"),
+    "spark-f needs its one-time root setup: Install… on its row runs it")
+  assert.strictEqual(M.actionError("Error: Not enough memory\n", "demo@spark-f"), "Not enough memory")
+  assert.strictEqual(M.actionError("", "demo@spark-f"), "The action failed")
 })

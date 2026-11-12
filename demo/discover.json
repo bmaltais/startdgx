@@ -50,6 +50,16 @@
     "added": false
   },
   {
+    "name": "spark-f",
+    "target": "demo@spark-f",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": false,
+    "engine": true,
+    "added": false
+  },
+  {
     "name": "workstation",
     "target": "demo@workstation",
     "reachable": true,
