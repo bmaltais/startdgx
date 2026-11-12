@@ -148,7 +148,8 @@ Rectangle {
         implicitHeight: Style.space(16) + verticalPadding * 2
         opacity: row.sharing !== "" ? 0.5 : 1
         tooltipText: row.sharing !== "" ? "Waiting for the machine"
-          : row.shared ? "Shared with the tailnet. Stop sharing  (t)" : "Share with the tailnet  (t)"
+          : row.shared ? "Shared: Omarchy on your other machines lists this model. Click to make it private  (t)"
+          : "Private to this machine. Click to share it with your tailnet  (t)"
         onClicked: if (row.share !== "") row.shareRequested()
         TailscaleMark {
           anchors.centerIn: parent
