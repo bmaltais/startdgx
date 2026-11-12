@@ -9,6 +9,13 @@ AddMachineView.qml	missing-property	Member "muted" not found on type "QQuickColo
 AddMachineView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
 AddMachineView.qml	unqualified	Style
 AddMachineView.qml	unqualified	Util
+AddModelView.qml	import	Button was not found. Did you add all imports and dependencies?
+AddModelView.qml	missing-property	Member "accent" not found on type "QQuickColor"
+AddModelView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+AddModelView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+AddModelView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+AddModelView.qml	unqualified	Style
+AddModelView.qml	unqualified	Util
 BarWidget.qml	import	BarIconButton was not found. Did you add all imports and dependencies?
 BarWidget.qml	inheritance-cycle	BarWidget is part of an inheritance cycle: BarWidget -> BarWidget
 BarWidget.qml	missing-property	Member "accent" not found on type "QQuickColor"
@@ -18,6 +25,7 @@ BarWidget.qml	unqualified	anchors
 BarWidget.qml	unqualified	parent
 BarWidget.qml	unresolved-type	Type BarWidget is used but it is not resolved
 BarWidget.qml	unresolved-type	Type anchors is used but it is not resolved
+HostSection.qml	import	PanelToolTip was not found. Did you add all imports and dependencies?
 HostSection.qml	missing-property	Member "accent" not found on type "QQuickColor"
 HostSection.qml	missing-property	Member "foreground" not found on type "QQuickColor"
 HostSection.qml	missing-property	Member "muted" not found on type "QQuickColor"
@@ -42,8 +50,10 @@ ModelRow.qml	missing-property	Member "muted" not found on type "QQuickColor"
 ModelRow.qml	missing-property	Member "urgent" not found on type "QQuickColor"
 ModelRow.qml	unqualified	Style
 ModelRow.qml	unqualified	Util
-ModelRow.qml	unqualified	le.fo
-ModelRow.qml	unqualified	le.sp
+RemoveView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+RemoveView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+RemoveView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+RemoveView.qml	unqualified	Style
 ScrollTrack.qml	missing-property	Member "foreground" not found on type "QQuickColor"
 ScrollTrack.qml	unqualified	Style
 ScrollTrack.qml	unqualified	Util

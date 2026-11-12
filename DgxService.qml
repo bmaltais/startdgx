@@ -1,6 +1,7 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
-// machine has its own HostPoller (status poll and start/stop queue); the machine list, adding, forgetting,
-// discovery, the uninstall plan and the terminal launches run here. Results come back through `notice` and
+// machine has its own HostPoller (status poll, and its queue of start, stop, use and delete); the machine list,
+// adding, forgetting, discovery, a machine's catalog for the model picker, the uninstall and remove plans and the
+// terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -21,8 +22,12 @@ Item {
   readonly property var hostList: Object.keys(service.hosts).sort()
   // target -> { loaded, online, error, status, lastSeenMs }; see DgxModel.
   property var hostState: ({})
-  // "target/model" -> "start" | "stop": a click the machine has not answered yet.
+  // "target/model" -> "start" | "stop" | "delete": a click the machine has not answered yet.
   property var pending: ({})
+  // "target/model" -> its recipe (from `list`): a model asked to be set up that its machine doesn't list yet.
+  property var setups: ({})
+  // The host states as drawn: each machine's status with those setups in it, so a model asked for shows at once.
+  readonly property var shownState: Model.withSetups(service.hostState, service.setups)
 
   property string error: ""
   property string notice: ""
@@ -45,11 +50,24 @@ Item {
   // Failures already told to the desktop; see Model.alerts.
   property var announced: ({})
 
-  readonly property var summary: Model.summarize(service.hostList, service.hostState)
-  readonly property var rows: Model.rows(service.hostList, service.hostState)
+  // The model picker's catalog (`list HOST`), for one machine at a time.
+  property string listHost: ""
+  property var recipes: null
+  property string recipesError: ""
+  readonly property bool listing: listProc.running
+
+  // The remove card's plan (`delete HOST MODEL --dry-run --json`): what the removal frees, -1 until it is read.
+  property string removeHost: ""
+  property string removeId: ""
+  property real removeBytes: -1
+  property string removeError: ""
+  readonly property bool removePlanning: removeProc.running
+
+  readonly property var summary: Model.summarize(service.hostList, service.shownState)
+  readonly property var rows: Model.rows(service.hostList, service.shownState)
 
   function entry(host, id) {
-    const hs = service.hostState[host]
+    const hs = service.shownState[host]
     return hs && hs.status && hs.status.models ? hs.status.models[id] || null : null
   }
 
@@ -65,6 +83,7 @@ Item {
 
   function statusRead(host, status) {
     service.setHostState(host, { loaded: true, online: true, error: "", status: status, lastSeenMs: Date.now() })
+    service.setups = Model.settleSetups(service.setups, host, status)
     service.notifyChanges()
   }
   function statusFailed(host, why) {
@@ -122,8 +141,52 @@ Item {
     service.setPending(host + "/" + id, "stop")
     p.run(["stop", host, id, "--timeout", "120"], host + "/" + id, "stop")
   }
-  // #6 adds `use HOST MODEL --detach` (set a model up; status shows the download) and `delete HOST MODEL` here,
-  // run through the host's poller like start and stop, with `list HOST` read when the model picker opens.
+  // A setup runs on the machine in a unit of its own (`use --detach`), so the command returns at once and the
+  // status poll follows the download. The model shows, waiting, from the click until the machine lists it.
+  function use(host, r) {
+    const p = service.poller(host)
+    if (!p || !r) return
+    const next = Object.assign({}, service.setups)
+    next[host + "/" + r.id] = r
+    service.setups = next
+    p.run(["use", "--detach", host, r.id, "--timeout", "120"], host + "/" + r.id, "use")
+  }
+  // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its
+  // weights, so it gets a long timeout: a killed ssh could leave the removal half done.
+  function remove(host, id) {
+    const p = service.poller(host)
+    if (!p) return
+    service.setPending(host + "/" + id, "delete")
+    p.run(["delete", host, id, "--timeout", "600"], host + "/" + id, "delete")
+  }
+  // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
+  // settled by the next status read, as on success).
+  function actionFailed(key, kind) {
+    if (kind !== "use" || !service.setups[key]) return
+    const next = Object.assign({}, service.setups)
+    delete next[key]
+    service.setups = next
+  }
+
+  function listRecipes(host) {
+    if (service.listHost !== host) { service.recipes = null; service.listHost = host }
+    service.recipesError = ""
+    listProc.running = false
+    listProc.command = [service.script, "list", host, "--timeout", "60"]
+    listProc.running = true
+  }
+
+  function planRemove(host, id) {
+    // Already asking about this one: a second ask would kill the first, whose exit would then read as a failure.
+    if (removeProc.running && service.removeHost === host && service.removeId === id) return
+    service.removeHost = host
+    service.removeId = id
+    service.removeBytes = -1
+    service.removeError = ""
+    removeProc.running = false
+    removeProc.command = [service.script, "delete", host, id, "--dry-run", "--json", "--timeout", "60"]
+    removeProc.running = true
+  }
 
   // ---- the machine list ------------------------------------------------------------------------------
   function run(args) {
@@ -179,6 +242,9 @@ Item {
     const next = ({})
     for (let n = 0; n < want.length; n++) if (service.hostState[want[n]]) next[want[n]] = service.hostState[want[n]]
     service.hostState = next
+    const setups = ({})
+    for (const key in service.setups) if (want.indexOf(key.substring(0, key.lastIndexOf("/"))) >= 0) setups[key] = service.setups[key]
+    service.setups = setups
   }
 
   Component.onCompleted: service.refreshHosts()
@@ -240,6 +306,28 @@ Item {
       const peers = code === 0 ? Model.parsePeers(discoverOut.text) : null
       if (peers) service.peers = peers
       else service.peersError = Model.errorLine(discoverErr.text, "The tailnet could not be read")
+    }
+  }
+
+  Process {
+    id: listProc
+    stdout: StdioCollector { id: listOut; waitForEnd: true }
+    stderr: StdioCollector { id: listErr; waitForEnd: true }
+    onExited: function (code) {
+      const list = code === 0 ? Model.parseRecipes(listOut.text) : null
+      if (list) service.recipes = list
+      else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(listErr.text, "The machine's catalog could not be read")
+    }
+  }
+
+  Process {
+    id: removeProc
+    stdout: StdioCollector { id: removeOut; waitForEnd: true }
+    stderr: StdioCollector { id: removeErr; waitForEnd: true }
+    onExited: function (code) {
+      const plan = code === 0 ? Model.parseRemovePlan(removeOut.text) : null
+      if (plan) service.removeBytes = plan.bytes
+      else service.removeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(removeErr.text, "The machine didn't say")
     }
   }
 

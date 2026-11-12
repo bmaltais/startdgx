@@ -1,5 +1,5 @@
 // One machine: its name, what it is, whether it answers (and why not), its quiet actions (Logs, Uninstall…,
-// Forget) and its models. The manager owns the cursor and every decision; this file only paints and passes on
+// Forget), its models and, on a machine that answers, an Add model… row that opens its model picker. The manager owns the cursor and every decision; this file only paints and passes on
 // what was asked for, as the same actions the keys make (DgxModel.keyAction).
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -14,9 +14,9 @@ ColumnLayout {
   property string host: ""
   property var profile: ({})
   property var hostState: null        // { loaded, online, error, status, lastSeenMs }, or null before the first answer
-  property var pending: ({})          // "host/model" -> "start" | "stop"
+  property var pending: ({})          // "host/model" -> "start" | "stop" | "delete"
   property real nowMs: 0
-  property string cursorKey: ""       // the row under the keyboard cursor: "host" or "host/model"
+  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model" or "host#add"
 
   signal selectRequested(string key)
   signal actionRequested(var action)
@@ -156,7 +156,51 @@ ColumnLayout {
         if (action) section.actionRequested(action)
       }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
+      onRemoveRequested: {
+        section.selectRequested(section.host + "/" + modelRow.modelData)
+        section.actionRequested({ type: "removeModel", host: section.host, id: modelRow.modelData })
+      }
     }
   }
-  // #6: an "Add model…" row goes here, opening the host's recipe picker (`startdgx list HOST`, then `use --detach`).
+
+  // Add model…: opens the machine's model picker. Only on a machine that answers, which has a catalog to show.
+  Rectangle {
+    id: addRow
+    readonly property bool current: section.cursorKey === section.host + "#add"
+    visible: section.loaded && !section.away
+    Layout.fillWidth: true
+    Layout.leftMargin: Style.spacing.xxl
+    implicitHeight: addText.implicitHeight + Style.spacing.md * 2
+    radius: Math.max(Style.cornerRadius, Style.space(6))
+    color: addHover.hovered || addRow.current ? Util.alpha(Color.foreground, 0.06) : "transparent"
+    border.width: Style.normalBorderWidth
+    border.color: addRow.current ? Util.alpha(Color.accent, 0.7) : Util.alpha(Color.foreground, 0.10)
+    onCurrentChanged: if (current) section.revealRequested(addRow)
+    HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
+    MouseArea {
+      anchors.fill: parent
+      onClicked: {
+        section.selectRequested(section.host + "#add")
+        section.actionRequested({ type: "addModel", host: section.host })
+      }
+    }
+    Text {
+      id: addText
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.spacing.xxl
+      anchors.rightMargin: Style.spacing.lg
+      textFormat: Text.PlainText
+      text: "+  Add model…"
+      color: addHover.hovered || addRow.current ? Color.foreground : Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      elide: Text.ElideRight
+    }
+    PanelToolTip {
+      visible: addHover.hovered
+      text: "Choose a model from " + section.machine + "'s catalog and set it up there  (a)"
+    }
+  }
 }

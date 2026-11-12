@@ -21,12 +21,14 @@ Rectangle {
 
   signal toggleRequested()
   signal logsRequested()
+  signal removeRequested()
   signal selectRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
   readonly property bool blocked: Model.startBlocked(row.entry)
+  readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
   readonly property string facts: Model.modelFacts(row.entry)
   readonly property bool hot: hover.hovered || row.current
@@ -139,6 +141,17 @@ Rectangle {
         iconText: "\udb80\udd8d"
         tooltipText: "Logs…  (l)"
         onClicked: row.logsRequested()
+      }
+
+      // Remove (or cancel a setup), after a question in a card.
+      Button {
+        Layout.alignment: Qt.AlignVCenter
+        visible: !row.away && row.removal !== ""
+        iconText: row.removal === "cancel" ? "\uf00d" : "\uf1f8"
+        tooltipText: row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
+        // Quiet: a destructive action is never the loudest thing on the row.
+        foreground: Color.muted
+        onClicked: row.removeRequested()
       }
 
       // Start or stop. Greyed out, not disabled, so the reason still shows on hover.

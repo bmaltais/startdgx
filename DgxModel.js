@@ -361,8 +361,8 @@ function recipeOffers(list, status) {
   const offers = (Array.isArray(list) ? list : []).map(function (r) {
     const entry = models[r.id]
     const best = r.best === true
-    if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "Set up", best: best, rank: entry.unit === "installing" ? 2 : 3 }
-    if (r.installed === true) return { recipe: r, action: null, text: "Set up", best: best, rank: 3 }
+    if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best, rank: entry.unit === "installing" ? 2 : 3 }
+    if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best, rank: 3 }
     if (r.available !== true) return { recipe: r, action: null, text: String(r.reason || "") || "Can't run on this machine", best: best, rank: 4 }
     return { recipe: r, action: "use", text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
   })
@@ -436,19 +436,20 @@ function sizeText(bytes) {
 }
 
 // The remove card's words for a model on a machine: { title, body, button, keep }. `bytes` is what the removal
-// frees (`delete --dry-run`), or null until the machine has said.
-function removeConfirm(entry, host, bytes) {
+// frees (`delete --dry-run`), or null until the machine has said; `unknown` when it couldn't say, which leaves the
+// question without the figure (the removal can still go ahead).
+function removeConfirm(entry, host, bytes, unknown) {
   const name = String(entry.name || entry.recipe || "")
   const known = bytes !== null && bytes !== undefined
   if (removeAction(entry) === "cancel") {
     return { title: "Cancel the setup of " + name + " on " + hostName(host) + "?", button: "Cancel setup", keep: "Keep going",
-      body: !known ? "This stops the download and deletes what it downloaded. Asking the machine how much that is…"
+      body: !known ? "This stops the download and deletes what it downloaded." + (unknown ? "" : " Asking the machine how much that is…")
         : bytes > 0 ? "This stops the download and deletes the " + sizeText(bytes) + " downloaded so far."
         : "This stops the setup. Nothing has been downloaded yet." }
   }
   const stops = entry.unit === "active" || entry.unit === "activating" ? "This stops the model and deletes its weights" : "This deletes its weights"
   return { title: "Remove " + name + " from " + hostName(host) + "?", button: "Remove", keep: "Keep it",
-    body: !known ? stops + ". Asking the machine how much space that frees…"
+    body: !known ? stops + "." + (unknown ? "" : " Asking the machine how much space that frees…")
       : bytes > 0 ? stops + ", freeing " + sizeText(bytes) + " that no other model uses. Setting it up again downloads them again."
       : (entry.unit === "active" || entry.unit === "activating" ? "This stops the model and deletes it." : "This deletes it.")
         + " Its weights are shared with another model, so no space is freed." }

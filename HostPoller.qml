@@ -11,10 +11,11 @@ Item {
   required property string host
   required property var owner
 
-  readonly property var hostState: poller.owner.hostState[poller.host]
-  // Actions waiting for the one that is running: { args, key, kind }.
+  // As drawn, with the setups just asked for: one of those makes the machine busy, so it is polled quickly.
+  readonly property var hostState: poller.owner.shownState[poller.host]
+  // Actions waiting for the one that is running: { args, key, kind } (kind: start, stop, use or delete).
   property var queue: []
-  // Starts and stops that have finished: their pending mark goes once a status read after them arrives
+  // Actions that have finished: their pending mark goes once a status read after them arrives
   // (`settled`, for the poll running now; `waiting`, for one that began before they finished).
   property var settled: []
   property var waiting: []
@@ -30,6 +31,7 @@ Item {
     const next = poller.queue[0]
     poller.queue = poller.queue.slice(1)
     actionProc.key = next.key
+    actionProc.kind = next.kind
     actionProc.command = [poller.owner.script].concat(next.args)
     actionProc.running = true
   }
@@ -68,11 +70,14 @@ Item {
   Process {
     id: actionProc
     property string key: ""
+    property string kind: ""
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function (code) {
-      if (code !== 0) poller.owner.error = Model.errorLine(actionErr.text, "The action failed")
-      else poller.owner.notice = Model.lastLine(actionOut.text)
+      if (code !== 0) {
+        poller.owner.error = Model.errorLine(actionErr.text, "The action failed")
+        poller.owner.actionFailed(actionProc.key, actionProc.kind)
+      } else poller.owner.notice = Model.lastLine(actionOut.text)
       // Read the machine at once so the row moves on; a poll already on its way began too early to settle it.
       if (statusProc.running) poller.waiting = poller.waiting.concat([actionProc.key])
       else { poller.settled = poller.settled.concat([actionProc.key]); statusProc.running = true }

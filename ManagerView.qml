@@ -1,6 +1,7 @@
 // The manager: your machines, the models on each and what they are doing, and a way to add more. Opened from
 // the launcher or the bar icon. Keyboard: Up/Down (or j/k) move, Enter or s starts or stops the model under the
-// cursor, l opens its logs, u uninstalls the machine, f forgets it, n adds a machine, r looks again. Esc closes.
+// cursor, l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
+// machine, f forgets it, n adds a machine, r looks again. Esc closes.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -20,7 +21,13 @@ FocusScope {
   readonly property var rows: view.dgx.rows
   readonly property var summary: view.dgx.summary
   readonly property var currentRow: view.rows.length ? view.rows[Math.min(view.cursor, view.rows.length - 1)] : null
-  readonly property string cursorKey: !view.currentRow ? "" : view.currentRow.kind === "host" ? view.currentRow.host : view.currentRow.host + "/" + view.currentRow.id
+  readonly property string cursorKey: view.keyOf(view.currentRow)
+
+  // A row's key: "host" for a machine, "host/model" for a model, "host#add" for its Add model… row.
+  function keyOf(r) {
+    if (!r) return ""
+    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.host + "/" + r.id
+  }
 
   // The manager's clock, for the load and stop bars and "last seen": four times a second while a bar moves,
   // every few seconds otherwise.
@@ -38,7 +45,7 @@ FocusScope {
   function select(key) {
     for (let i = 0; i < view.rows.length; i++) {
       const r = view.rows[i]
-      if ((r.kind === "host" ? r.host : r.host + "/" + r.id) === key) view.cursor = i
+      if (view.keyOf(r) === key) view.cursor = i
     }
     view.forceActiveFocus()
   }
@@ -46,7 +53,7 @@ FocusScope {
     return Model.keyAction(key, view.currentRow,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.entry(view.currentRow.host, view.currentRow.id) : null,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.pending[view.cursorKey] || "" : "",
-      view.currentRow ? Model.isAway(view.dgx.hostState[view.currentRow.host]) : false)
+      view.currentRow ? Model.isAway(view.dgx.shownState[view.currentRow.host]) : false)
   }
   // Keeps the row under the cursor in sight.
   function reveal(item) {
@@ -67,7 +74,7 @@ FocusScope {
     else if (event.key === Qt.Key_Up || event.text === "k") { view.move(-1); event.accepted = true }
     else if (event.key === Qt.Key_Down || event.text === "j") { view.move(1); event.accepted = true }
     else {
-      const key = event.key === Qt.Key_Return || event.key === Qt.Key_Enter ? "enter" : event.text
+      const key = event.key === Qt.Key_Return || event.key === Qt.Key_Enter ? "enter" : event.key === Qt.Key_Delete ? "delete" : event.text
       if (key === "") return
       const action = view.keyFor(key)
       if (action) { view.svc.dispatch(action); event.accepted = true }
@@ -161,7 +168,7 @@ FocusScope {
               Layout.fillWidth: true
               host: modelData
               profile: (view.dgx.hosts[modelData] || {}).profile || ({})
-              hostState: view.dgx.hostState[modelData] || null
+              hostState: view.dgx.shownState[modelData] || null
               pending: view.dgx.pending
               nowMs: view.nowMs
               cursorKey: view.cursorKey

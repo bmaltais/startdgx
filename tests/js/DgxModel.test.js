@@ -318,7 +318,7 @@ test("recipeOffers: the picker's rows, best first, then what can be set up, then
     ["flash", "use", "Recommended for this machine"],
     ["abliterated", "use", ""],
     ["being-set-up", null, "Being set up"],
-    ["nemotron", null, "Set up"],
+    ["nemotron", null, "On this machine"],
     ["glm-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
     ["gufo", null, "Can't run on this machine"],
   ])
@@ -328,7 +328,7 @@ test("recipeOffers: the picker's rows, best first, then what can be set up, then
 
 test("recipeOffers: a model the engine reports installed is set up, even before its status row arrives", () => {
   const offers = M.recipeOffers([recipe({ id: "a", installed: true })], { models: {} })
-  assert.deepStrictEqual([offers[0].action, offers[0].text], [null, "Set up"])
+  assert.deepStrictEqual([offers[0].action, offers[0].text], [null, "On this machine"])
   assert.deepStrictEqual(M.recipeOffers([recipe({ id: "a" })], null).map((o) => o.action), ["use"], "no status yet")
   assert.deepStrictEqual(M.recipeOffers(null, null), [])
 })
@@ -436,4 +436,10 @@ test("keyAction: a adds a model to the machine, d removes the model under the cu
   assert.strictEqual(M.keyAction("a", host, null, "", true), null, "a machine that isn't answering has no picker")
   assert.strictEqual(M.keyAction("d", model, b, "", true), null)
   assert.deepStrictEqual(M.keyAction("u", add, null), { type: "uninstall", host: "h1" }, "the Add model row acts for its machine")
+})
+
+test("removeConfirm: when the machine can't say how much it frees, the question stands without the figure", () => {
+  assert.strictEqual(M.removeConfirm(row({ unit: "inactive" }), "h", null, true).body, "This deletes its weights.")
+  assert.strictEqual(M.removeConfirm(row({ unit: "installing", install: { phase: "waiting" } }), "h", null, true).body,
+    "This stops the download and deletes what it downloaded.")
 })

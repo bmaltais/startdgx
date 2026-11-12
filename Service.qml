@@ -1,10 +1,13 @@
 // StartDGX: DGX Spark machines and their models, from the Omarchy shell. This file owns the window, the
 // cards over it, the IPC entry points and the bar icon's status; DgxService.qml owns the machines and every
-// call to bin/startdgx; ManagerView.qml, AddMachineView.qml and UninstallView.qml draw what is in it.
+// call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, AddModelView.qml and
+// RemoveView.qml draw what is in it.
 //
 //   omarchy-shell io.github.bmaltais.startdgx open               toggle the manager
 //   omarchy-shell io.github.bmaltais.startdgx addMachine         the manager with its Add machine card
 //   omarchy-shell io.github.bmaltais.startdgx uninstall <host>   the manager with a machine's uninstall card
+//   omarchy-shell io.github.bmaltais.startdgx addModel <host>    the manager with a machine's model picker
+//   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Effects
@@ -14,6 +17,7 @@ import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
+import "DgxModel.js" as Model
 
 Item {
   id: root
@@ -28,9 +32,11 @@ Item {
 
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
-  // A card floats over the manager: "add" (Add machine) or "uninstall" (one machine's), or "" for none.
+  // A card floats over the manager: "add" (Add machine), "uninstall" (one machine's), "addModel" (a machine's
+  // model picker) or "remove" (one model's), or "" for none.
   property string card: ""
   property string cardHost: ""
+  property string cardModel: ""
   property var targetScreen: null
 
   // The window is only mapped once the machine list has loaded, so it never flashes empty.
@@ -58,7 +64,8 @@ Item {
     root.targetScreen = root.focusedScreen()
     root.shown = true
     core.refreshAll()
-    Qt.callLater(function () { managerView.focusList() })
+    // Not when a card was opened with it (an IPC call for a card on a closed manager): the card keeps the keys.
+    Qt.callLater(function () { if (root.card === "") managerView.focusList() })
   }
   function ensureManager() { if (!root.shown) root.showManager() }
 
@@ -78,6 +85,28 @@ Item {
     core.plan(host)
   }
 
+  function showAddModel(host) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.card = "addModel"
+    core.listRecipes(host)
+  }
+  function showRemove(host, id) {
+    if (!Model.removeAction(core.entry(host, id), core.pending[host + "/" + id] || "")) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardModel = id
+    root.card = "remove"
+    core.planRemove(host, id)
+  }
+  // Set up a recipe from the picker: the card closes and the cursor goes to the new row, which shows at once.
+  function setUp(host, r) {
+    core.use(host, r)
+    root.closeCard()
+    Qt.callLater(function () { managerView.select(host + "/" + r.id) })
+  }
+
   // What a click or a key asks for, from Model.keyAction or a button.
   function dispatch(action) {
     if (!action) return
@@ -92,6 +121,10 @@ Item {
     case "addHost": core.addHost(action.host); break
     case "install": core.launch("install", action.host, ""); root.close(); break
     case "uninstallNow": core.launch("uninstall", action.host, ""); root.close(); break
+    case "addModel": root.showAddModel(action.host); break
+    case "use": root.setUp(action.host, action.recipe); break
+    case "removeModel": root.showRemove(action.host, action.id); break
+    case "removeNow": core.remove(action.host, action.id); root.closeCard(); break
     }
   }
 
@@ -106,13 +139,15 @@ Item {
   // ---- IPC -------------------------------------------------------------------------
   IpcHandler {
     target: "io.github.bmaltais.startdgx"
-    function state(): string { return JSON.stringify({ hosts: core.hosts, hostState: core.hostState, pending: core.pending }) }
+    function state(): string { return JSON.stringify({ hosts: core.hosts, hostState: core.hostState, pending: core.pending, setups: core.setups }) }
     function refresh(): string { core.refreshAll(); return "ok" }
     function open(): void { if (root.shown) root.close(); else root.showManager() }
     function toggle(): void { if (root.shown) root.close(); else root.showManager() }
     function close(): void { root.close() }
     function addMachine(): void { root.showAddMachine() }
     function uninstall(host: string): void { root.showUninstall(host) }
+    function addModel(host: string): void { root.showAddModel(host) }
+    function removeModel(host: string, model: string): void { root.showRemove(host, model) }
     function start(host: string, model: string): string { core.start(host, model); return "ok" }
     function stop(host: string, model: string): string { core.stop(host, model); return "ok" }
   }
@@ -323,11 +358,13 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : addCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
 
       Button {
         anchors.top: parent.top
