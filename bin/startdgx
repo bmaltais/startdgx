@@ -1384,12 +1384,14 @@ HF_DEFAULT_BASE = "https://huggingface.co"
 HF_LIMIT = 50
 HF_WORKERS = 8
 HF_TIMEOUT = 20
+HF_CACHE_SECONDS = 3600
 KNOWN_FAMILIES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "known-families.json")
 HF_LABEL_RE = re.compile(r"abliterated|uncensored", re.I)
 
 
-def hf_get(base, path, query=None):
-  """A JSON document from the Hugging Face API, or None when the repo has no such file. Errors: rate limited, offline."""
+def hf_get(base, path, query=None, strict=True):
+  """A JSON document from the Hugging Face API, or None when the repo has no such file. Errors: rate limited, offline,
+  and (when strict) any other HTTP error; a per-repo fetch is not strict, so one broken repo is skipped."""
   if not re.match(r"^https?://", base):
     local = os.path.join(base.removeprefix("file://"), *path.split("/"))
     try:
@@ -1409,7 +1411,7 @@ def hf_get(base, path, query=None):
       except ValueError:
         wait = 1
       raise Error(f"Hugging Face is limiting requests, try again in {wait} minute{'s' if wait != 1 else ''}") from error
-    if error.code in (401, 403, 404):
+    if error.code in (401, 403, 404) or not strict:
       return None
     raise Error(f"Hugging Face answered {error.code}") from error
   except ValueError:
@@ -1435,7 +1437,8 @@ def hf_row(base, item):
   base_model = card.get("base_model")
   if isinstance(base_model, list):
     base_model = base_model[0] if base_model else None
-  tree = hf_get(base, f"api/models/{repo}/tree/main") or []
+  tree = hf_get(base, f"api/models/{repo}/tree/main", strict=False)
+  tree = tree if isinstance(tree, list) else []
   sizes = [e.get("size") for e in tree if isinstance(e, dict) and str(e.get("path", "")).endswith(".safetensors")]
   label = HF_LABEL_RE.search(" ".join([repo, *(item.get("tags") or [])]))
   return {"repo": repo, "params": (item.get("safetensors") or {}).get("total"),
@@ -1452,7 +1455,7 @@ def hf_search(base, query):
   items = [i for i in listing if isinstance(i, dict) and isinstance(i.get("id"), str) and not i.get("gated")]
 
   def check(item):
-    config = hf_get(base, f"{item['id']}/raw/main/config.json")
+    config = hf_get(base, f"{item['id']}/raw/main/config.json", strict=False)
     archs = config.get("architectures") if isinstance(config, dict) else None
     if hf_is_affine_4bit(config) and isinstance(archs, list) and known.intersection(a for a in archs if isinstance(a, str)):
       return hf_row(base, item)
@@ -1469,9 +1472,39 @@ def hf_line(row):
   return "  ".join(cells)
 
 
+def hf_cache_file(base, query):
+  root = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+  return os.path.join(root, "startdgx", "hf-search", hashlib.sha256(f"{base}\n{query}".encode()).hexdigest() + ".json")
+
+
+def hf_cached_search(base, query):
+  """The rows for a query, from the last hour's answer when there is one (network bases only; STARTDGX_HF_NOW holds the
+  clock, in seconds, for tests). Only a good answer is cached, never a failure."""
+  if not re.match(r"^https?://", base):
+    return hf_search(base, query)
+  now = float(os.environ.get("STARTDGX_HF_NOW") or time.time())
+  path = hf_cache_file(base, query)
+  try:
+    with open(path) as f:
+      cached = json.load(f)
+    if isinstance(cached.get("rows"), list) and 0 <= now - cached["at"] < HF_CACHE_SECONDS:
+      return cached["rows"]
+  except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    pass
+  rows = hf_search(base, query)
+  try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as f:
+      json.dump({"at": now, "rows": rows}, f)
+    os.replace(path + ".tmp", path)
+  except OSError:
+    pass
+  return rows
+
+
 def cmd_hf_search(args):
   base = os.path.join(DEMO_FIXTURES, "hf") if DEMO else os.environ.get("STARTDGX_HF_BASE") or HF_DEFAULT_BASE
-  rows = hf_search(base, args.query)
+  rows = hf_cached_search(base, args.query)
   if args.json:
     print(json.dumps(rows))
   elif rows:

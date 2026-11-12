@@ -685,7 +685,6 @@ replaced() {
 replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
-setrecipes
 s uninstall --dry-run --json --delete-recipes me@spark | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["recipes"] == 0 and not any("recipes" in x for x in d["steps"] + d["kept"])))'
 ok $? "where the engine was there before, the plan has no recipes of ours to keep or delete"
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
@@ -1096,6 +1095,7 @@ out=$(STARTDGX_HF_BASE=$empty s hf search nothing 2>&1); ok $? "a search with no
 same "$out" "No known-family MLX 4-bit repos matched"; ok $? "and says there were none"
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s hf search qwen 2>&1); ok $((!$?)) "an unreachable Hugging Face fails"
 same "$out" "Error: Can't reach Hugging Face: check the network"; ok $? "and says it is offline, not that nothing matched"
+same "$(STARTDGX_HF_BASE=http://127.0.0.1:9 s hf search qwen --json 2>/dev/null)" ""; ok $? "and prints no list, not even an empty one"
 python3 - "$tmp/hf-limit.port" <<'F' &
 import http.server, sys
 class H(http.server.BaseHTTPRequestHandler):
@@ -1109,6 +1109,56 @@ limiter=$!; until [ -s "$tmp/hf-limit.port" ]; do sleep 0.1; done
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-limit.port") s hf search qwen 2>&1); ok $((!$?)) "a rate-limited search fails"
 same "$out" "Error: Hugging Face is limiting requests, try again in 3 minutes"; ok $? "and says when to try again"
 wait $limiter
+gt() { [ "$1" -gt "$2" ]; }
+# cache, parallelism cap, and a broken repo, against a counting local server (hf-srv.py logs each request path)
+cat >"$tmp/hf-srv.py" <<'F'
+import http.server, os, sys, threading, time
+root, log = sys.argv[1], sys.argv[2]
+lock, state = threading.Lock(), {"now": 0, "max": 0}
+class H(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+    path = self.path.split("?")[0].strip("/")
+    with lock:
+      state["now"] += 1; state["max"] = max(state["max"], state["now"])
+      open(log, "a").write(path + "\n"); open(log + ".max", "w").write(str(state["max"]))
+    time.sleep(0.15 if path.endswith("config.json") else 0)
+    with lock: state["now"] -= 1
+    if path.endswith("BROKEN/m/raw/main/config.json"):
+      self.send_response(500); self.end_headers(); return
+    f = os.path.join(root, path + ("" if path.endswith(".json") else ".json"))
+    if not os.path.exists(f):
+      self.send_response(404); self.end_headers(); return
+    body = open(f, "rb").read()
+    self.send_response(200); self.end_headers(); self.wfile.write(body)
+  def log_message(self, *a): pass
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[3], "w").write(str(srv.server_port))
+threading.Timer(120, lambda: os._exit(0)).start()
+srv.serve_forever()
+F
+many=$tmp/hf-many; mkdir -p "$many/api"
+python3 - "$many" <<'F'
+import json, sys, os
+root = sys.argv[1]
+ids = ["BROKEN/m"] + [f"o{i}/m" for i in range(24)]
+json.dump([{"id": i} for i in ids], open(f"{root}/api/models.json", "w"))
+for i in ids:
+  os.makedirs(f"{root}/{i}/raw/main", exist_ok=True)
+  json.dump({"architectures": ["Qwen3_5ForConditionalGeneration"], "quantization": {"mode": "affine", "bits": 4}}, open(f"{root}/{i}/raw/main/config.json", "w"))
+F
+python3 "$tmp/hf-srv.py" "$many" "$tmp/hf-log" "$tmp/hf-srv.port" & hfsrv=$!
+until [ -s "$tmp/hf-srv.port" ]; do sleep 0.1; done
+hs() { XDG_CACHE_HOME=$tmp/hf-cache STARTDGX_HF_NOW=$hnow STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-srv.port") s hf search "$@"; }
+hnow=1000000; out=$(hs many --json); ok $? "a search where one repo's config fetch errors succeeds"
+same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 24; ok $? "and the other repos are all listed"
+peak=$(cat "$tmp/hf-log.max"); gt "$peak" 1 && gt 9 "$peak"; ok $? "the repos' configs are fetched in parallel, at most 8 at a time"
+before=$(wc -l <"$tmp/hf-log")
+hnow=$((hnow + 3599)); out2=$(hs many --json); same "$out2" "$out"; ok $? "a repeat search within the hour gives the same rows"
+same "$(wc -l <"$tmp/hf-log")" "$before"; ok $? "and makes no network request"
+hs other --json >/dev/null; after=$(wc -l <"$tmp/hf-log"); gt "$after" "$before"; ok $? "another query is not served from the cache"
+before=$(wc -l <"$tmp/hf-log"); hnow=$((hnow + 3601)); hs many --json >/dev/null
+after=$(wc -l <"$tmp/hf-log"); gt "$after" "$before"; ok $? "after an hour the same query goes to the network again"
+kill "$hfsrv" 2>/dev/null; wait "$hfsrv" 2>/dev/null
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
 same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
