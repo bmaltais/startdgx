@@ -80,9 +80,8 @@ SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Read-only, for uninstall: what the engine made under the user's home. Model quadlets carry the engine's header;
 # its network quadlet has none, so it's known by its name and network. JSON comes back base64'd, to parse here.
-UNINSTALL_PROBE = f'''
-echo "user=$(id -un)"
-echo "home=$HOME"
+USER_PROBE = 'echo "user=$(id -un)"\necho "home=$HOME"\n'
+UNINSTALL_PROBE = USER_PROBE + f'''
 q=$HOME/{QUADLET_DIR}
 for f in "$q"/omarchy-agent-local-model-*.container; do
   if [ -f "$f" ] && head -1 "$f" | grep -qF '{QUADLET_HEADER}'; then echo "quadlet=${{f##*/}}"; sed -n 's/^Image=/image=/p' "$f"; fi
@@ -106,9 +105,7 @@ exit 0
 '''
 
 # Read-only: prints key=value lines about the host. Bash, since python3 may be one of the missing tools.
-PROBE = r'''
-echo "user=$(id -un)"
-echo "home=$HOME"
+PROBE = USER_PROBE + r'''
 echo "gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 echo "dgx_name=$(sed -n 's/^DGX_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/dgx-release 2>/dev/null | head -1)"
 for tool in @PACKAGES@; do
@@ -262,7 +259,11 @@ def cmd_delete(args):
 def probe(host):
   """The host's state as a dict, from the read-only PROBE; a key given twice keeps its last value."""
   out = ssh_raw(host, "bash -s", stdin=PROBE, timeout=60, what="probe").stdout
-  state = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+  return checked_user(host, dict(line.split("=", 1) for line in out.splitlines() if "=" in line))
+
+
+def checked_user(host, state):
+  """A probe's state, once its user and home are known to be safe to put in scripts and paths."""
   if not USER_RE.match(state.get("user", "")) or not HOME_RE.match(state.get("home", "")):
     raise Error(f"{host} reported an unexpected user or home directory")
   return state
@@ -480,9 +481,7 @@ def uninstall_probe(host):
       state[key].append(value)
     else:
       state[key] = value
-  if not USER_RE.match(state.get("user", "")) or not HOME_RE.match(state.get("home", "")):
-    raise Error(f"{host} reported an unexpected user or home directory")
-  return state
+  return checked_user(host, state)
 
 
 def decoded_json(text):

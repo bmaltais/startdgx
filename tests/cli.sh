@@ -51,7 +51,10 @@ cat >"$tmp/stub" <<'F'
 printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
 F
 for tool in systemctl loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; done
-printf '#!/usr/bin/env bash\necho me\n' >"$FAKE_HOSTBIN/id"
+cat >"$FAKE_HOSTBIN/id" <<'F'
+#!/usr/bin/env bash
+echo "${FAKE_ID:-me}"
+F
 # The user's systemd manager is running.
 { cat "$tmp/stub"; echo 'echo 4242'; } >"$FAKE_HOSTBIN/pgrep"
 # apt-get -s prints what apt would remove: the named packages, those in $FAKE_HOST/apt-also, and as root those in
@@ -159,6 +162,7 @@ out=$(s install me@pc --engine-path "$engine" 2>&1); ok $((!$?)) "install refuse
 echo "$out" | grep -q "isn't a DGX Spark"; ok $? "install says why it refused"
 none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log"; ok $? "a refused install changes nothing"
 
+fresh_host 'user=me;x'; s install --dry-run me@spark --engine-path "$engine" >/dev/null 2>&1; ok $((!$?)) "install refuses a host that reports an odd user"
 fresh_host podman=no; : >"$FAKE_LOG"
 out=$(s install --dry-run me@spark --engine-path "$engine"); ok $? "install --dry-run succeeds"
 none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log" "$FAKE_MANIFEST" \
@@ -309,6 +313,7 @@ echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/model
   && [ "$(echo "$out" | grep -c "$img")" = 1 ] && echo "$out" | grep -q 'disable linger for me' \
   && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
+FAKE_ID='me;x' s uninstall --dry-run me@spark >/dev/null 2>&1; ok $((!$?)) "uninstall refuses a host that reports an odd user"
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds"
 earlier "$(call 'engine share q1 --off')" "$(call 'systemctl --user stop')" && earlier "$(call 'systemctl --user stop')" "$(call 'tailscale serve --yes')" \
