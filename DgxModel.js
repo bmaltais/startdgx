@@ -108,6 +108,9 @@ function toggleAction(entry, pending) {
   return null
 }
 
+// The key an action's mark and queue entry go under: a share's own, apart from its model's.
+function actionKey(host, id, kind) { return kind === "share" || kind === "unshare" ? shareKey(host, id) : modelKey(host, id) }
+
 // What the Tailscale button does, for any model that is set up (sharing stands whether or not it runs; the engine lists a
 // shared model on the tailnet in whatever state it is): "share" while private, "unshare" while shared, or null while its
 // own click waits, for a model being set up or removed, and once a removal is asked. `sharing` is the share's own mark.
@@ -406,7 +409,7 @@ function newQueue() { return { starting: null, other: null, starts: [], others: 
 function sameKey(key) { return function (a) { return a.key === key } }
 
 // A click, put in its queue: { queue, dropped }. A stop or removal takes back a start of that model still waiting its
-// turn (dropped) and supersedes one that is loading: its exit is then not a failure to report. A removal of a model
+// turn (dropped), and a removal the model's queued shares, and supersedes one that is loading: its exit is then not a failure to report. A removal of a model
 // that is loading stops it first, since the engine's remove waits for the lock its start holds. A stop of a model
 // whose only start was taken back sends nothing. A start of a model being stopped or removed is dropped.
 function submit(q, action, entry) {
@@ -421,6 +424,8 @@ function submit(q, action, entry) {
   if (action.kind === "stop" || action.kind === "delete") {
     const dropped = out.starts.filter(sameKey(key))
     out.starts = out.starts.filter(function (a) { return a.key !== key })
+    // A removal takes back the model's shares still waiting: they would only fail, "isn't set up", once it is gone.
+    if (action.kind === "delete") out.others = out.others.filter(function (a) { return a.key !== shareKey(keyHost(key), keyModel(key)) })
     const loading = !!out.starting && out.starting.key === key
     if (loading) out.starting = Object.assign({}, out.starting, { superseded: true })
     const unit = entry ? entry.unit : ""

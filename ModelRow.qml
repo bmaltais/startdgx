@@ -147,7 +147,7 @@ Rectangle {
         implicitWidth: Style.space(16) + horizontalPadding * 2
         implicitHeight: Style.space(16) + verticalPadding * 2
         opacity: row.sharing !== "" ? 0.5 : 1
-        tooltipText: row.sharing !== "" ? "Waiting for the machine…"
+        tooltipText: row.sharing !== "" ? "Waiting for the machine"
           : row.shared ? "Shared with the tailnet. Stop sharing  (t)" : "Share with the tailnet  (t)"
         onClicked: if (row.share !== "") row.shareRequested()
         TailscaleMark {

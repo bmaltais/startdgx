@@ -563,6 +563,8 @@ test("shareAction: what the Tailscale button does, for any model that is set up"
 
 test("a share is its own mark: it never hides what the model is doing, nor its Start and Stop", () => {
   assert.strictEqual(M.shareKey("h1", "a"), "h1/a#share")
+  assert.deepStrictEqual(["share", "unshare", "start", "stop", "use", "delete"].map((k) => M.actionKey("h1", "a", k)),
+    ["h1/a#share", "h1/a#share", "h1/a", "h1/a", "h1/a", "h1/a"], "only a share goes under its own key")
   const q = M.newQueue()
   const loading = { op: 1, key: "h1/a", kind: "start", shows: "start" }
   const sharing = { op: 2, key: M.shareKey("h1", "a"), kind: "share", shows: "share" }
@@ -579,6 +581,18 @@ test("a share is its own mark: it never hides what the model is doing, nor its S
   // A second share click waits its turn, and is told so.
   const again = M.submit(M.launch(M.submit(M.newQueue(), sharing, null).queue).queue, Object.assign({}, sharing, { op: 4, kind: "unshare", shows: "unshare" }), null)
   assert.strictEqual(M.marks(again.queue, {})["h1/a#share"], "queued unshare")
+})
+
+test("a removal takes back the model's shares still waiting their turn, and only that model's", () => {
+  const sh = (op, id) => ({ op: op, key: M.shareKey("h1", id), kind: "share", shows: "share" })
+  let s = M.submit(M.newQueue(), act(1, "use", "z"), null)
+  s = M.launch(s.queue)
+  s = M.submit(s.queue, sh(2, "a"), null)
+  s = M.submit(s.queue, sh(3, "b"), null)
+  s = M.submit(s.queue, act(4, "delete"), row({ unit: "inactive" }))
+  assert.deepStrictEqual(s.queue.others.map((a) => [a.kind, a.key]), [["share", "h1/b#share"], ["delete", "h1/a"]])
+  assert.deepStrictEqual(s.dropped.map((a) => a.key), [], "a share isn't a start: nothing for the caller to unmark")
+  assert.strictEqual(M.marks(s.queue, {})["h1/a#share"], undefined)
 })
 
 test("commandFor: a share and an unshare run share, with --off to stop", () => {

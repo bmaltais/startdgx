@@ -32,7 +32,7 @@ Item {
   // A click: kind is start, stop, use, delete, share or unshare; entry the model's row as drawn.
   function run(kind, id, entry) {
     poller.lastOp += 1
-    const s = Model.submit(poller.queue, { op: poller.lastOp, key: kind === "share" || kind === "unshare" ? Model.shareKey(poller.host, id) : Model.modelKey(poller.host, id), kind: kind, shows: kind }, entry)
+    const s = Model.submit(poller.queue, { op: poller.lastOp, key: Model.actionKey(poller.host, id, kind), kind: kind, shows: kind }, entry)
     poller.queue = s.queue
     poller.launchNext()
   }
