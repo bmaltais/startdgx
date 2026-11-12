@@ -66,6 +66,13 @@ Item {
   property string recipesError: ""
   readonly property bool listing: listQuery.busy
 
+  // The context card's choices (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
+  property string variantsHost: ""
+  property string variantsId: ""
+  property var variants: null
+  property string variantsError: ""
+  readonly property bool variantsLoading: variantsQuery.busy
+
   // The remove card's plan (`delete HOST MODEL --dry-run --json`): what the removal frees, -1 until it is read.
   property string removeHost: ""
   property string removeId: ""
@@ -185,6 +192,22 @@ Item {
     if (service.listHost !== host) { service.recipes = null; service.listHost = host }
     service.recipesError = ""
     listQuery.ask(host, [service.script, "list", host, "--timeout", "60"])
+  }
+
+  function planContext(host, id) {
+    const key = Model.modelKey(host, id)
+    if (variantsQuery.busy && variantsQuery.asked.wanted === key) return
+    service.variantsHost = host
+    service.variantsId = id
+    service.variants = null
+    service.variantsError = ""
+    variantsQuery.ask(key, [service.script, "variants", host, id, "--json", "--timeout", "60"])
+  }
+
+  // Restarts a model set up with one of its measured contexts (the engine's use --ctx).
+  function setContext(host, id, ctx) {
+    const p = service.poller(host)
+    if (p) p.run("context", id, service.entry(host, id), { ctx: ctx })
   }
 
   function planRemove(host, id) {
@@ -351,6 +374,16 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.recipes = list
       else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(err, "The machine's catalog could not be read")
+    }
+  }
+
+  Query {
+    id: variantsQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== Model.modelKey(service.variantsHost, service.variantsId)) return
+      const found = code === 0 ? Model.parseVariants(out) : null
+      if (found) service.variants = found
+      else service.variantsError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }
 

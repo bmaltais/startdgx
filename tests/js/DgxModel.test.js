@@ -849,3 +849,42 @@ test("engineUpdate reads the update the CLI found for a machine's engine", () =>
   assert.strictEqual(M.engineUpdate(status({ from: "v1", to: 2 })), null)
   assert.strictEqual(M.engineUpdate(status("v0.6.3-dgx.2")), null)
 })
+
+test("parseVariants reads the measured contexts, largest first, and refuses the rest", () => {
+  const v = M.parseVariants(JSON.stringify([{ ctx: 65536, peak_ram_gib: 60, peak_gpu_gib: 58 }, { ctx: 262144, peak_ram_gib: 91.5, peak_gpu_gib: 90 }]))
+  assert.deepStrictEqual(v.map((x) => x.ctx), [262144, 65536])
+  assert.strictEqual(M.parseVariants(""), null)
+  assert.strictEqual(M.parseVariants("{}"), null)
+  assert.strictEqual(M.parseVariants("[]"), null)
+  assert.strictEqual(M.parseVariants(JSON.stringify([{ ctx: "x", peak_ram_gib: 1 }])), null)
+})
+
+test("contextChoices: what each measured context needs, whether it fits and which one runs", () => {
+  const v = [{ ctx: 262144, peak_ram_gib: 91.5, peak_gpu_gib: 90 }, { ctx: 131072, peak_ram_gib: 70, peak_gpu_gib: 68 }, { ctx: 65536, peak_ram_gib: 40, peak_gpu_gib: 38 }]
+  const c = M.contextChoices(v, 131072, 96)
+  assert.deepStrictEqual(c.map((x) => x.label), ["256K", "128K", "64K"])
+  assert.deepStrictEqual(c.map((x) => x.fits), [false, true, true])
+  assert.deepStrictEqual(c.map((x) => x.current), [false, true, false])
+  assert.strictEqual(c[0].text, "Needs 91.5 GiB of memory and 8 GiB for the desktop; this machine has 96")
+  assert.strictEqual(c[1].text, "Needs 70 GiB of memory")
+  // A machine whose memory isn't known leaves every choice to the engine, which refuses what doesn't fit.
+  assert.deepStrictEqual(M.contextChoices(v, 0, 0).map((x) => x.fits), [true, true, true])
+})
+
+test("contextAction: a model that is set up can change its context, unless it is being set up, removed or changed", () => {
+  assert.strictEqual(M.contextAction(row({ unit: "active" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "inactive" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "failed" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "installing" }), ""), null)
+  assert.strictEqual(M.contextAction(row({ unit: "removing" }), ""), null)
+  assert.strictEqual(M.contextAction(row({ unit: "active" }), "stop"), null)
+  assert.strictEqual(M.contextAction(null, ""), null)
+})
+
+test("the c key opens a model's context card, and the command it sends carries the context", () => {
+  const model = { host: "h1", kind: "model", id: "a" }
+  assert.deepStrictEqual(M.keyAction("c", model, row({ unit: "active" }), "", false, false, ""), { type: "context", host: "h1", id: "a" })
+  assert.strictEqual(M.keyAction("c", model, row({ unit: "installing" }), "", false, false, ""), null)
+  assert.strictEqual(M.keyAction("c", { host: "h1", kind: "host" }, null, "", false, false, ""), null)
+  assert.deepStrictEqual(M.commandFor("h1", { key: "h1/a", kind: "context", ctx: 65536 }), ["use", "--detach", "h1", "a", "--ctx", "65536", "--timeout", "120"])
+})

@@ -195,6 +195,26 @@ s share me@dgx serve-off --off >/dev/null; ok $? "so that unsharing it works"
 err=$(s share me@dgx serve-hang 2>&1 >/dev/null)
 same "$err" "Error: serve-hang is not shared: tailscale serve didn't answer. Serve may not be enabled on the tailnet: enable it at https://login.tailscale.com/f/serve, then share again"
 ok $? "a share whose tailscale serve hangs says Serve may not be enabled, and where to enable it"
+# use --ctx, and variants: the context sizes a recipe has measured, read from the recipe file on the host
+s use me@dgx qwen3.8-27b-tensorfold --detach --ctx 65536 >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use qwen3.8-27b-tensorfold --ctx 65536 --detach$'; ok $? "use --ctx sends the context to the engine"
+s use me@dgx qwen3.8-27b-tensorfold --ctx abc >/dev/null 2>&1; ok $((!$?)) "use --ctx refuses what isn't a number"
+mkdir -p "$FAKE_HOST/home/.local/share/omarchy-local-ai/recipes"
+cat >"$FAKE_HOST/home/.local/share/omarchy-local-ai/recipes/vr.toml" <<'F'
+name = "VR"
+[[variant]]
+ctx = 65536
+peak_ram_gib = 60
+peak_gpu_gib = 58
+[[variant]]
+ctx = 262144
+peak_ram_gib = 91.5
+peak_gpu_gib = 90
+F
+s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58}]))"
+ok $? "variants lists a recipe's measured contexts, largest first"
+s variants me@dgx vr | grep -q '262144.*91.5'; ok $? "and as text without --json"
+s variants me@dgx nope --json >/dev/null 2>&1; ok $((!$?)) "a recipe the host doesn't have is an error"
+s variants me@dgx '../x' --json >/dev/null 2>&1; ok $((!$?)) "variants refuses what is no recipe id"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -810,6 +830,12 @@ now=$((t0 + 15)); dj '0 < d["models"]["'$flash'"]["install"]["done_bytes"] < d["
 dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "a model being set up isn't installed yet"
 now=$((t0 + 3600)); row $a $flash active; ok $? "a finished demo setup loads and runs the model"
 dj '[r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "and the list shows it installed"
+dj '[v["ctx"] for v in d] == [262144, 131072, 65536] and d[0]["peak_ram_gib"] > d[2]["peak_ram_gib"]' variants $a $qwen --json; ok $? "demo variants lists a model's contexts, each needing less memory"
+out=$(ds use --detach $a $qwen --ctx 12345 2>&1); ok $((!$?)) "demo use --ctx refuses a context that isn't measured"
+now=$((t0 + 3700)); out=$(ds use --detach $a $qwen --ctx 131072); ok $? "demo use --ctx restarts a model set up with another context"
+dj 'd["models"]["'$qwen'"]["ctx"] == 131072 and d["models"]["'$qwen'"]["unit"] == "activating"' status $a; ok $? "and it reloads at once with it"
+now=$((t0 + 7200)); row $a $qwen active; ok $? "then runs again"
+now=$((t0 + 3600))
 dj 'd == {"recipe": "'$flash'", "setting_up": False, "bytes": 95 * 2**29}' delete --dry-run --json $a $flash; ok $? "demo delete --dry-run frees what its setup downloaded"
 row $a $flash active; ok $? "and changes nothing"
 out=$(ds delete $a $flash); ok $? "demo delete succeeds"

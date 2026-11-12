@@ -36,6 +36,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   user its operator (`tailscale set --operator`), without which `tailscale serve` refuses the engine's shares; the
   manifest records who it was.
 - [x] `startdgx status` adds `engine_update` (`{from, to}`) when the engine startdgx installed on the host is an older release than the pin; the panel then offers Update…, which opens `startdgx install` in a terminal.
+- [x] `startdgx variants HOST MODEL [--json]` lists the context sizes a recipe has measured (read from its file on the host) with the memory each needs; `startdgx use HOST MODEL --ctx N` sets a model up (or restarts one that is set up) with one of them. The panel's context card uses both.
 - [x] `startdgx uninstall [--dry-run [--json]] [--delete-models] [--remove-packages] <host>`: (`--dry-run --json` prints `{host, steps, kept, manual, models_bytes, packages}`, for the panel's card) reverses the install from its
   manifest. It stops sharing and stops the engine's units, then removes only the `/local-ai` tailscale serve routes,
   the engine's quadlets, network, secret and images (an image a container still uses stays), its state and config,

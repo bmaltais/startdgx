@@ -385,6 +385,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (away) return null
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
+  if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "context", host: row.host, id: row.id }
   if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
   if (k === "t" && row.kind === "model" && entry) {
     const share = shareAction(entry, pending, sharing)
@@ -474,7 +475,7 @@ function marks(q, done) {
     if (a && !a.superseded) { out[a.key] = a.shows; runningOp[a.key] = a.op }
   })
   q.starts.concat(q.others, q.shares).forEach(function (a) {
-    if (a.kind === "use" || runningOp[a.key] === a.op) return
+    if (a.shows === "use" || runningOp[a.key] === a.op) return
     out[a.key] = "queued " + a.shows
   })
   return out
@@ -500,6 +501,7 @@ function commandFor(host, action) {
   case "start": return ["start", host, id, "--timeout", "900"]
   case "stop": return ["stop", host, id, "--timeout", "120"]
   case "use": return ["use", "--detach", host, id, "--timeout", "120"]
+  case "context": return ["use", "--detach", host, id, "--ctx", String(action.ctx), "--timeout", "120"]
   case "delete": return ["delete", host, id, "--timeout", "1500"]
   // The engine publishes the model's route with tailscale serve, which can take a while.
   case "share": return ["share", host, id, "--timeout", "120"]
@@ -627,6 +629,45 @@ function removeAction(entry, pending) {
   if (entry.unit === "installing") return "cancel"
   if (entry.unit === "removing" || entry.unit === "deactivating") return null
   return "remove"
+}
+
+// ---- a model's context -----------------------------------------------------------------------------------
+
+// The memory the engine keeps free for the desktop beside a model (its RESERVE_GIB).
+var RESERVE_GIB = 8
+
+// `startdgx variants HOST MODEL --json`: [{ ctx, peak_ram_gib, peak_gpu_gib }], the contexts the recipe has
+// measured, largest first; or null.
+function parseVariants(text) {
+  const parsed = parseJson(text)
+  if (!Array.isArray(parsed) || parsed.length === 0) return null
+  for (let i = 0; i < parsed.length; i++) {
+    const v = parsed[i]
+    if (!isPlainObject(v) || !(Number(v.ctx) > 0) || !(Number(v.peak_ram_gib) > 0)) return null
+  }
+  return parsed.slice().sort(function (a, b) { return b.ctx - a.ctx })
+}
+
+// What the context card lists: one choice per measured context, { ctx, label, text, fits, current }. It fits when
+// its memory and the desktop's reserve are within the machine's (ramTotalGib; 0 when unknown, which leaves it to the
+// engine, whose own check refuses what doesn't fit and keeps the old setup).
+function contextChoices(variants, currentCtx, ramTotalGib) {
+  return variants.map(function (v) {
+    const need = Number(v.peak_ram_gib)
+    const fits = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+    return {
+      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx),
+      text: fits ? "Needs " + need + " GiB of memory"
+        : "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+    }
+  })
+}
+
+// "context" when the model's context can be changed now: it is set up and at rest (running, stopped or failed),
+// with no click of its own waiting. The engine restarts a running model with the new context, and starts a stopped one.
+function contextAction(entry, pending) {
+  if (!entry || pending) return null
+  return ["active", "inactive", "failed"].indexOf(entry.unit) >= 0 ? "context" : null
 }
 
 // A size in the engine's binary units, as its own messages give them.
