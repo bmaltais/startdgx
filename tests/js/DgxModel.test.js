@@ -674,3 +674,8 @@ test("uninstallChoices: what the card lets you opt into, off by default, with wh
   ])
   assert.deepStrictEqual(M.uninstallChoices(uninstallPlan({ models_bytes: null, packages: [] })), [], "nothing to opt into")
 })
+
+test("notifyCommand: an alert as notify-send's arguments, with -- before them and the body's markup escaped", () => {
+  assert.deepStrictEqual(M.notifyCommand({ title: "-x <b> failed on h1", body: "CUDA <error> & co" }),
+    ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", "-x <b> failed on h1", "CUDA &lt;error&gt; &amp; co"])
+})

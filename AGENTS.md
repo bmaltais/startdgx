@@ -1,6 +1,6 @@
 ## Layout
 
-The repo root is the Omarchy plugin `io.github.bmaltais.startdgx` (`manifest.json`), and `bin/startdgx` is its CLI, which ships with it. The QML only ever runs `bin/startdgx`, through `DgxService.qml` and `HostPoller.qml`; `DgxModel.js` holds the rules (no Qt imports). `demo/` is the CLI's demo fixtures and ships too.
+The repo root is the Omarchy plugin `io.github.bmaltais.startdgx` (`manifest.json`), and `bin/startdgx` is its CLI, which ships with it. The QML runs `bin/startdgx` for everything that reaches a machine, through `DgxService.qml` and `HostPoller.qml`; its only other processes are local and fixed: `notify-send` for a failure (built by `DgxModel.notifyCommand`: `--` before the text, the body's markup escaped) and `mkdir -p` of the bar icon's status folder in `Service.qml`. Nothing else, and never ssh, the engine or a terminal; `DgxModel.js` holds the rules (no Qt imports). `demo/` is the CLI's demo fixtures and ships too.
 
 ## Testing
 

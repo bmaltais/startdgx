@@ -121,7 +121,7 @@ Item {
     service.announced = r.announced
     if (service.windowOpen) return
     for (let i = 0; i < r.list.length; i++) {
-      Quickshell.execDetached(["notify-send", "--app-name=StartDGX", "--urgency=critical", r.list[i].title, r.list[i].body])
+      Quickshell.execDetached(Model.notifyCommand(r.list[i]))
     }
   }
 

@@ -4,7 +4,7 @@ How StartDGX looks and behaves. **The shared rules are in the devkit: [scripts/d
 
 **Both files are the source of truth for the UI.** A change that makes a design decision neither covers, or goes against one, updates the file it concerns in the same change and adds a line to the decision log. A UI change without a matching update is not finished.
 
-The kit's fifth principle names this app's tool: the QML never runs ssh, the engine or a terminal itself; it asks `bin/startdgx`, and only through `DgxService.qml` and `HostPoller.qml`.
+The kit's fifth principle names this app's tool: the QML never runs ssh, the engine or a terminal itself; it asks `bin/startdgx`, and only through `DgxService.qml` and `HostPoller.qml`. Its only other processes are local: `notify-send` (with `--` and the body escaped) and the `mkdir` of the bar icon's status folder (see the decision log).
 
 ## Differences from the shared rules
 
@@ -100,6 +100,7 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-11 | notify-send and the status folder's mkdir stay in the QML; AGENTS.md's Layout rule now says so | The smaller of the two fixes the review allowed: moving them into the CLI would add two commands, and demo mode's wall (which refuses every process) would then take the nested session's notifications away. Neither reaches a machine; notify-send gets `--` before its text and the body's `&<>` escaped (`DgxModel.notifyCommand`). |
 | 2026-11-11 | The uninstall card offers `--delete-models` and `--remove-packages` as opt-ins, off by default, read from a new `uninstall --dry-run --json` | They were command-line only; each states its cost (the space, the packages), and the plan is asked again with them so what the terminal does is what was shown. |
 | 2026-11-11 | Forget asks in a card; a held key acts once | No single key should be destructive: `f` alone took a machine off the list, and a held Enter or `s` started and stopped a model again and again. |
 | 2026-11-11 | A Spark with an engine startdgx didn't install offers Add and Install…; a Set up that fails for want of the root setup offers Install… on its machine | Add works with that engine as it is; Install (`--replace-engine`, harmless where the engine is startdgx's) is the way to the root setup the engine asks for in a terminal. |

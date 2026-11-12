@@ -660,3 +660,10 @@ function uninstallChoices(plan) {
   }
   return out
 }
+
+// An alert as the notify-send command that says it: `--` first, so a title from a host that starts with a dash isn't
+// read as an option, and the body's markup characters escaped, since notification servers read the body as markup.
+function notifyCommand(alert) {
+  const body = String(alert.body).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  return ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", String(alert.title), body]
+}
