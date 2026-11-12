@@ -24,6 +24,7 @@ ColumnLayout {
   signal revealRequested(var item)     // the row under the cursor, to scroll into sight
 
   readonly property bool loaded: !!section.hostState && section.hostState.loaded
+  readonly property var update: Model.engineUpdate(section.hostState ? section.hostState.status : null)
   readonly property bool away: Model.isAway(section.hostState)
   readonly property var entries: Model.modelList(section.hostState ? section.hostState.status : null)
   // The rows are made per model id and kept across polls (a new list would rebuild them, and lose a bar that
@@ -114,6 +115,16 @@ ColumnLayout {
         }
         Text {
           Layout.fillWidth: true
+          visible: section.update !== null
+          textFormat: Text.PlainText
+          text: section.update ? section.update.text : ""
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+        }
+        Text {
+          Layout.fillWidth: true
           visible: section.needsSetup
           textFormat: Text.PlainText
           text: "A model can't be set up here until the machine has its one-time root setup. Install… runs it in a terminal, where sudo asks for the password; an engine startdgx didn't install is backed up first."
@@ -122,6 +133,14 @@ ColumnLayout {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
         }
+      }
+
+      TextLink {
+        Layout.alignment: Qt.AlignVCenter
+        visible: section.update !== null && !section.needsSetup
+        text: "Update…"
+        tooltip: section.update ? "Install " + section.update.to + " on " + section.machine + " in a terminal, where sudo asks for the password" : ""
+        onClicked: section.actionRequested({ type: "install", host: section.host, replace: false })
       }
 
       TextLink {

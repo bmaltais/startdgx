@@ -374,9 +374,36 @@ def passthrough(*engine_args):
   return run
 
 
+ENGINE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-dgx\.(\d+)$")
+MANIFEST_MARK = "#manifest"
+
+
+def engine_update(host_tag, pinned=None):
+  """{"from", "to"} when the engine startdgx installed on the host is an older release than the pin, else None: a
+  tag that isn't a release of the fork's, or a newer one (updating would downgrade it), is left alone."""
+  pinned = pinned or ENGINE_TAG
+  old, new = ENGINE_TAG_RE.match(host_tag or ""), ENGINE_TAG_RE.match(pinned)
+  if old and new and tuple(map(int, old.groups())) < tuple(map(int, new.groups())):
+    return {"from": host_tag, "to": pinned}
+  return None
+
+
 def cmd_status(args):
-  out = ssh(target(args.host), "status", "--json", timeout=args.timeout).stdout
-  sys.stdout.write(out)
+  # The manifest's engine tag rides on the status call, so a poll stays one ssh.
+  host = target(args.host)
+  out = ssh_raw(host, f"{ENGINE} status --json; rc=$?; if [ $rc = 0 ]; then echo; echo {MANIFEST_MARK}; "
+                      f"grep -m1 '\"tag\"' {MANIFEST} 2>/dev/null; fi; exit $rc", timeout=args.timeout, what="status").stdout
+  status, _, manifest = out.partition(f"\n{MANIFEST_MARK}\n")
+  tag = re.search(r'"tag":\s*"([^"]*)"', manifest)
+  update = engine_update(tag[1]) if tag else None
+  try:
+    document = json.loads(status)
+  except ValueError:
+    document = None
+  if update and isinstance(document, dict):
+    sys.stdout.write(json.dumps({**document, "engine_update": update}) + "\n")
+  else:
+    sys.stdout.write(status)
 
 
 def cmd_list(args):
