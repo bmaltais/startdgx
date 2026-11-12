@@ -17,7 +17,7 @@ FocusScope {
 
   readonly property var dgx: card.svc.dgx
   readonly property var entry: card.dgx.entry(card.host, card.model)
-  readonly property string action: Model.removeAction(card.entry, card.dgx.pending[card.host + "/" + card.model] || "") || ""
+  readonly property string action: Model.removeAction(card.entry, card.dgx.pending[Model.modelKey(card.host, card.model)] || "") || ""
   readonly property bool mine: card.dgx.removeHost === card.host && card.dgx.removeId === card.model
   readonly property bool failed: card.mine && !card.dgx.removePlanning && card.dgx.removeError !== ""
   readonly property bool ready: card.mine && !card.dgx.removePlanning && (card.dgx.removeBytes >= 0 || card.failed)

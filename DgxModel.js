@@ -9,6 +9,11 @@
 // The engine's unit states: a setup in progress, then systemd's.
 var UNITS = ["installing", "active", "activating", "inactive", "failed", "deactivating", "removing"]
 
+// A model's key, "host/model": in pending, setups, marks and the cursor. A target has no "/", a recipe id neither.
+function modelKey(host, id) { return host + "/" + id }
+function keyHost(key) { return key.substring(0, key.lastIndexOf("/")) }
+function keyModel(key) { return key.substring(key.lastIndexOf("/") + 1) }
+
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
@@ -463,7 +468,7 @@ function settle(done, answered) {
 // removal may first wait for a start ahead of it that holds the engine's lock (900 s), then removes, and a killed
 // ssh could leave it half done.
 function commandFor(host, action) {
-  const id = action.key.substring(action.key.lastIndexOf("/") + 1)
+  const id = keyModel(action.key)
   switch (action.kind) {
   case "start": return ["start", host, id, "--timeout", "900"]
   case "stop": return ["stop", host, id, "--timeout", "120"]
@@ -494,7 +499,7 @@ function alerts(hostList, hostStates, announced) {
       const e = entries[j]
       const state = modelState(e)
       if (state.kind !== "failed") continue
-      const key = host + "/" + e.recipe + ":" + state.text
+      const key = modelKey(host, e.recipe) + ":" + state.text
       next[key] = true
       if (announced[key]) continue
       const name = String(e.name || e.recipe)
@@ -560,9 +565,8 @@ function setupRow(r) {
 function withSetups(hostStates, setups) {
   let out = hostStates
   for (const key in setups) {
-    const cut = key.lastIndexOf("/")
-    const host = key.substring(0, cut)
-    const id = key.substring(cut + 1)
+    const host = keyHost(key)
+    const id = keyModel(key)
     const hs = out[host]
     if (!hs || !hs.status || !isPlainObject(hs.status.models) || hs.status.models[id]) continue
     const models = Object.assign({}, hs.status.models)

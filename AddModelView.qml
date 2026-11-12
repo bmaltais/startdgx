@@ -243,7 +243,7 @@ FocusScope {
         horizontalAlignment: Text.AlignRight
         elide: Text.ElideRight
         textFormat: Text.PlainText
-        text: card.svc.notice !== "" ? card.svc.notice : "Esc to close"
+        text: card.svc.footerText
         color: card.svc.notice !== "" && card.svc.noticeIsError ? Color.urgent : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall

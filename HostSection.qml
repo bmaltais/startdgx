@@ -163,20 +163,20 @@ ColumnLayout {
       Layout.fillWidth: true
       Layout.leftMargin: Style.spacing.xxl
       entry: section.entryOf(modelData)
-      pending: section.pending[section.host + "/" + modelData] || ""
+      pending: section.pending[Model.modelKey(section.host, modelData)] || ""
       nowMs: section.nowMs
       away: section.away
-      current: section.cursorKey === section.host + "/" + modelData
+      current: section.cursorKey === Model.modelKey(section.host, modelData)
       onCurrentChanged: if (current) section.revealRequested(modelRow)
-      onSelectRequested: section.selectRequested(section.host + "/" + modelRow.modelData)
+      onSelectRequested: section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
       onToggleRequested: {
         const action = Model.keyAction("s", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending)
-        section.selectRequested(section.host + "/" + modelRow.modelData)
+        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         if (action) section.actionRequested(action)
       }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
       onRemoveRequested: {
-        section.selectRequested(section.host + "/" + modelRow.modelData)
+        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         section.actionRequested({ type: "removeModel", host: section.host, id: modelRow.modelData })
       }
     }

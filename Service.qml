@@ -111,7 +111,7 @@ Item {
     core.listRecipes(host)
   }
   function showRemove(host, id) {
-    if (!Model.removeAction(core.entry(host, id), core.pending[host + "/" + id] || "")) return
+    if (!Model.removeAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
     root.ensureManager()
     root.cardHost = host
     root.cardModel = id
@@ -122,7 +122,7 @@ Item {
   function setUp(host, r) {
     core.use(host, r)
     root.closeCard()
-    Qt.callLater(function () { managerView.select(host + "/" + r.id) })
+    Qt.callLater(function () { managerView.select(Model.modelKey(host, r.id)) })
   }
 
   // What a click or a key asks for, from Model.keyAction or a button.
@@ -151,6 +151,8 @@ Item {
   // The footers say what an action did, for a few seconds.
   readonly property string notice: core.error !== "" ? core.error : core.notice
   readonly property bool noticeIsError: core.error !== ""
+  // What a footer says: the latest message, or how to close.
+  readonly property string footerText: root.notice !== "" ? root.notice : "Esc to close"
   readonly property string noticeKey: (core.error !== "" ? "!" : "") + root.notice
   onNoticeKeyChanged: if (root.notice !== "") noticeTimer.restart()
   Timer { id: noticeTimer; interval: 6000; onTriggered: { core.notice = ""; core.error = "" } }

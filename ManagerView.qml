@@ -27,7 +27,7 @@ FocusScope {
   // A row's key: "host" for a machine, "host/model" for a model, "host#add" for its Add model… row.
   function keyOf(r) {
     if (!r) return ""
-    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.host + "/" + r.id
+    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : Model.modelKey(r.host, r.id)
   }
 
   // The manager's clock, for the load and stop bars and "last seen": four times a second while a bar moves,
@@ -218,7 +218,7 @@ FocusScope {
         horizontalAlignment: Text.AlignRight
         elide: Text.ElideRight
         textFormat: Text.PlainText
-        text: view.svc.notice !== "" ? view.svc.notice : "Esc to close"
+        text: view.svc.footerText
         color: view.svc.notice !== "" && view.svc.noticeIsError ? Color.urgent : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall

@@ -32,7 +32,7 @@ Item {
   // A click: kind is start, stop, use or delete; entry the model's row as drawn.
   function run(kind, id, entry) {
     poller.lastOp += 1
-    const s = Model.submit(poller.queue, { op: poller.lastOp, key: poller.host + "/" + id, kind: kind, shows: kind }, entry)
+    const s = Model.submit(poller.queue, { op: poller.lastOp, key: Model.modelKey(poller.host, id), kind: kind, shows: kind }, entry)
     poller.queue = s.queue
     poller.launchNext()
   }

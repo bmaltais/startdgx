@@ -153,7 +153,7 @@ Item {
     const p = service.poller(host)
     if (!p || !r) return
     const next = Object.assign({}, service.setups)
-    next[host + "/" + r.id] = r
+    next[Model.modelKey(host, r.id)] = r
     service.setups = next
     p.run("use", r.id, null)
   }
@@ -162,7 +162,7 @@ Item {
   // its section offer Install….
   function actionFailed(key, kind, error) {
     if (kind !== "use") return
-    const host = key.substring(0, key.lastIndexOf("/"))
+    const host = Model.keyHost(key)
     if (Model.setupNeeded(error)) service.markSetupNeeded(host, true)
     if (!service.setups[key]) return
     const next = Object.assign({}, service.setups)
@@ -185,7 +185,7 @@ Item {
   }
 
   function planRemove(host, id) {
-    const key = host + "/" + id
+    const key = Model.modelKey(host, id)
     // Already asking about this one: its answer is the one wanted.
     if (removeQuery.busy && removeQuery.asked.wanted === key) return
     service.removeHost = host
@@ -266,7 +266,7 @@ Item {
     service.hostState = next
     for (const h in service.marks) if (want.indexOf(h) < 0) service.setMarks(h, {})
     const setups = ({})
-    for (const key in service.setups) if (want.indexOf(key.substring(0, key.lastIndexOf("/"))) >= 0) setups[key] = service.setups[key]
+    for (const key in service.setups) if (want.indexOf(Model.keyHost(key)) >= 0) setups[key] = service.setups[key]
     service.setups = setups
   }
 
@@ -354,7 +354,7 @@ Item {
   Query {
     id: removeQuery
     onAnswered: function (key, code, out, err) {
-      if (key !== service.removeHost + "/" + service.removeId) return
+      if (key !== Model.modelKey(service.removeHost, service.removeId)) return
       const plan = code === 0 ? Model.parseRemovePlan(out) : null
       if (plan) service.removeBytes = plan.bytes
       else service.removeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")

@@ -712,3 +712,9 @@ test("a query cancelled (its card closed) ends, and its answer is dropped", () =
   assert.deepStrictEqual([e.current, e.launch], [false, null])
   assert.strictEqual(M.queryCancel(M.newQuery()).kill, false, "nothing running, nothing to end")
 })
+
+test("modelKey, keyHost and keyModel: a model's key, the one form pending, setups and the cursor share", () => {
+  assert.strictEqual(M.modelKey("demo@spark-a", "qwen3.8-27b-tensorfold"), "demo@spark-a/qwen3.8-27b-tensorfold")
+  assert.strictEqual(M.keyHost("demo@spark-a/qwen3.8-27b-tensorfold"), "demo@spark-a")
+  assert.strictEqual(M.keyModel("demo@spark-a/qwen3.8-27b-tensorfold"), "qwen3.8-27b-tensorfold")
+})
