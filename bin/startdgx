@@ -391,7 +391,7 @@ def engine_update(host_tag, pinned=None):
 def cmd_status(args):
   # The manifest's engine tag rides on the status call, so a poll stays one ssh.
   host = target(args.host)
-  out = ssh_raw(host, f"{ENGINE} status --json; rc=$?; if [ $rc = 0 ]; then echo; echo {MANIFEST_MARK}; "
+  out = ssh_raw(host, f"{ENGINE} status --json; rc=$?; if [ $rc = 0 ]; then echo; echo '{MANIFEST_MARK}'; "
                       f"grep -m1 '\"tag\"' {MANIFEST} 2>/dev/null; fi; exit $rc", timeout=args.timeout, what="status").stdout
   status, _, manifest = out.partition(f"\n{MANIFEST_MARK}\n")
   tag = re.search(r'"tag":\s*"([^"]*)"', manifest)

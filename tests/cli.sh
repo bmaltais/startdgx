@@ -46,7 +46,8 @@ case "$cmd" in
   *" use "*" --detach") rid=${cmd% --detach}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
     if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
     else : >"$FAKE_HOST.use-$rid"; echo "Setting up $rid in the background; follow it with: journalctl"; fi;;
-  *"status --json"*"#manifest"*) echo '{"models":{}}'; if [ -e "$FAKE_HOST.engine-tag" ]; then printf '\n#manifest\n  "tag": "%s",\n' "$(cat "$FAKE_HOST.engine-tag")"; fi;;
+  # status's own command runs for real, in zsh where there is one (the hosts' login shell), against a stub engine in the fake home.
+  *"status --json"*"'#manifest'"*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
   *"status --json"*) echo '{"models":{}}';;
   # The engine's share when tailscale serve refuses: it has already saved the share, and says why over several lines.
   *"share serve-off --off"*) echo "serve-off is no longer shared";;
@@ -166,16 +167,18 @@ s status me@dgx >/dev/null 2>&1; ok $((!$?)) "an unknown host is refused"
 s add me@dgx >/dev/null; ok $? "add records the host"
 grep -q '"ram_class": 128' "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "add keeps the host's profile"
 s hosts --json | grep -q me@dgx; ok $? "hosts lists it"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\necho %s\n' "'{\"models\":{}}'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
 s status me@dgx | grep -q models; ok $? "status passes the engine's JSON through"
 # status says when the host's engine is older than the pin (the manifest records its tag), and only then
 pin=$(s engine | cut -d' ' -f2)
 st() { s status me@dgx | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($1))"; }
-rm -f "$FAKE_HOST.engine-tag"; st '"engine_update" not in d and d["models"] == {}'; ok $? "status adds nothing where the host records no engine tag"
-echo v0.6.3-dgx.1 >"$FAKE_HOST.engine-tag"; st 'd["engine_update"] == {"from": "v0.6.3-dgx.1", "to": "'"$pin"'"}'; ok $? "status says an older engine can be updated to the pin"
-echo "$pin" >"$FAKE_HOST.engine-tag"; st '"engine_update" not in d'; ok $? "and nothing where the host has the pin"
-echo v9.9.9-dgx.9 >"$FAKE_HOST.engine-tag"; st '"engine_update" not in d'; ok $? "and nothing where the host is newer, which an update would downgrade"
-echo 'not a tag' >"$FAKE_HOST.engine-tag"; st '"engine_update" not in d'; ok $? "and nothing for a tag it can't read"
-rm -f "$FAKE_HOST.engine-tag"
+settag() { mkdir -p "${FAKE_MANIFEST%/*}"; printf '{\n  "engine": {\n    "tag": "%s",\n    "repo": "r"\n  }\n}\n' "$1" >"$FAKE_MANIFEST"; }
+rm -f "$FAKE_MANIFEST"; st '"engine_update" not in d and d["models"] == {}'; ok $? "status adds nothing where the host records no engine tag"
+settag v0.6.3-dgx.1; st 'd["engine_update"] == {"from": "v0.6.3-dgx.1", "to": "'"$pin"'"}'; ok $? "status says an older engine can be updated to the pin"
+settag "$pin"; st '"engine_update" not in d'; ok $? "and nothing where the host has the pin"
+settag v9.9.9-dgx.9; st '"engine_update" not in d'; ok $? "and nothing where the host is newer, which an update would downgrade"
+settag 'not a tag'; st '"engine_update" not in d'; ok $? "and nothing for a tag it can't read"
+rm -f "$FAKE_MANIFEST"
 s start me@dgx qwen3.8-27b-tensorfold >/dev/null; ok $? "start runs on the host"
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai start qwen3.8-27b-tensorfold'; ok $? "start sends the recipe to the engine"
 s stop me@dgx >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai stop$'; ok $? "stop without a model stops every one"
