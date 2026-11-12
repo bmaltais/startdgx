@@ -222,9 +222,10 @@ test("peerOffer: what the Add machine card offers for each machine of the tailne
   assert.deepStrictEqual(offer("spark-c", { reason: null }), { action: null, text: "Not answering" })
 })
 
-test("rows: the keyboard cursor's list, each machine then its models", () => {
-  const r = M.rows(["h1", "h2", "h3"], { h1: up(models(b, a)), h2: up({}), h3: undefined })
-  assert.deepStrictEqual(r.map((x) => x.kind + ":" + x.host + (x.id ? "/" + x.id : "")), ["host:h1", "model:h1/a", "model:h1/b", "host:h2", "host:h3"])
+test("rows: the keyboard cursor's list, each machine then its models, then Add model on one that answers", () => {
+  const r = M.rows(["h1", "h2", "h3", "h4"], { h1: up(models(b, a)), h2: up({}), h3: undefined, h4: up(models(a), { online: false }) })
+  assert.deepStrictEqual(r.map((x) => x.kind + ":" + x.host + (x.id ? "/" + x.id : "")),
+    ["host:h1", "model:h1/a", "model:h1/b", "add:h1", "host:h2", "add:h2", "host:h3", "host:h4", "model:h4/a"])
 })
 
 test("keyAction: a key and the button it matches cannot disagree", () => {
@@ -280,4 +281,159 @@ test("isAway: a machine that answered no, not one not heard from yet", () => {
   assert.strictEqual(M.isAway(up({})), false)
   assert.strictEqual(M.isAway(undefined), false)
   assert.strictEqual(M.isAway({ loaded: false, online: false }), false)
+})
+
+// ---- adding and removing models (#6) ----
+
+// A recipe as the engine's recipe_listing shapes it (demo/hosts/spark-a/list.json).
+const recipe = (over) => Object.assign({
+  id: "qwen3.8-27b-tensorfold", name: "Qwen3.8 27B", summary: "27B dense model, 4-bit.", runtime: "tensorfold", tier: "third-party",
+  publisher: "Omacom", vendor: "qwen", architecture: "dense", installed: false, available: true, reason: "", best: false, active: false,
+  memory_gib: 95, context: 262144, decode_tok_s: 52.7, prefill_tok_s: 1251.0
+}, over)
+
+test("parseRecipes keeps the engine's catalog listing, and refuses anything else", () => {
+  const list = M.parseRecipes(JSON.stringify([recipe(), recipe({ id: "nemotron-3.5-bolt-tensorfold", name: "Nemotron 3.5 Bolt" })]))
+  assert.deepStrictEqual(list.map((r) => r.id), ["qwen3.8-27b-tensorfold", "nemotron-3.5-bolt-tensorfold"])
+  assert.deepStrictEqual(M.parseRecipes("[]"), [])
+  assert.strictEqual(M.parseRecipes(""), null)
+  assert.strictEqual(M.parseRecipes("{}"), null)
+  assert.strictEqual(M.parseRecipes(JSON.stringify([recipe({ id: "" })])), null, "a recipe without an id")
+  assert.strictEqual(M.parseRecipes(JSON.stringify([recipe({ id: 7 })])), null)
+  assert.strictEqual(M.parseRecipes(JSON.stringify([null])), null)
+})
+
+test("recipeOffers: the picker's rows, best first, then what can be set up, then what can't", () => {
+  const list = [
+    recipe({ id: "glm-pair", name: "GLM-5.3 Flash", available: false, reason: "runtime tensorfold-glm53-pair can't run on nvidia-gb10", memory_gib: null }),
+    recipe({ id: "nemotron", name: "Nemotron 3.5 Bolt", installed: true }),
+    recipe({ id: "abliterated", name: "Qwen3.8 27B Abliterated" }),
+    recipe({ id: "gufo", name: "Qwen3.8 27B", available: false, reason: "" }),
+    recipe({ id: "flash", name: "Qwen3.8 Flash Next", best: true }),
+    recipe({ id: "being-set-up", name: "Being Set Up" }),
+  ]
+  const status = { models: { nemotron: row({ recipe: "nemotron" }), "being-set-up": row({ recipe: "being-set-up", unit: "installing", install: { phase: "waiting" } }) } }
+  const offers = M.recipeOffers(list, status)
+  assert.deepStrictEqual(offers.map((o) => [o.recipe.id, o.action, o.text]), [
+    ["flash", "use", "Recommended for this machine"],
+    ["abliterated", "use", ""],
+    ["being-set-up", null, "Being set up"],
+    ["nemotron", null, "Set up"],
+    ["glm-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
+    ["gufo", null, "Can't run on this machine"],
+  ])
+  assert.strictEqual(offers[0].best, true, "the engine's own best mark is kept")
+  assert.strictEqual(offers[1].best, false)
+})
+
+test("recipeOffers: a model the engine reports installed is set up, even before its status row arrives", () => {
+  const offers = M.recipeOffers([recipe({ id: "a", installed: true })], { models: {} })
+  assert.deepStrictEqual([offers[0].action, offers[0].text], [null, "Set up"])
+  assert.deepStrictEqual(M.recipeOffers([recipe({ id: "a" })], null).map((o) => o.action), ["use"], "no status yet")
+  assert.deepStrictEqual(M.recipeOffers(null, null), [])
+})
+
+test("recipeFacts: what a recipe needs and gives on this machine", () => {
+  assert.strictEqual(M.recipeFacts(recipe()), "95 GiB memory · 256K context · 53 TPS")
+  assert.strictEqual(M.recipeFacts(recipe({ decode_tok_s: null })), "95 GiB memory · 256K context")
+  assert.strictEqual(M.recipeFacts(recipe({ memory_gib: null, context: null, decode_tok_s: null })), "")
+})
+
+test("withSetups: a model just asked for shows at once, waiting, until the machine lists it", () => {
+  const hs = { loaded: true, online: true, error: "", status: { models: { nemotron: row({ recipe: "nemotron", name: "Nemotron" }) } }, lastSeenMs: 1 }
+  const setups = { "h1/flash": recipe({ id: "flash", name: "Qwen3.8 Flash Next", vendor: "qwen" }), "h2/x": recipe({ id: "x" }) }
+  const shown = M.withSetups({ h1: hs }, setups)
+  const flash = shown.h1.status.models.flash
+  assert.deepStrictEqual([flash.recipe, flash.name, flash.vendor, flash.unit, flash.install.phase], ["flash", "Qwen3.8 Flash Next", "qwen", "installing", "waiting"])
+  assert.deepStrictEqual(M.modelState(flash), { kind: "installing", text: "Waiting to download" })
+  assert.strictEqual(shown.h1.status.models.nemotron.name, "Nemotron", "the machine's own rows stay")
+  assert.strictEqual(hs.status.models.flash, undefined, "the state it was given is left alone")
+  assert.strictEqual(shown.h2, undefined, "a machine not heard from gets nothing")
+  assert.deepStrictEqual(M.rows(["h1"], shown).map((r) => r.id || r.kind), ["host", "nemotron", "flash", "add"], "in name order, as the machine will list it")
+  assert.strictEqual(M.summarize(["h1"], shown).busy, 1, "and counts as busy, so the machine is polled quickly")
+})
+
+test("withSetups: the machine's own row wins once it has one", () => {
+  const real = row({ recipe: "flash", unit: "installing", install: { phase: "downloading", done_bytes: 5, total_bytes: 10, rate_bytes_s: 1 } })
+  const hs = { loaded: true, online: true, status: { models: { flash: real } } }
+  assert.strictEqual(M.withSetups({ h1: hs }, { "h1/flash": recipe({ id: "flash" }) }).h1.status.models.flash, real)
+  assert.strictEqual(M.withSetups({ h1: hs }, {}).h1, hs, "nothing to add leaves the state as it is")
+})
+
+test("settleSetups: a setup is forgotten once its machine lists the model", () => {
+  const setups = { "h1/flash": recipe({ id: "flash" }), "h1/other": recipe({ id: "other" }), "h2/flash": recipe({ id: "flash" }) }
+  const next = M.settleSetups(setups, "h1", { models: { flash: row({ recipe: "flash", unit: "installing" }) } })
+  assert.deepStrictEqual(Object.keys(next).sort(), ["h1/other", "h2/flash"])
+  assert.strictEqual(M.settleSetups(setups, "h1", { models: {} }), setups, "nothing settled, nothing changed")
+})
+
+test("modelState and meter: a removal just asked for shows at once; a setup's is a cancel", () => {
+  const now = 1_000_000
+  assert.deepStrictEqual(M.modelState(row({ unit: "inactive" }), "delete"), { kind: "removing", text: "Removing" })
+  assert.deepStrictEqual(M.modelState(row({ unit: "active" }), "delete"), { kind: "removing", text: "Removing" })
+  const setup = row({ unit: "installing", install: { phase: "downloading", done_bytes: 4e9, total_bytes: 10e9, rate_bytes_s: 1e9 } })
+  assert.deepStrictEqual(M.modelState(setup, "delete"), { kind: "removing", text: "Cancelling" })
+  assert.deepStrictEqual(M.meter(setup, now, "delete"), { label: "Cancelling", fraction: 0, value: "" })
+  assert.deepStrictEqual(M.meter(row({ unit: "inactive" }), now, "delete"), { label: "Removing", fraction: 0, value: "" })
+  assert.strictEqual(M.toggleAction(row({ unit: "active" }), "delete"), null, "no Stop while it goes")
+})
+
+test("removeAction: what Remove does for a model, and when it waits", () => {
+  assert.strictEqual(M.removeAction(row({ unit: "inactive" })), "remove")
+  assert.strictEqual(M.removeAction(row({ unit: "active" })), "remove", "the engine stops it first")
+  assert.strictEqual(M.removeAction(row({ unit: "failed" })), "remove")
+  assert.strictEqual(M.removeAction(row({ unit: "inactive", fits: false })), "remove")
+  assert.strictEqual(M.removeAction(row({ unit: "installing", install: { phase: "downloading" } })), "cancel")
+  assert.strictEqual(M.removeAction(row({ unit: "installing", install: { phase: "failed" } }), ""), "cancel", "a failed setup is cleared the same way")
+  assert.strictEqual(M.removeAction(row({ unit: "removing" })), null)
+  assert.strictEqual(M.removeAction(row({ unit: "deactivating" })), null, "it waits for a stop to end")
+  assert.strictEqual(M.removeAction(row({ unit: "inactive" }), "delete"), null, "asked already")
+  assert.strictEqual(M.removeAction(row({ unit: "inactive" }), "start"), null, "a start on its way")
+  assert.strictEqual(M.removeAction(null), null)
+})
+
+test("sizeText: sizes in the engine's binary units", () => {
+  assert.strictEqual(M.sizeText(12.34 * 2 ** 30), "12.3 GiB")
+  assert.strictEqual(M.sizeText(300 * 2 ** 20), "300.0 MiB")
+  assert.strictEqual(M.sizeText(0), "0.0 MiB")
+})
+
+test("removeConfirm: the question, with the space it frees once that is known", () => {
+  const m = row({ name: "Qwen3.8 27B", unit: "inactive" })
+  assert.deepStrictEqual(M.removeConfirm(m, "demo@spark-a", 47.5 * 2 ** 30), {
+    title: "Remove Qwen3.8 27B from spark-a?", button: "Remove", keep: "Keep it",
+    body: "This deletes its weights, freeing 47.5 GiB that no other model uses. Setting it up again downloads them again." })
+  assert.strictEqual(M.removeConfirm(row({ unit: "active" }), "h", 2 ** 30).body,
+    "This stops the model and deletes its weights, freeing 1.0 GiB that no other model uses. Setting it up again downloads them again.")
+  assert.strictEqual(M.removeConfirm(m, "h", 0).body, "This deletes it. Its weights are shared with another model, so no space is freed.")
+  assert.strictEqual(M.removeConfirm(m, "h", null).body, "This deletes its weights. Asking the machine how much space that frees…")
+  const setup = row({ name: "Qwen3.8 Flash Next", unit: "installing", install: { phase: "downloading" } })
+  assert.deepStrictEqual(M.removeConfirm(setup, "demo@spark-b", 4.25 * 2 ** 30), {
+    title: "Cancel the setup of Qwen3.8 Flash Next on spark-b?", button: "Cancel setup", keep: "Keep going",
+    body: "This stops the download and deletes the 4.3 GiB downloaded so far." })
+  assert.strictEqual(M.removeConfirm(setup, "h", 0).body, "This stops the setup. Nothing has been downloaded yet.")
+})
+
+test("parseRemovePlan: what delete --dry-run --json says a removal frees", () => {
+  assert.deepStrictEqual(M.parseRemovePlan(JSON.stringify({ recipe: "a", setting_up: false, bytes: 1024 })), { recipe: "a", setting_up: false, bytes: 1024 })
+  assert.strictEqual(M.parseRemovePlan(JSON.stringify({ recipe: "a", bytes: -1 })), null)
+  assert.strictEqual(M.parseRemovePlan(JSON.stringify({ recipe: "a", bytes: "1" })), null)
+  assert.strictEqual(M.parseRemovePlan("[]"), null)
+  assert.strictEqual(M.parseRemovePlan("nope"), null)
+})
+
+test("keyAction: a adds a model to the machine, d removes the model under the cursor", () => {
+  const model = { kind: "model", host: "h1", id: "a" }
+  const add = { kind: "add", host: "h1" }
+  const host = { kind: "host", host: "h1" }
+  assert.deepStrictEqual(M.keyAction("a", host, null), { type: "addModel", host: "h1" })
+  assert.deepStrictEqual(M.keyAction("a", model, a), { type: "addModel", host: "h1" })
+  assert.deepStrictEqual(M.keyAction("enter", add, null), { type: "addModel", host: "h1" })
+  assert.deepStrictEqual(M.keyAction("d", model, b), { type: "removeModel", host: "h1", id: "a" })
+  assert.deepStrictEqual(M.keyAction("delete", model, a), { type: "removeModel", host: "h1", id: "a" })
+  assert.strictEqual(M.keyAction("d", model, row({ unit: "removing" })), null)
+  assert.strictEqual(M.keyAction("d", host, null), null)
+  assert.strictEqual(M.keyAction("a", host, null, "", true), null, "a machine that isn't answering has no picker")
+  assert.strictEqual(M.keyAction("d", model, b, "", true), null)
+  assert.deepStrictEqual(M.keyAction("u", add, null), { type: "uninstall", host: "h1" }, "the Add model row acts for its machine")
 })

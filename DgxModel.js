@@ -27,12 +27,14 @@ function parseStatus(text) {
 }
 
 // What a model is doing, as one word for the row's colour and dot (`kind`) and the words under its name:
-// running, loading, stopping, removing, installing, failed, doesNotFit or stopped. `pending` is a start or
-// stop just asked for, which shows at once; the host's answer wins as soon as it has moved on.
+// running, loading, stopping, removing, installing, failed, doesNotFit or stopped. `pending` is a start, stop
+// or delete just asked for, which shows at once; the host's answer wins as soon as it has moved on (a delete
+// returns only once the model is gone, so it shows until then; of a setup, it is a cancel).
 function modelState(entry, pending) {
   const unit = entry.unit
   const error = String(entry.error || "")
   const phase = entry.install ? entry.install.phase : ""
+  if (pending === "delete" && unit !== "removing") return { kind: "removing", text: unit === "installing" ? "Cancelling" : "Removing" }
   if (pending === "start" && (unit === "inactive" || unit === "failed")) return { kind: "loading", text: "Loading" }
   if (pending === "stop" && (unit === "active" || unit === "activating")) return { kind: "stopping", text: "Stopping" }
   switch (unit) {
@@ -85,7 +87,8 @@ function downloadAmount(done, total) {
 // much has arrived, a load, stop or removal its progress against how long the last one took, a running model
 // its memory out of the host's.
 function meter(entry, nowMs, pending) {
-  const kind = modelState(entry, pending).kind
+  const state = modelState(entry, pending)
+  const kind = state.kind
   const elapsed = entry.since_ms ? Math.max(0, (nowMs - Number(entry.since_ms)) / 1000) : 0
   const seconds = function (value, fallback) { return Number(value) > 0 ? Number(value) : fallback }
   switch (kind) {
@@ -96,7 +99,10 @@ function meter(entry, nowMs, pending) {
   }
   case "loading": return { label: "Loading", fraction: phaseProgress(elapsed, seconds(entry.expected_load_seconds, 60)), value: "" }
   case "stopping": return { label: "Stopping", fraction: phaseProgress(elapsed, seconds(entry.expected_stop_seconds, 10)), value: "" }
-  case "removing": return { label: "Removing", fraction: phaseProgress(elapsed, seconds(entry.expected_remove_seconds, 10)), value: "" }
+  case "removing":
+    // Asked for, and the machine hasn't begun: nothing to measure yet.
+    if (entry.unit !== "removing") return { label: state.text, fraction: 0, value: "" }
+    return { label: state.text, fraction: phaseProgress(elapsed, seconds(entry.expected_remove_seconds, 10)), value: "" }
   case "running": {
     const used = entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
     const total = Number(entry.ram_total_gib) || 0
@@ -264,7 +270,8 @@ function peerOffer(peer) {
 
 // ---- keyboard ----------------------------------------------------------------------------------------
 
-// The manager's rows, top to bottom, for the keyboard cursor: each machine, then its models.
+// The manager's rows, top to bottom, for the keyboard cursor: each machine, then its models, then its Add model…
+// row (only on a machine that answers: a picker needs its catalog).
 function rows(hostList, hostStates) {
   const out = []
   for (let i = 0; i < hostList.length; i++) {
@@ -273,11 +280,12 @@ function rows(hostList, hostStates) {
     const hs = hostStates[host]
     const list = modelList(hs ? hs.status : null)
     for (let j = 0; j < list.length; j++) out.push({ kind: "model", host: host, id: list[j].recipe })
+    if (hs && hs.loaded && hs.online) out.push({ kind: "add", host: host })
   }
   return out
 }
 
-// A key typed in the manager ("enter" for Return). `row` is the one under the cursor (or null), `entry` its
+// A key typed in the manager ("enter" for Return, "delete" for Delete). `row` is the one under the cursor (or null), `entry` its
 // model's status row, `pending` a start or stop already asked for, and `away` whether its machine isn't
 // answering (it then has no Start, Stop or Logs). A model's row acts for its machine too.
 function keyAction(key, row, entry, pending, away) {
@@ -289,6 +297,8 @@ function keyAction(key, row, entry, pending, away) {
   if (k === "f") return { type: "forget", host: row.host }
   if (away) return null
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
+  if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
+  if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
   if ((k === "s" || k === "enter") && row.kind === "model" && entry) {
     const action = toggleAction(entry, pending)
     return action ? { type: action, host: row.host, id: row.id } : null
@@ -325,4 +335,129 @@ function alerts(hostList, hostStates, announced) {
     }
   }
   return { list: list, announced: next }
+}
+
+// ---- adding and removing models ----------------------------------------------------------------------
+
+// `startdgx list HOST`: the engine's catalog for that machine (recipe_listing), a list of recipes each with an id,
+// or null when it isn't that.
+function parseRecipes(text) {
+  let parsed
+  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  if (!Array.isArray(parsed)) return null
+  for (let i = 0; i < parsed.length; i++) {
+    const r = parsed[i]
+    if (!isPlainObject(r) || typeof r.id !== "string" || r.id === "") return null
+  }
+  return parsed
+}
+
+// The model picker's rows for one machine: every recipe of its catalog, with what the picker offers for it:
+// { recipe, action: "use" | null, text, best }. A recipe the machine can run and doesn't have yet can be set up
+// ("use"); one it has (or is setting up) says so; one it can't run says why. The engine's recommendation
+// (`best`) comes first, then what can be set up, what is set up, and what can't run, each in name order.
+function recipeOffers(list, status) {
+  const models = status && isPlainObject(status.models) ? status.models : {}
+  const offers = (Array.isArray(list) ? list : []).map(function (r) {
+    const entry = models[r.id]
+    const best = r.best === true
+    if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "Set up", best: best, rank: entry.unit === "installing" ? 2 : 3 }
+    if (r.installed === true) return { recipe: r, action: null, text: "Set up", best: best, rank: 3 }
+    if (r.available !== true) return { recipe: r, action: null, text: String(r.reason || "") || "Can't run on this machine", best: best, rank: 4 }
+    return { recipe: r, action: "use", text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
+  })
+  const label = function (o) { return String(o.recipe.name || o.recipe.id) }
+  offers.sort(function (a, b) { return a.rank - b.rank || label(a).localeCompare(label(b)) || a.recipe.id.localeCompare(b.recipe.id) })
+  return offers.map(function (o) { return { recipe: o.recipe, action: o.action, text: o.text, best: o.best } })
+}
+
+// The facts under a recipe in the picker: the memory it takes, its context and its speed, measured on this machine class.
+function recipeFacts(r) {
+  const facts = []
+  if (Number(r.memory_gib) > 0) facts.push(Math.round(Number(r.memory_gib)) + " GiB memory")
+  if (Number(r.context) > 0) facts.push(Math.round(Number(r.context) / 1024) + "K context")
+  if (Number(r.decode_tok_s) > 0) facts.push(Math.round(Number(r.decode_tok_s)) + " TPS")
+  return facts.join(" · ")
+}
+
+// A model being set up, as the machine will list it once its setup has begun, for a recipe just asked for: the
+// row shows at once, waiting, rather than after the command and the next poll.
+function setupRow(r) {
+  return { error: "", fits: true, fit_reason: "", recipe: r.id, name: String(r.name || r.id), vendor: String(r.vendor || ""),
+    runtime: "", image: "", ctx: null, unit: "installing", sub_state: "", result: "", port: null, endpoint: "", observed: null,
+    since_ms: null, expected_load_seconds: null, expected_stop_seconds: null, expected_remove_seconds: null,
+    install: { phase: "waiting", done_bytes: 0, total_bytes: 0, rate_bytes_s: 0 } }
+}
+
+// The host states as the manager draws them: each machine's status with the setups just asked for on it
+// ("host/model" -> its recipe) that it doesn't list yet. A machine not heard from is left as it is.
+function withSetups(hostStates, setups) {
+  let out = hostStates
+  for (const key in setups) {
+    const cut = key.lastIndexOf("/")
+    const host = key.substring(0, cut)
+    const id = key.substring(cut + 1)
+    const hs = out[host]
+    if (!hs || !hs.status || !isPlainObject(hs.status.models) || hs.status.models[id]) continue
+    const models = Object.assign({}, hs.status.models)
+    models[id] = setupRow(setups[key])
+    if (out === hostStates) out = Object.assign({}, hostStates)
+    out[host] = Object.assign({}, hs, { status: Object.assign({}, hs.status, { models: models }) })
+  }
+  return out
+}
+
+// The setups still waiting to show, once `host` has answered with `status`: those it lists now are its own.
+function settleSetups(setups, host, status) {
+  const models = status && isPlainObject(status.models) ? status.models : {}
+  let out = setups
+  for (const key in setups) {
+    if (key.indexOf(host + "/") !== 0 || !models[key.substring(host.length + 1)]) continue
+    if (out === setups) out = Object.assign({}, setups)
+    delete out[key]
+  }
+  return out
+}
+
+// What a model's Remove does: "remove" (stop it if it runs, delete its weights), "cancel" (stop a setup and delete
+// what it downloaded; a failed setup is cleared the same way), or null while it waits: being removed, stopping,
+// or a click on its way.
+function removeAction(entry, pending) {
+  if (!entry || pending) return null
+  if (entry.unit === "installing") return "cancel"
+  if (entry.unit === "removing" || entry.unit === "deactivating") return null
+  return "remove"
+}
+
+// A size in the engine's binary units, as its own messages give them.
+function sizeText(bytes) {
+  const n = Number(bytes) || 0
+  return n >= 1073741824 ? (n / 1073741824).toFixed(1) + " GiB" : (n / 1048576).toFixed(1) + " MiB"
+}
+
+// The remove card's words for a model on a machine: { title, body, button, keep }. `bytes` is what the removal
+// frees (`delete --dry-run`), or null until the machine has said.
+function removeConfirm(entry, host, bytes) {
+  const name = String(entry.name || entry.recipe || "")
+  const known = bytes !== null && bytes !== undefined
+  if (removeAction(entry) === "cancel") {
+    return { title: "Cancel the setup of " + name + " on " + hostName(host) + "?", button: "Cancel setup", keep: "Keep going",
+      body: !known ? "This stops the download and deletes what it downloaded. Asking the machine how much that is…"
+        : bytes > 0 ? "This stops the download and deletes the " + sizeText(bytes) + " downloaded so far."
+        : "This stops the setup. Nothing has been downloaded yet." }
+  }
+  const stops = entry.unit === "active" || entry.unit === "activating" ? "This stops the model and deletes its weights" : "This deletes its weights"
+  return { title: "Remove " + name + " from " + hostName(host) + "?", button: "Remove", keep: "Keep it",
+    body: !known ? stops + ". Asking the machine how much space that frees…"
+      : bytes > 0 ? stops + ", freeing " + sizeText(bytes) + " that no other model uses. Setting it up again downloads them again."
+      : (entry.unit === "active" || entry.unit === "activating" ? "This stops the model and deletes it." : "This deletes it.")
+        + " Its weights are shared with another model, so no space is freed." }
+}
+
+// `startdgx delete HOST MODEL --dry-run --json`: { recipe, setting_up, bytes } (what the removal frees), or null.
+function parseRemovePlan(text) {
+  let parsed
+  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  if (!isPlainObject(parsed) || typeof parsed.recipe !== "string" || typeof parsed.bytes !== "number" || !(parsed.bytes >= 0)) return null
+  return parsed
 }
