@@ -10,7 +10,9 @@ import base64
 import contextlib
 import concurrent.futures
 import datetime
+import fcntl
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -18,6 +20,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
@@ -150,9 +153,13 @@ class Error(Exception):
   pass
 
 
+def config_dir():
+  return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "startdgx")
+
+
 def config_path():
-  base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-  return os.path.join(base, "startdgx", "hosts.json")
+  # Demo mode keeps its own machines, so the real list is never read or written.
+  return os.path.join(demo_dir() if DEMO else config_dir(), "hosts.json")
 
 
 def load_hosts():
@@ -257,7 +264,13 @@ def cmd_stop(args):
 
 
 def cmd_use(args):
-  sys.stdout.write(ssh(target(args.host), "use", recipe(args.model), timeout=args.timeout).stdout)
+  if not args.detach:
+    sys.stdout.write(ssh(target(args.host), "use", recipe(args.model), timeout=args.timeout or 3600).stdout)
+    return
+  # The engine runs the setup in a transient user unit and returns, or says one is already running (and starts no
+  # second); its last line says which, and it is the one line the panel shows.
+  out = ssh(target(args.host), "use", recipe(args.model), "--detach", timeout=args.timeout or 120).stdout
+  print((out.strip().splitlines() or [f"Setting up {args.model} in the background"])[-1])
 
 
 def cmd_delete(args):
@@ -323,13 +336,17 @@ def discover_peer(name, user, timeout, added):
   return record
 
 
-def cmd_discover(args):
-  user = args.user or getpass.getuser()
-  if not TARGET_RE.match(user) or user.startswith("-") or "@" in user:
-    raise Error("Not a valid user name")
+def discover_peers(user, timeout):
   names, added = tailnet_peers(), set(load_hosts())
   with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVER_WORKERS) as pool:
-    records = list(pool.map(lambda name: discover_peer(name, user, args.timeout, added), names))
+    return list(pool.map(lambda name: discover_peer(name, user, timeout, added), names))
+
+
+def cmd_discover(args):
+  user = args.user or ("demo" if DEMO else getpass.getuser())
+  if not TARGET_RE.match(user) or user.startswith("-") or "@" in user:
+    raise Error("Not a valid user name")
+  records = demo_peers(user) if DEMO else discover_peers(user, args.timeout)
   if args.json:
     print(json.dumps(records, indent=2))
     return
@@ -840,6 +857,32 @@ def run_steps(host, phase, script, timeout):
     raise Error(f"Uninstall stopped on {host} (see above); run it again once that's fixed")
 
 
+LAUNCHER = "omarchy-launch-floating-terminal-with-presentation"
+# The commands launch may open a terminal on, and whether each takes a model.
+LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True}
+
+
+def cmd_launch(args):
+  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and
+  uninstall). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
+  if args.verb not in LAUNCH_VERBS:
+    raise Error(f"launch: '{args.verb}' isn't one of {', '.join(LAUNCH_VERBS)}")
+  if args.model and not LAUNCH_VERBS[args.verb]:
+    raise Error(f"launch {args.verb} takes no model")
+  if args.replace_engine and args.verb != "install":
+    raise Error("--replace-engine goes only with launch install")
+  argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
+  argv += [recipe(args.model)] if args.model else []
+  argv += ["--replace-engine"] if args.replace_engine else []
+  if DEMO:
+    print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
+    return
+  try:
+    os.execvp(LAUNCHER, [LAUNCHER, shlex.join(argv)])
+  except OSError as error:
+    raise Error(f"Can't open a terminal with {LAUNCHER}: {error.strerror}") from error
+
+
 def cmd_engine(args):
   if args.json:
     print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
@@ -847,11 +890,268 @@ def cmd_engine(args):
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
 
 
+# Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
+# demo/ and change a copy of them under $XDG_STATE_HOME/startdgx-demo, so the panel can be clicked through, and no
+# process is ever run. Starts, stops, setups and removals take effect over time, as on a real host: each row is
+# advanced from its timestamps whenever it is read, and only the commands that change something write.
+DEMO = False
+DEMO_FIXTURES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "demo")
+DEMO_RATE = 1_200_000_000  # bytes a second that a demo setup downloads at
+
+
+def demo_enabled():
+  return os.environ.get("STARTDGX_DEMO") == "1" or os.path.exists(os.path.join(config_dir(), "demo", "ENABLED"))
+
+
+def demo_dir():
+  base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+  return os.path.join(base, "startdgx-demo")
+
+
+def demo_now_ms():
+  """The demo's clock; STARTDGX_DEMO_NOW (seconds since the epoch) holds it still, for tests."""
+  return int(float(os.environ.get("STARTDGX_DEMO_NOW") or time.time()) * 1000)
+
+
+def wall():
+  """Makes every way to run a process fail with an Error, so a hole in demo mode can't reach a machine."""
+  def refused(name):
+    def run(*args, **kwargs):
+      raise Error(f"demo mode runs nothing ({name})")
+    return run
+  for name in ("run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"):
+    setattr(subprocess, name, refused(f"subprocess.{name}"))
+  for name in [n for n in dir(os) if n.startswith(("exec", "spawn", "posix_spawn"))] + ["system", "popen", "fork", "forkpty"]:
+    if callable(getattr(os, name, None)):
+      setattr(os, name, refused(f"os.{name}"))
+
+
+def read_fixture(*path):
+  with open(os.path.join(DEMO_FIXTURES, *path)) as f:
+    return json.load(f)
+
+
+def write_json(path, doc):
+  tmp = f"{path}.{os.getpid()}.tmp"
+  with open(tmp, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+  os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def demo_state(write=False):
+  """The demo's machines by short name, each {status, list}; seeded from the fixtures on first use. A machine with
+  no state doesn't answer."""
+  folder = demo_dir()
+  os.makedirs(folder, exist_ok=True)
+  with open(os.path.join(folder, ".lock"), "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    path = os.path.join(folder, "state.json")
+    try:
+      with open(path) as f:
+        state = json.load(f)
+    except FileNotFoundError:
+      state, write = demo_seed(folder), True
+    yield state
+    if write:
+      write_json(path, state)
+
+
+def demo_seed(folder):
+  now = demo_now_ms()
+  if not os.path.exists(os.path.join(folder, "hosts.json")):
+    write_json(os.path.join(folder, "hosts.json"), read_fixture("hosts.json"))
+  state = {"hosts": {}}
+  for name in sorted(os.listdir(os.path.join(DEMO_FIXTURES, "hosts"))):
+    status, listing = read_fixture("hosts", name, "status.json"), read_fixture("hosts", name, "list.json")
+    for rid, row in status["models"].items():
+      if row["unit"] == "installing":
+        row["since_ms"] = row["since_ms"] or now
+        row["_progress_ms"] = now
+        row["_then"] = demo_model_row(status, listing, rid)
+      elif row["unit"] in ("activating", "deactivating", "removing"):
+        row["since_ms"] = row["since_ms"] or now
+    state["hosts"][name] = {"status": status, "list": listing}
+  return state
+
+
+def demo_model_row(status, listing, rid):
+  """An installed model's row, as the engine's model_record shapes it, for a recipe in the listing; loading."""
+  r = next(r for r in listing if r["id"] == rid)
+  port = max([row["port"] for row in status["models"].values() if row.get("port")] or [11429]) + 1
+  digest = hashlib.sha256(rid.encode()).hexdigest()
+  return {"error": "", "fits": True, "fit_reason": "", "shared": False, "recipe": rid, "name": r["name"], "vendor": r["vendor"],
+          "runtime": r["runtime"], "image": f"ghcr.io/omacom/{r['runtime']}@sha256:{digest}", "ctx": r["context"],
+          "unit": "activating", "sub_state": "start", "result": "success", "port": port, "endpoint": f"http://127.0.0.1:{port}/v1",
+          "observed": None, "ram_total_gib": status["ram_total_gib"], "since_ms": None, "expected_load_seconds": 6.0,
+          "expected_stop_seconds": 2.0, "expected_remove_seconds": None,
+          "_observed": {"load_seconds": 6.0, "ram_used_gib": round((r.get("memory_gib") or 30) * 0.3, 1), "gpu_used_gib": 0.0}}
+
+
+def demo_advance(row, now):
+  """The row as it is at `now`: a download grows, then loads; a load, stop or removal ends once its time is up."""
+  row = json.loads(json.dumps(row))
+  if row["unit"] == "installing" and row["install"]["phase"] == "downloading":
+    install, since = row["install"], row.get("_progress_ms", now)
+    left = install["total_bytes"] - install["done_bytes"]
+    if install["rate_bytes_s"] * (now - since) // 1000 < left:
+      install["done_bytes"] += install["rate_bytes_s"] * (now - since) // 1000
+      row["_progress_ms"] = now
+      return row
+    row = {**row["_then"], "since_ms": since + left * 1000 // max(install["rate_bytes_s"], 1)}
+  elapsed = now - (row.get("since_ms") or now)
+  if row["unit"] == "activating" and elapsed >= row["expected_load_seconds"] * 1000:
+    row.update(unit="active", sub_state="running", since_ms=None, observed=row.get("observed") or row.get("_observed"))
+  elif row["unit"] == "deactivating" and elapsed >= (row["expected_stop_seconds"] or 2) * 1000:
+    row.update(unit="inactive", sub_state="dead", since_ms=None)
+  elif row["unit"] == "removing" and elapsed >= (row["expected_remove_seconds"] or 3) * 1000:
+    return None
+  return row
+
+
+def demo_host(state, host):
+  """The added host's state, advanced to now; one without state doesn't answer, as an unreachable host doesn't."""
+  machine = state["hosts"].get(target(host).rsplit("@", 1)[-1])
+  if machine is None:
+    raise Error(f"{host} didn't answer in time")
+  now = demo_now_ms()
+  machine["status"]["models"] = {rid: row for rid, row in ((rid, demo_advance(row, now)) for rid, row in machine["status"]["models"].items())
+                                 if row is not None}
+  return machine
+
+
+def public(row):
+  return {key: value for key, value in row.items() if not key.startswith("_")}
+
+
+def demo_status(args):
+  with demo_state() as state:
+    status = demo_host(state, args.host)["status"]
+  print(json.dumps({**status, "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
+
+
+def demo_list(args):
+  with demo_state() as state:
+    machine = demo_host(state, args.host)
+  models = machine["status"]["models"]
+  print(json.dumps([{**r, "installed": r["id"] in models and models[r["id"]]["unit"] != "installing",
+                     "active": models.get(r["id"], {}).get("unit") == "active"} for r in machine["list"]], indent=2))
+
+
+def demo_set_up(models, rid):
+  row = models.get(recipe(rid))
+  if row is None or row["unit"] == "installing":
+    raise Error(f"{rid} isn't set up. Run: omarchy agent local use {rid}")
+  return row
+
+
+def demo_start(args):
+  with demo_state(write=True) as state:
+    status = demo_host(state, args.host)["status"]
+    row = demo_set_up(status["models"], args.model)
+    if row["unit"] in ("deactivating", "removing"):
+      raise Error(f"{args.model} is {'stopping' if row['unit'] == 'deactivating' else 'being removed'}")
+    if row["unit"] not in ("active", "activating"):
+      if row["fits"] is False:
+        raise Error(f"Not enough memory to start model {args.model}: stop another model first")
+      row.update(unit="activating", sub_state="start", result="success", error="", since_ms=demo_now_ms())
+    status["last"] = args.model
+  print(f"Started {args.model} at {row['endpoint']}")
+
+
+def demo_stop(args):
+  with demo_state(write=True) as state:
+    models = demo_host(state, args.host)["status"]["models"]
+    if args.model:
+      demo_set_up(models, args.model)
+    targets = [args.model] if args.model else [rid for rid, row in models.items() if row["unit"] in ("active", "activating")]
+    for rid in targets:
+      if models[rid]["unit"] in ("active", "activating"):
+        models[rid].update(unit="deactivating", sub_state="stop-sigterm", since_ms=demo_now_ms())
+  print(f"Stopped {', '.join(targets)}" if targets else "No local model is running")
+
+
+def demo_use(args):
+  rid = recipe(args.model)
+  unit = f"omarchy-agent-local-use-{rid}.service"
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    status, models = machine["status"], machine["status"]["models"]
+    r = next((r for r in machine["list"] if r["id"] == rid), None)
+    if r is None:
+      raise Error(f"No recipe {rid} in the catalog")
+    if models.get(rid, {}).get("unit") == "installing":
+      print(f"{rid} is already being set up; follow it with: journalctl --user -u {unit} -f")
+      return
+    if rid in models:
+      raise Error(f"{rid} is already set up: start it with startdgx start {args.host} {rid}")
+    if not r["available"]:
+      raise Error(r["reason"] or f"{rid} can't run on {args.host}")
+    now = demo_now_ms()
+    models[rid] = {"error": "", "fits": True, "fit_reason": "", "recipe": rid, "name": r["name"], "vendor": r["vendor"], "runtime": "",
+                   "image": "", "ctx": None, "unit": "installing", "sub_state": "", "result": "", "port": None, "endpoint": "",
+                   "observed": None, "since_ms": now, "expected_load_seconds": 6.0, "expected_stop_seconds": None,
+                   "expected_remove_seconds": None,
+                   "install": {"phase": "downloading", "done_bytes": 0, "total_bytes": int((r.get("memory_gib") or 30) * 2**29),
+                               "rate_bytes_s": DEMO_RATE},
+                   "_progress_ms": now, "_then": demo_model_row(status, machine["list"], rid)}
+  print(f"Setting up {rid} in the background; the agents panel shows its progress, or follow it with: journalctl --user -u {unit} -f")
+
+
+def demo_delete(args):
+  with demo_state(write=True) as state:
+    models = demo_host(state, args.host)["status"]["models"]
+    if models.get(recipe(args.model), {}).get("unit") == "installing":
+      del models[args.model]
+      print(f"Cancelled the setup of {args.model}")
+      return
+    demo_set_up(models, args.model).update(unit="removing", sub_state="dead", since_ms=demo_now_ms(), expected_remove_seconds=3.0)
+  print(f"Removed {args.model}")
+
+
+def demo_peers(user):
+  added = set(load_hosts())
+  return [{**p, "target": f"{user}@{p['name']}", "added": f"{user}@{p['name']}" in added} for p in read_fixture("discover.json")]
+
+
+def demo_add(args):
+  name = ssh_target(args.host).rsplit("@", 1)[-1]
+  with demo_state() as state:
+    known = name in state["hosts"]
+  if not known:
+    peer = next((p for p in read_fixture("discover.json") if p["name"] == name and p["reachable"]), None)
+    raise Error(f"{args.host} has no engine: run startdgx install {args.host}" if peer else f"{args.host} didn't answer in time")
+  hosts = load_hosts()
+  hosts[args.host] = {"profile": next(iter(read_fixture("hosts.json").values()))["profile"]}
+  save_hosts(hosts)
+  print(f"{args.host} added")
+
+
+def demo_says(verb):
+  def run(args):
+    print(f"Demo: would {verb} {ssh_target(args.host)}{' (dry run)' if getattr(args, 'dry_run', False) else ''}")
+  return run
+
+
+def demo_logs(args):
+  with demo_state() as state:
+    status = demo_host(state, args.host)["status"]
+  rid = recipe(args.model) if args.model else status["last"]
+  error = status["models"].get(rid or "", {}).get("error")
+  print(f"Last error: {error}\n" if error else "", end="")
+  print(f"Demo: {rid or 'no model'} on {args.host} has no logs")
+
+
+DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "use": demo_use, "delete": demo_delete,
+                 "add": demo_add, "install": demo_says("install on"), "uninstall": demo_says("uninstall from"), "logs": demo_logs}
+
+
 def build_parser():
   p = argparse.ArgumentParser(prog="startdgx", description=__doc__)
   sub = p.add_subparsers(dest="command", required=True)
 
-  def add(name, fn, model=False, optional_model=False, timeout=60, description=None):
+  def add(name, fn, model=False, optional_model=False, timeout=60, description=None, timeout_help="%(default)s"):
     s = sub.add_parser(name, description=description)
     if name not in ("hosts", "engine"):
       s.add_argument("host")
@@ -859,7 +1159,7 @@ def build_parser():
       s.add_argument("model")
     if optional_model:
       s.add_argument("model", nargs="?")
-    s.add_argument("--timeout", type=int, default=timeout)
+    s.add_argument("--timeout", type=int, default=timeout, help=f"seconds to wait for the host (default: {timeout_help})")
     s.set_defaults(fn=fn)
     return s
 
@@ -887,16 +1187,33 @@ def build_parser():
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)
   add("status", cmd_status)
   add("list", cmd_list)
-  add("start", cmd_start, model=True)
+  # start returns once the model has loaded, which can take minutes.
+  add("start", cmd_start, model=True, timeout=600)
   add("stop", cmd_stop, optional_model=True)
-  add("use", cmd_use, model=True, timeout=3600)
+  us = add("use", cmd_use, model=True, timeout=None, timeout_help="3600, or 120 with --detach")
+  us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
   add("delete", cmd_delete, model=True)
+  add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
+  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
+                      "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
+  la.add_argument("verb", metavar="install|uninstall|logs")
+  la.add_argument("host")
+  la.add_argument("model", nargs="?")
+  la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")
+  la.set_defaults(fn=cmd_launch)
   return p
 
 
 def main(argv):
+  global DEMO
   args = build_parser().parse_args(argv)
   try:
+    if demo_enabled():
+      DEMO = True
+      wall()
+      with demo_state():
+        pass
+      args.fn = DEMO_COMMANDS.get(args.command, args.fn)
     args.fn(args)
   except Error as error:
     print(f"Error: {error}", file=sys.stderr)

@@ -1,0 +1,62 @@
+[
+  {
+    "name": "spark-a",
+    "target": "demo@spark-a",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": true,
+    "engine": true,
+    "added": false
+  },
+  {
+    "name": "spark-b",
+    "target": "demo@spark-b",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": true,
+    "engine": true,
+    "added": false
+  },
+  {
+    "name": "spark-c",
+    "target": "demo@spark-c",
+    "reachable": false,
+    "reason": "ssh: connect to host spark-c port 22: Connection timed out",
+    "spark": null,
+    "installed": null,
+    "engine": null,
+    "added": false
+  },
+  {
+    "name": "spark-d",
+    "target": "demo@spark-d",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": true,
+    "engine": true,
+    "added": false
+  },
+  {
+    "name": "spark-e",
+    "target": "demo@spark-e",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": false,
+    "engine": false,
+    "added": false
+  },
+  {
+    "name": "workstation",
+    "target": "demo@workstation",
+    "reachable": true,
+    "reason": null,
+    "spark": false,
+    "installed": false,
+    "engine": false,
+    "added": false
+  }
+]

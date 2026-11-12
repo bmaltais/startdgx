@@ -30,6 +30,11 @@ case "$cmd" in
   *"cat > "*manifest*) mkdir -p "${FAKE_MANIFEST%/*}"; cat >"$FAKE_MANIFEST";;
   *"cat "*manifest.json*) cat "$FAKE_MANIFEST" 2>/dev/null; true;;
   *"profile"*) echo '{"ram_class":128,"gpus":[]}';;
+  *"start slow-load"*) sleep 2; echo "Started slow-load";;
+  # The engine's detach_use: it starts one setup unit per model and says so, or that it's already running.
+  *" use "*" --detach") rid=${cmd% --detach}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
+    if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
+    else : >"$FAKE_HOST.use-$rid"; echo "Setting up $rid in the background; follow it with: journalctl"; fi;;
   *"status --json"*) echo '{"models":{}}';;
   *"fail"*) echo "Error: boom" >&2; exit 1;;
 esac
@@ -152,6 +157,48 @@ s add -oProxyCommand=x >/dev/null 2>&1; ok $((!$?)) "a host that looks like an s
 : >"$FAKE_LOG"; s add me@dgx:x >/dev/null 2>&1; ok $((!$?)) "a host with a colon is refused"
 s install --dry-run me@spark:x --engine-path /nonexistent >/dev/null 2>&1; ok $((!$?)) "install refuses a host with a colon, which rsync would read as a daemon or path"
 same "$(wc -l <"$FAKE_LOG")" 0; ok $? "a host with a colon never reaches ssh"
+out=$(s start me@dgx slow-load --timeout 1 2>&1); ok $((!$?)) "start gives up after --timeout seconds"
+echo "$out" | grep -qx "Error: me@dgx didn't answer in time"; ok $? "and says the host didn't answer in time"
+s start --help | grep -q 'default: 600'; ok $? "start waits 600 seconds by default, for the model to load"
+out=$(s use --detach me@dgx q-detach); ok $? "use --detach succeeds"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use q-detach --detach$'; ok $? "use --detach asks the engine to set the model up in the background"
+same "$out" "Setting up q-detach in the background; follow it with: journalctl"; ok $? "use --detach prints a single line"
+out=$(s use --detach me@dgx q-detach); ok $? "a second use --detach of the same model succeeds"
+same "$out" "q-detach is already being set up; follow it with: journalctl"; ok $? "and says, in one line, that it's already being set up"
+s use me@dgx q-plain >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use q-plain$'; ok $? "use without --detach waits for the setup"
+s logs me@dgx q-detach >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai logs q-detach$'; ok $? "logs shows a model's logs from the engine"
+s logs me@dgx >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai logs$'; ok $? "logs without a model shows the last one started"
+# launch, against a fake terminal launcher that records how many arguments it got, then each one.
+cat >"$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<'F'
+#!/usr/bin/env bash
+{ echo "$#"; printf '%s\n' "$@"; } >>"$FAKE_LAUNCH"
+F
+chmod +x "$tmp/bin/omarchy-launch-floating-terminal-with-presentation"; export FAKE_LAUNCH=$tmp/launch.log
+cli=$(realpath "$here/bin/startdgx")
+launched() { : >"$FAKE_LAUNCH"; s launch "$@" >/dev/null 2>&1 && cat "$FAKE_LAUNCH"; }
+same "$(launched install me@spark)" "$(printf '1\n%s\n' "$cli install me@spark")"; ok $? "launch install opens a terminal running startdgx install"
+same "$(launched install me@spark --replace-engine)" "$(printf '1\n%s\n' "$cli install me@spark --replace-engine")"; ok $? "launch install --replace-engine passes it on"
+same "$(launched uninstall me@spark)" "$(printf '1\n%s\n' "$cli uninstall me@spark")"; ok $? "launch uninstall opens a terminal running startdgx uninstall"
+same "$(launched logs me@dgx q1)" "$(printf '1\n%s\n' "$cli logs me@dgx q1")"; ok $? "launch logs opens a terminal on a model's logs"
+same "$(launched logs me@dgx)" "$(printf '1\n%s\n' "$cli logs me@dgx")"; ok $? "launch logs without a model shows the last one started"
+for refused in "delete me@dgx q1" "start me@dgx q1" "install me@spark q1" "uninstall me@spark q1" "uninstall me@spark --replace-engine" \
+               "logs me@dgx q1 --replace-engine"; do
+  read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens no terminal: $refused"
+done
+# shellcheck disable=SC2016 # the shell in these names is meant to stay unexpanded
+for host in 'me@x;reboot' '$(reboot)' '-oProxyCommand=x' 'me@x:y' 'me@x y' "me@x'y" 'me@x`id`'; do
+  : >"$FAKE_LAUNCH"; s launch install "$host" >/dev/null 2>&1; ok $((!$?)) "launch refuses the host $host"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens no terminal for it"
+done
+# shellcheck disable=SC2016 # as above
+for model in 'q1;reboot' '$(reboot)' '-q1' 'q1 x' 'q1&' "q'1"; do
+  : >"$FAKE_LAUNCH"; s launch logs me@dgx "$model" >/dev/null 2>&1; ok $((!$?)) "launch refuses the model $model"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens no terminal for it"
+done
+mkdir -p "$tmp/empty"; out=$(PATH=$tmp/empty s launch install me@spark 2>&1); ok $((!$?)) "launch fails without the Omarchy terminal launcher"
+echo "$out" | grep -q '^Error: '; ok $? "and says so in one line"
+s use --help | tr -s ' \n' ' ' | grep -q 'default: 3600, or 120 with --detach'; ok $? "use --detach waits only for the setup to start"
 s forget me@dgx >/dev/null; s hosts --json | grep -q me@dgx; ok $((!$?)) "forget drops the host"
 s engine | grep -Eq '^https://github.com/bmaltais/omarchy-local-ai v[0-9]+\.[0-9]+\.[0-9]+-dgx\.[0-9]+$'; ok $? "engine prints the pinned repo and tag"
 s engine --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["repo"].startswith("https://") and "-dgx." in d["tag"]))'; ok $? "engine --json gives repo and tag"
@@ -540,4 +587,85 @@ d --timeout 2 | grep -q 'gx10-spark.*me@gx10-spark.*spark.*installed'; ok $? "di
 d --timeout 2 | grep -q 'locked-down.*unreachable.*Permission denied'; ok $? "the human output says why a peer is unreachable"
 echo 'not json' >"$DISCO_STATUS"; d >/dev/null 2>&1; ok $((!$?)) "an unreadable tailscale status is an error"
 PATH=$tmp/empty s discover >/dev/null 2>&1; ok $((!$?)) "discover without tailscale is an error"
+# Demo mode: fixtures from demo/, state under $XDG_STATE_HOME/startdgx-demo, and nothing run. Every tool that could
+# reach a machine is a shim here that records its call; the last test fails if demo mode ran any of them.
+mkdir -p "$tmp/demo-bin"; export DEMO_CALLS=$tmp/demo-calls; : >"$DEMO_CALLS"
+cat >"$tmp/demo-stub" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "${0##*/} $*" >>"$DEMO_CALLS"
+F
+for tool in ssh scp sftp rsync sudo tailscale git systemd-run systemctl ssh-copy-id omarchy-launch-floating-terminal-with-presentation; do
+  cp "$tmp/demo-stub" "$tmp/demo-bin/$tool"; chmod +x "$tmp/demo-bin/$tool"
+done
+t0=2000000000 now=$t0
+real_hosts=$(cat "$XDG_CONFIG_HOME/startdgx/hosts.json")
+ds() { STARTDGX_DEMO=1 XDG_STATE_HOME=$tmp/state STARTDGX_DEMO_NOW=$now PATH=$tmp/demo-bin:$PATH "$here/bin/startdgx" "$@"; }
+# dj 'python condition' ARGS: runs ds ARGS and checks its JSON output, d.
+dj() { local cond=$1; shift; ds "$@" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+row() { dj "d['models'].get('$2', {}).get('unit') == '$3'" status "$1"; }
+a=demo@spark-a b=demo@spark-b c=demo@spark-c
+nem=nemotron-3.5-bolt-tensorfold qwen=qwen3.8-27b-tensorfold abl=qwen3.8-27b-abliterated-tensorfold flash=qwen3.8-flash-next-tensorfold
+dj 'sorted(d) == ["demo@spark-a", "demo@spark-b", "demo@spark-c"] and d["demo@spark-a"]["profile"]["platform"] == "aarch64-gb10"' hosts --json
+ok $? "demo hosts --json lists the fixture machines"
+model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
+dj 'sorted(d) == ["best", "last", "link", "models", "ram_total_gib", "share_error"] and all(sorted(m) == sorted('"$model_keys"') for m in d["models"].values())' status $a
+ok $? "demo status has the engine's status and model row keys"
+dj 'd["models"]["'$qwen'"]["unit"] == "active" and d["models"]["'$abl'"]["fits"] is False and d["models"]["'$nem'"]["unit"] == "failed" and d["models"]["'$nem'"]["error"]' status $a
+ok $? "demo spark-a has a running model, one that doesn't fit, and one that failed"
+install_keys='["ctx", "endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "install", "name", "observed", "port", "recipe", "result", "runtime", "since_ms", "sub_state", "unit", "vendor"]'
+dj 'sorted(d["models"]["'$flash'"]) == '"$install_keys"' and sorted(d["models"]["'$flash'"]["install"]) == ["done_bytes", "phase", "rate_bytes_s", "total_bytes"]' status $b
+ok $? "a demo setup in progress has the engine's install row keys"
+dj 'd["models"]["'$flash'"]["install"]["phase"] == "downloading" and round(d["models"]["'$flash'"]["install"]["done_bytes"] / d["models"]["'$flash'"]["install"]["total_bytes"], 2) == 0.4' status $b
+ok $? "demo spark-b is 40% through a download"
+out=$(ds status $c 2>&1); ok $((!$?)) "demo spark-c doesn't answer"
+same "$out" "Error: demo@spark-c didn't answer in time"; ok $? "and says so as an unreachable host does"
+dj 'isinstance(d, list) and {r["id"]: r for r in d}["'$flash'"]["available"] and not {r["id"]: r for r in d}["'$flash'"]["installed"] and {r["id"]: r for r in d}["'$flash'"]["best"] and {r["id"]: r for r in d}["'$qwen'"]["active"]' list $a
+ok $? "demo list is the catalog, with what is installed and running"
+dj 'all(sorted(p) == ["added", "engine", "installed", "name", "reachable", "reason", "spark", "target"] for p in d) and {p["name"]: p for p in d}["spark-a"]["added"] and not {p["name"]: p for p in d}["spark-d"]["added"] and not {p["name"]: p for p in d}["spark-c"]["reachable"]' discover --json
+ok $? "demo discover has discover's keys, and knows which machines are added"
+now=$((t0 + 10)); dj 'd["models"]["'$flash'"]["install"]["done_bytes"] - round(0.4 * d["models"]["'$flash'"]["install"]["total_bytes"]) in range(3110000000, 3130000000)' status $b
+ok $? "a demo download advances with time"
+same "$(cat "$XDG_CONFIG_HOME/startdgx/hosts.json")" "$real_hosts"; ok $? "demo mode leaves the real hosts.json alone"
+
+now=$t0 out=$(ds start $a $nem); ok $? "demo start succeeds"
+same "$out" "Started $nem at http://127.0.0.1:11435/v1"; ok $? "and says where the model is served"
+dj 'd["models"]["'$nem'"]["unit"] == "activating" and d["models"]["'$nem'"]["since_ms"] == '"$t0"'000 and d["last"] == "'$nem'"' status $a; ok $? "a started demo model is loading"
+now=$((t0 + 7)); row $a $nem active; ok $? "and is running once its load time has passed"
+dj '[r for r in d if r["id"] == "'$nem'"][0]["active"]' list $a; ok $? "demo list shows it running"
+out=$(ds stop $a $nem); same "$out" "Stopped $nem"; ok $? "demo stop says what it stopped"
+row $a $nem deactivating; ok $? "a stopped demo model is stopping"
+now=$((t0 + 10)); row $a $nem inactive; ok $? "and stopped once its stop time has passed"
+out=$(ds start $a $abl 2>&1); ok $((!$?)) "demo start refuses a model that doesn't fit"
+echo "$out" | grep -q '^Error: Not enough memory'; ok $? "and says why"
+out=$(ds start $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy agent local use $flash"; ok $? "demo start refuses a model that isn't set up"
+
+out=$(ds use --detach $a $flash); ok $? "demo use --detach succeeds"
+same "$(echo "$out" | wc -l)" 1 && echo "$out" | grep -q "^Setting up $flash in the background"; ok $? "and prints one line"
+dj 'd["models"]["'$flash'"]["unit"] == "installing" and d["models"]["'$flash'"]["install"]["phase"] == "downloading" and d["models"]["'$flash'"]["install"]["done_bytes"] == 0' status $a
+ok $? "a demo setup starts downloading"
+out=$(ds use --detach $a $flash); ok $? "a second demo use of the same model succeeds"
+echo "$out" | grep -q "^$flash is already being set up"; ok $? "and says it is already being set up"
+now=$((t0 + 15)); dj '0 < d["models"]["'$flash'"]["install"]["done_bytes"] < d["models"]["'$flash'"]["install"]["total_bytes"]' status $a; ok $? "the demo setup's download advances"
+dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "a model being set up isn't installed yet"
+now=$((t0 + 3600)); row $a $flash active; ok $? "a finished demo setup loads and runs the model"
+dj '[r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "and the list shows it installed"
+out=$(ds delete $a $flash); ok $? "demo delete succeeds"
+row $a $flash removing; ok $? "a deleted demo model is being removed"
+now=$((t0 + 3700)); dj '"'$flash'" not in d["models"]' status $a; ok $? "and is gone once its removal time has passed"
+dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "the demo list no longer shows it installed"
+now=$((t0 + 20)) out=$(ds delete $b $flash); same "$out" "Cancelled the setup of $flash"; ok $? "deleting a demo setup in progress cancels it"
+dj '"'$flash'" not in d["models"]' status $b; ok $? "and drops its row at once"
+
+ds add demo@spark-d >/dev/null && dj '"demo@spark-d" in d' hosts --json; ok $? "demo add adds a discovered machine"
+dj 'd["models"] == {}' status demo@spark-d; ok $? "and its status works"
+ds add demo@spark-e >/dev/null 2>&1; ok $((!$?)) "demo add refuses a machine without the engine"
+ds forget demo@spark-d >/dev/null && dj '"demo@spark-d" not in d' hosts --json; ok $? "demo forget drops it"
+out=$(ds launch install demo@spark-e); same "$out" "Demo: would run 'install demo@spark-e' in a terminal"; ok $? "demo launch says what it would run"
+ds logs $a $nem >/dev/null; ok $? "demo logs succeeds"
+ds install --dry-run demo@spark-e >/dev/null && ds install demo@spark-e >/dev/null && ds uninstall --dry-run $a >/dev/null && ds uninstall $a >/dev/null
+ok $? "demo install and uninstall only say what they would do"
+ds engine >/dev/null; ds hosts >/dev/null; ds discover >/dev/null; ds list $c >/dev/null 2>&1; ds stop $a >/dev/null
+mkdir -p "$tmp/marker/startdgx/demo"; : >"$tmp/marker/startdgx/demo/ENABLED"
+XDG_CONFIG_HOME=$tmp/marker XDG_STATE_HOME=$tmp/state PATH=$tmp/demo-bin:$PATH s hosts --json | grep -q demo@spark-a; ok $? "the demo marker file turns demo mode on too"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad

@@ -39,6 +39,20 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   Two things are left for you: run `omarchy agent local forget <host>` (the host's tailnet name) on each Omarchy
   machine paired with it, and remove the controller's key from the host's `~/.ssh/authorized_keys` if it shouldn't
   reach it any more.
+- [x] For the panel:
+  - `startdgx use --detach <host> <model>` sets the model up in a transient user unit on the host (the engine's
+    `use --detach`) and returns at once with one line. `status` shows the setup's progress. A second `use` of a model
+    already being set up starts nothing and says so (exit 0). The default `--timeout` is 120 with `--detach`, 3600
+    without; `start` waits 600 by default, since it returns once the model has loaded.
+  - `startdgx logs <host> [model]` shows a model's last error and logs.
+  - `startdgx launch install|uninstall|logs <host> [model] [--replace-engine]` opens a floating Omarchy terminal
+    running that startdgx command, so sudo can ask for a password. The verb is allow-listed, the host and model are
+    checked and shell-quoted, and `--replace-engine` goes only with `install`.
+  - Demo mode (`STARTDGX_DEMO=1`, or the file `~/.config/startdgx/demo/ENABLED`) runs no process at all: every way to
+    run one raises. It serves the fixtures in `demo/` (three machines, one unreachable, plus `discover` peers) and
+    keeps its own state, hosts included, in `$XDG_STATE_HOME/startdgx-demo`. `start`, `stop`, `use` and `delete`
+    change that state, and what they start finishes over time as on a host (a load takes 6 s). Delete that folder
+    to start over. `STARTDGX_DEMO_NOW` (seconds since the epoch) holds the demo's clock still, for tests.
 
 ## Credits
 

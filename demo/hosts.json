@@ -1,0 +1,59 @@
+{
+  "demo@spark-a": {
+    "profile": {
+      "platform": "aarch64-gb10",
+      "ram_gib": 121.62,
+      "ram_class": 128,
+      "gpus": [
+        {
+          "vendor": "nvidia",
+          "family": "nvidia-gb10",
+          "render_node": "",
+          "vram_gib": 0,
+          "gtt_gib": 0,
+          "unified": true,
+          "memory_gib": 121.62,
+          "sysfs": ""
+        }
+      ]
+    }
+  },
+  "demo@spark-b": {
+    "profile": {
+      "platform": "aarch64-gb10",
+      "ram_gib": 121.62,
+      "ram_class": 128,
+      "gpus": [
+        {
+          "vendor": "nvidia",
+          "family": "nvidia-gb10",
+          "render_node": "",
+          "vram_gib": 0,
+          "gtt_gib": 0,
+          "unified": true,
+          "memory_gib": 121.62,
+          "sysfs": ""
+        }
+      ]
+    }
+  },
+  "demo@spark-c": {
+    "profile": {
+      "platform": "aarch64-gb10",
+      "ram_gib": 121.62,
+      "ram_class": 128,
+      "gpus": [
+        {
+          "vendor": "nvidia",
+          "family": "nvidia-gb10",
+          "render_node": "",
+          "vram_gib": 0,
+          "gtt_gib": 0,
+          "unified": true,
+          "memory_gib": 121.62,
+          "sysfs": ""
+        }
+      ]
+    }
+  }
+}
