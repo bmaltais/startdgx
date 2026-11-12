@@ -350,6 +350,11 @@ FAKE_ROOT_FAIL=1 installed 2>/dev/null
 s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall after a failed install succeeds"
 grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link" "$FAKE_MANIFEST"; ok $? "it undoes what the failed install's root script did"
 
+uconf=/etc/systemd/user.conf.d/99-rdma-memlock.conf
+engine_root="mkdir -p \"\$root${uconf%/*}\"; printf '%s\\n' '$rdma' >\"\$root$uconf\""; installed; engine_root=''
+s uninstall me@spark >/dev/null 2>&1; none_of "$r$uconf" && grep -qx 'systemctl --user -M me@ daemon-reexec' "$FAKE_HOST/calls"
+ok $? "removing the user services' memlock default re-executes the user's systemd, to drop it"
+
 # A host whose engine was there before the install, which --replace-engine replaced.
 eng=$h/.local/share/omarchy-local-ai
 replaced() {

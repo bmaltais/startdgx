@@ -626,6 +626,11 @@ def root_plan(manifest, state, args):
                                      f'else echo "  left {path}: it is no longer the one the install wrote"; fi'))
       if path == dropin:
         steps.append((None, f"if [ -d {os.path.dirname(dropin)} ]; then rmdir --ignore-fail-on-non-empty {os.path.dirname(dropin)}; fi"))
+      if path == user_conf:
+        # A running manager keeps the default until it re-reads its config, as the engine's setup made it do.
+        steps.append((f"re-execute {user}'s systemd to drop it", f"if pgrep -u {q(user)} -x systemd >/dev/null; then "
+                                                                 f"systemctl --user -M {q(user + '@')} daemon-reexec || "
+                                                                 f'echo "  couldn\'t: it drops it when it next starts" >&2; fi'))
     elif ("file", path) in changed:
       sha, backup = str(previous_of(changed[("file", path)]).get("sha256")), f"{home}/{BACKUP_DIR}/{BACKUPS[('file', path)]}"
       if SHA_RE.match(sha):
