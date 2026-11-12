@@ -131,6 +131,7 @@ Item {
     core.hfRows = null
     core.hfError = ""
     core.hfAsked = ""
+    if (!core.recipeBusy) core.draftRepo = ""
     root.card = "find"
   }
   function showAddRecipe(host, path) {

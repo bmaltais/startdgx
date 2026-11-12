@@ -901,6 +901,42 @@ function hfMemoryLine(row, ramGib) {
   return (Number(ramGib) || 0) > 0 ? weights + "; this host has " + Math.round(ramGib) + " GiB" : weights
 }
 
+// ---- Draft recipe… on a result -------------------------------------------------------------------------------
+// One action puts a repo on a machine: `recipe draft` writes the file (asked with --host, so an id the machine already has is
+// refused before anything is written), then the Add recipe path (`recipe add`) validates and adds it. Never a fit verdict:
+// the variant is drafted until a measuring run (docs/adr/0001).
+
+// The CLI's arguments to draft `repo` for `host`, the repo after `--`.
+function draftCommand(host, repo) {
+  return ["recipe", "draft", "--host", host, "--json", "--", String(repo)]
+}
+
+// `recipe draft --json`: { id, path, warnings }, or null when it isn't a successful draft. Failures are `Error:` on stderr.
+function parseDraftResult(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || p.ok !== true || typeof p.id !== "string" || p.id === "" || typeof p.path !== "string" || p.path === "") return null
+  if (!Array.isArray(p.warnings)) return null
+  return { id: p.id, path: p.path, warnings: p.warnings.map(String).filter(function (w) { return w !== "" }) }
+}
+
+// What the card says while a step runs: "drafting" (the CLI), "checking" and "adding" (the machine's engine).
+function draftStatus(step, host, repo) {
+  if (step === "drafting") return "Drafting " + repo + "…"
+  if (step === "checking") return "Asking " + hostName(host) + " to check the draft…"
+  if (step === "adding") return "Adding the draft to " + hostName(host) + "…"
+  return ""
+}
+
+// The CLI's failure line for the card, which has no --id to offer: an id clash ends at what the machine has; a draft file left by
+// an earlier try says to delete it.
+function draftErrorText(line) {
+  return String(line).replace(/: pick another id with --id, or delete the file$/, ": delete the file to draft it again").replace(/: pick another id with --id$/, "")
+}
+
+function draftDone(host, id) {
+  return id + " is on " + hostName(host) + ", drafted, not yet fitting. It shows in the model picker; Measure… in Add recipe… replaces its placeholder numbers."
+}
+
 // ---- a query ----------------------------------------------------------------------------------------------
 // One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
 // A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come

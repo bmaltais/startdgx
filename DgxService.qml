@@ -66,6 +66,15 @@ Item {
   property string recipesError: ""
   readonly property bool listing: listQuery.busy
 
+  // Draft recipe… on a search result: the repo being put on recipeHost, the step ("drafting" while the CLI writes the file; the
+  // check and the add are then recipeStep), what went wrong before there was a file, and the draft's warnings. The result of
+  // the check or add is recipeResult, for the id drafted.
+  property string draftRepo: ""
+  property string draftStep: ""
+  property string draftId: ""
+  property string draftError: ""
+  property var draftWarnings: []
+
   // The Find on Hugging Face card (`hf search --json`, run on this computer): the rows of the last search, why it failed, and the query
   // it was asked ("" before the first). A search touches no machine.
   property var hfRows: null
@@ -94,7 +103,7 @@ Item {
   property string recipeRemoveError: ""
   // A write (an add or a removal) is running: the card waits, and nothing kills it.
   readonly property bool recipeWriting: recipeAddProc.running || recipeRemoveProc.running
-  readonly property bool recipeBusy: service.recipeStep !== "" || service.recipeWriting || service.recipeMeasuring !== "" || service.recipeConfirming !== ""
+  readonly property bool recipeBusy: service.draftStep !== "" || service.recipeStep !== "" || service.recipeWriting || service.recipeMeasuring !== "" || service.recipeConfirming !== ""
   // "host/id" of a measure running (minutes, on the machine; nothing ends it) and the id whose numbers are being confirmed.
   property string recipeMeasuring: ""
   property string recipeConfirming: ""
@@ -317,6 +326,22 @@ Item {
     recipeConfirmProc.running = true
   }
 
+  // Drafts `repo` for `host` and adds it through the Add recipe path (check, then add): one action. A write: closing the card
+  // doesn't end it.
+  function draftRecipe(host, repo) {
+    if (service.recipeBusy) return
+    service.draftRepo = repo
+    service.draftId = ""
+    service.draftError = ""
+    service.draftWarnings = []
+    service.recipeHost = host
+    service.recipeResult = null
+    service.recipeError = ""
+    service.draftStep = "drafting"
+    draftProc.command = [service.script].concat(Model.draftCommand(host, repo))
+    draftProc.running = true
+  }
+
   function searchHf(query) {
     service.hfAsked = query.trim()
     service.hfError = ""
@@ -521,6 +546,23 @@ Item {
         recipeAddProc.command = [service.script].concat(Model.recipeSendCommand("add", service.recipeHost, service.recipePathAsked))
         recipeAddProc.running = true
       } else service.finishRecipe(code, out, err, "validate")
+    }
+  }
+
+  Process {
+    id: draftProc
+    stdout: StdioCollector { id: draftOut; waitForEnd: true }
+    stderr: StdioCollector { id: draftErr; waitForEnd: true }
+    onExited: function (code) {
+      const d = code === 0 ? Model.parseDraftResult(draftOut.text) : null
+      service.draftStep = ""
+      if (!d) {
+        service.draftError = code === 0 ? "The draft's answer could not be read" : Model.draftErrorText(Model.errorLine(draftErr.text, "The draft did not run"))
+        return
+      }
+      service.draftId = d.id
+      service.draftWarnings = d.warnings
+      service.checkRecipe(service.recipeHost, d.path, true)
     }
   }
 
