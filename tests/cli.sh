@@ -682,7 +682,8 @@ replaced() {
   installed "engine=$(echo 'old engine' | sha256sum | cut -c1-64)"; before_root='' install_flags=()
   echo 'new engine' >"$eng/agent_local.py"
 }
-replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
+setrecipes() { local d=$h/.local/state/omarchy/agent-local; mkdir -p "$d/recipes"; echo 'name = "m"' >"$d/recipes/mine.toml"; echo '{}' >"$d/recipes-confirmed.json"; }
+replaced; setrecipes; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
 s uninstall --dry-run --json --delete-recipes me@spark | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["recipes"] == 0 and not any("recipes" in x for x in d["steps"] + d["kept"])))'
@@ -703,7 +704,6 @@ present "$FAKE_MANIFEST" && same "$(cat "$eng/agent_local.py")" 'new engine'; ok
 
 # Recipes of yours live in the engine's state dir, which uninstall deletes: they are kept unless --delete-recipes says
 # otherwise, and the install manifest records nothing for them (they are never created by startdgx).
-setrecipes() { local d=$h/.local/state/omarchy/agent-local; mkdir -p "$d/recipes"; echo 'name = "m"' >"$d/recipes/mine.toml"; echo '{}' >"$d/recipes-confirmed.json"; }
 installed; setrecipes
 m 'not any("recipes" in str(i) for i in d["items"])'; ok $? "the install manifest records nothing for the recipe folder"
 cond='d["recipes"] == 1 and any("keep" in k and "your recipes" in k and "--delete-recipes" in k for k in d["kept"]) and any("except your recipes" in st for st in d["steps"])'
