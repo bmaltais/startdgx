@@ -28,7 +28,7 @@ import tomllib
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
-ENGINE_TAG = "v0.6.3-dgx.2"
+ENGINE_TAG = "v0.6.3-dgx.3"
 SERVE_ENABLE_URL = "https://login.tailscale.com/f/serve"
 # No colon, which rsync would read in its destination as host:path, or as a daemon in host::module.
 TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
