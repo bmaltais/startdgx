@@ -81,7 +81,7 @@ FocusScope {
       Layout.fillWidth: true
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
-      text: "Type the path to a .toml recipe. Its name without .toml is the recipe's id. The machine checks it first and adds it only if there is nothing to fix."
+      text: "Type the path to a .toml recipe. Its name without .toml is the recipe's id. Each [[variant]] says where its numbers come from with source = \"estimated\" or \"drafted\": only the machine's Measure writes measured ones. The machine checks the file first and adds it only if there is nothing to fix."
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body

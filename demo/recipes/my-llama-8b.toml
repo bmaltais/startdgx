@@ -1,4 +1,5 @@
-# A recipe of your own, as the demo's engine would accept it.
+# A recipe of your own, as the demo's engine would accept it. Its numbers are estimates: they count once you confirm
+# them, and `measure` replaces them with measured ones (a recipe of yours can't claim measured numbers itself).
 name = "My Llama 8B"
 summary = "Llama 3.1 8B Instruct, for quick drafts."
 runtime = "tensorfold"
@@ -7,10 +8,10 @@ runtime = "tensorfold"
 ctx = 131072
 peak_ram_gib = 24.5
 peak_gpu_gib = 22
-source = "measured"
+source = "estimated"
 
 [[variant]]
 ctx = 32768
 peak_ram_gib = 18
 peak_gpu_gib = 16
-source = "measured"
+source = "estimated"

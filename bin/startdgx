@@ -462,14 +462,15 @@ for folder in ("{ENGINE_DIR}/recipes/", "{ENGINE_STATE}/recipes/"):
     pass
 if recipe is None:
   sys.exit(0)
-# What the person confirmed (the engine's recipes-confirmed.json: recipe id -> "ctx/ram/gpu" keys, numbers as {{:g}}).
+# What the person confirmed (the engine's recipes-confirmed.json: recipe id -> "ctx/ram/gpu" keys, the numbers as the repr of
+# the float, as its variant_key writes them: 0.1 and 0.10 are one number, and 20 is 20.0).
 try:
   with open(os.path.expanduser("~/{ENGINE_STATE}/recipes-confirmed.json")) as handle:
     confirmed = json.load(handle).get(sys.argv[1], [])
 except (OSError, ValueError, AttributeError):
   confirmed = []
 def key(v):
-  return f"{{v['ctx']}}/{{v['peak_ram_gib']:g}}/{{v['peak_gpu_gib']:g}}"
+  return f"{{v['ctx']}}/{{float(v['peak_ram_gib'])!r}}/{{float(v['peak_gpu_gib'])!r}}"
 out = [{{"ctx": v["ctx"], "peak_ram_gib": v["peak_ram_gib"], "peak_gpu_gib": v["peak_gpu_gib"], "source": v.get("source", "measured"),
         "confirmed": v.get("source") == "estimated" and key(v) in confirmed}} for v in recipe.get("variant", [])]
 print(json.dumps(sorted(out, key=lambda v: (-v["ctx"], -v["peak_ram_gib"]))))
@@ -1688,6 +1689,10 @@ def demo_recipe_errors(machine, rid, text):
         errors.append(f"recipes/{rid}: variant {i}: {key} must be a positive number")
     if v.get("source", "measured") not in VARIANT_SOURCES:
       errors.append(f"recipes/{rid}: variant {i}: source must be one of {', '.join(VARIANT_SOURCES)}")
+    elif v.get("source", "measured") == "measured":
+      # The engine's guard: only its measuring run writes measured numbers; a missing source means measured.
+      errors.append(f"recipes/{rid}.variant[{i - 1}].source: a recipe of yours can't claim measured numbers (only `measure` writes them); "
+                    'set source = "estimated" or source = "drafted"')
   return errors
 
 
@@ -1762,6 +1767,7 @@ def demo_recipe_measure(args):
     print(f"Measure {rid} at context {args.ctx} (now a {variant['source']} variant)")
     print(f"  download: {size_text(int(variant['peak_ram_gib'] * 2**29))} to download")
     print(f"  load: {row['name']} on {row['runtime']}, context {args.ctx}; it expects about {variant['peak_ram_gib']:g} GiB RAM and {variant['peak_gpu_gib']:g} GiB GPU")
+    print("  while it runs, every other omarchy agent local command waits for it (the agents panel's start and stop too): typically a few minutes")
     print("  then: restarts the model if it runs, runs the bench (a few minutes), leaves it running, and rewrites this variant")
     if not args.yes:
       print("Nothing was changed. Run again with --yes to do it.")

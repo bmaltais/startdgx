@@ -1045,3 +1045,10 @@ test("recipeSendCommand: the typed path comes after --, so one that starts with 
   assert.deepStrictEqual(M.recipeSendCommand("validate", "me@h1", "-x.toml"), ["recipe", "validate", "me@h1", "--json", "--timeout", "60", "--", "-x.toml"])
   assert.deepStrictEqual(M.recipeSendCommand("add", "me@h1", "  ~/a b.toml "), ["recipe", "add", "me@h1", "--json", "--timeout", "60", "--", "~/a b.toml"])
 })
+
+test("parseMeasurePlan keeps the engine's up-front note that other commands wait for the measure", () => {
+  const note = "while it runs, every other omarchy agent local command waits for it (the agents panel's start and stop too): typically 10 minutes"
+  const plan = M.parseMeasurePlan("Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download\n  " + note + "\n  then: restarts the model\nNothing was changed. Run again with --yes to do it.\n")
+  assert.ok(plan.includes(note))
+  assert.strictEqual(plan.length, 4)
+})

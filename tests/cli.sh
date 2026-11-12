@@ -176,7 +176,8 @@ eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; cat >"$eng/o
 # Error: on stderr, and remove refuses a recipe a model uses, naming the model.
 if [ "$1" = recipe ]; then
   case "$2" in
-    validate) if grep -q BAD "$3"; then printf '%s\n' "recipes/bad: no name" "recipes/bad: no runtime"; exit 1; fi; echo "Recipe $(basename "$3" .toml) is valid";;
+    validate) if grep -q CLAIM "$3"; then printf '%s\n' "recipes/claim.variant[0].source: a recipe of yours can't claim measured numbers (only \`measure\` writes them); set source = \"estimated\" or source = \"drafted\"" "recipes/claim.variant[1].source: a recipe of yours can't claim measured numbers (only \`measure\` writes them); set source = \"estimated\" or source = \"drafted\""; exit 1; fi
+      if grep -q BAD "$3"; then printf '%s\n' "recipes/bad: no name" "recipes/bad: no runtime"; exit 1; fi; echo "Recipe $(basename "$3" .toml) is valid";;
     add) if grep -q BAD "$3"; then printf '%s\n' "Error: recipes/bad: no name" "recipes/bad: no runtime" >&2; exit 1; fi
       cp "$3" "$HOME/added.toml"; basename "$3" >"$HOME/added.name"; echo "Added recipe $(basename "$3" .toml)";;
     remove) if [ "$3" = used ]; then echo "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used" >&2; exit 1; fi; echo "Removed recipe $3";;
@@ -252,6 +253,12 @@ out=$(s recipe validate me@dgx "$rd/bad.toml" 2>&1 >/dev/null); ok $((!$?)) "rec
 same "$out" "$(printf 'recipes/bad: no name\nrecipes/bad: no runtime')"; ok $? "and prints each of the engine's errors on its own line"
 s recipe validate me@dgx "$rd/bad.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d == {"ok": False, "id": "bad", "errors": ["recipes/bad: no name", "recipes/bad: no runtime"], "message": ""}))'
 ok $? "recipe validate --json gives the errors as a list, and exits 0, since the machine answered"
+printf 'CLAIM = 1\n' >"$rd/claim.toml"
+out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
+same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
+printf 'CLAIM = 1\n' >"$rd/claim.toml"
+out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
+same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
 rm -f "$FAKE_HOST/home/added.toml"
 s recipe validate me@dgx "$rd/mine.toml" >/dev/null; none_of "$FAKE_HOST/home/added.toml"; ok $? "validating changes nothing on the host"
 out=$(s recipe add me@dgx "$rd/mine.toml"); same "$out" "Added recipe mine"; ok $? "recipe add installs it under its id"
@@ -305,7 +312,7 @@ cat >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes/ur.toml" <<'F'
 name = "UR"
 [[variant]]
 ctx = 32768
-peak_ram_gib = 20
+peak_ram_gib = 12.3456781
 peak_gpu_gib = 18
 source = "estimated"
 [[variant]]
@@ -316,9 +323,9 @@ source = "drafted"
 F
 s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source']) for v in d] == [(65536, 'drafted'), (32768, 'estimated')]))"
 ok $? "variants reads a recipe of yours from the engine's state dir, with each variant's source"
-echo '{"ur": ["32768/20/18"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
+echo '{"ur": ["32768/12.3456781/18.0"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source'], v['confirmed']) for v in d] == [(65536, 'drafted', False), (32768, 'estimated', True)]))"
-ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers)"
+ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers, written as the float's repr: 12.3456781 and 18.0)"
 rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes" "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
@@ -984,14 +991,19 @@ dj 'd["ok"] is False and len(d["errors"]) >= 3 and d["id"] == "broken-recipe"' r
 mkdir -p "$tmp/clash"; cp "$rdir/$llama.toml" "$tmp/clash/$nem.toml"
 out=$(ds recipe validate $a "$tmp/clash/$nem.toml" --json); echo "$out" | grep -q "clashes with the curated recipe '$nem'"; ok $? "an id equal to a curated recipe's is rejected, naming it"
 out=$(ds recipe add $a "$rdir/$llama.toml"); same "$out" "Added recipe $llama"; ok $? "demo recipe add adds it"
-dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True and {r["id"]: r for r in d}["'$llama'"]["source"] == "measured" and {r["id"]: r for r in d}["'$llama'"]["available"] and not {r["id"]: r for r in d}["'$nem'"]["user"]' recipe list $a --json
-ok $? "recipe list --json marks it user, measured and available, and a curated recipe not user"
+dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True and {r["id"]: r for r in d}["'$llama'"]["source"] == "estimated" and not {r["id"]: r for r in d}["'$llama'"]["available"] and not {r["id"]: r for r in d}["'$nem'"]["user"]' recipe list $a --json
+ok $? "recipe list --json marks it user and estimated, not yet fitting, and a curated recipe not user"
+ds recipe confirm $a $llama >/dev/null; dj '{r["id"]: r for r in d}["'$llama'"]["available"]' recipe list $a --json; ok $? "and available once confirmed"
 dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True' list $a; ok $? "so does the machine's list, which the model picker reads"
 ds recipe add $a "$rdir/$draft.toml" >/dev/null; ok $? "demo recipe add adds a drafted recipe"
 dj '{r["id"]: r for r in d}["'$draft'"]["source"] == "drafted" and not {r["id"]: r for r in d}["'$draft'"]["available"] and {r["id"]: r for r in d}["'$draft'"]["reason"]' list $a
 ok $? "which is not available, and says why"
 ds recipe add $a "$rdir/broken-recipe.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe add refuses a broken one"
-dj '[(v["ctx"], v["source"]) for v in d] == [(131072, "measured"), (32768, "measured")]' variants $a $llama --json; ok $? "demo variants reads a user recipe's own variants, with their sources"
+printf 'name = "Claim"\nsummary = "s"\nruntime = "tensorfold"\n[[variant]]\nctx = 1024\npeak_ram_gib = 1\npeak_gpu_gib = 1\nsource = "measured"\n[[variant]]\nctx = 2048\npeak_ram_gib = 2\npeak_gpu_gib = 2\n' >"$tmp/claim.toml"
+out=$(ds recipe validate $a "$tmp/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "the demo engine rejects a variant of yours that claims measured numbers, or has no source"
+same "$(echo "$out" | grep -c "can't claim measured numbers")" 2; ok $? "one line for each such variant"
+echo "$out" | grep -q 'variant\[1\].source.*estimated.*drafted'; ok $? "saying to set estimated or drafted"
+dj '[(v["ctx"], v["source"]) for v in d] == [(131072, "estimated"), (32768, "estimated")]' variants $a $llama --json; ok $? "demo variants reads a user recipe's own variants, with their sources"
 dj '[v["source"] for v in d] == ["drafted"]' variants $a $draft --json; ok $? "and a drafted one's"
 dj 'all(v["source"] == "measured" for v in d)' variants $a $qwen --json; ok $? "a curated recipe's are measured"
 ds recipe validate $c "$rdir/$llama.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe validate on a machine that doesn't answer fails"

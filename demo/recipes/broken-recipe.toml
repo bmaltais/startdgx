@@ -6,3 +6,8 @@ runtime = "no-such-runtime"
 ctx = 0
 peak_ram_gib = 10
 source = "guessed"
+
+[[variant]]
+ctx = 32768
+peak_ram_gib = 8
+peak_gpu_gib = 7
