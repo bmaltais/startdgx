@@ -10,7 +10,27 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
 - [ ] Omarchy plugin: manager window and bar widget, reusing the model controls of the `agents` plugin
 - [ ] Discovery of Sparks on the tailnet (GB10 / DGX OS signature over SSH)
-- [ ] Install of the pinned fork tag with a manifest of what it changed; `uninstall` that reverses it
+- [x] `startdgx install [--dry-run] [--engine-path DIR] [--replace-engine] <host>`: installs the pinned fork tag
+  (`startdgx engine`) with the engine's own host setup (one `sudo` on the host, which asks for its password at your
+  terminal), and records what was there before and what it changed in `~/.local/share/startdgx/manifest.json` on the
+  host. The root files it may overwrite are backed up first. It refuses a host that already has an engine it didn't
+  install unless `--replace-engine` is given, which backs that engine up for uninstall to put back. A failed install
+  still records what it changed, so an uninstall can undo it.
+- [x] `startdgx uninstall [--dry-run] [--delete-models] [--remove-packages] <host>`: reverses the install from its
+  manifest. It stops sharing and stops the engine's units, then removes only the `/local-ai` tailscale serve routes,
+  the engine's quadlets, network, secret and images (an image a container still uses stays), its state and config,
+  and finally the engine. Then, in one `sudo`, it reverts only what the install changed: what it created goes, files
+  it overwrote are restored from their backups, and linger and the agent link go back to how they were. Model
+  weights are kept by default (`--delete-models` deletes them), and the uninstall says how much they take. Packages
+  the install added stay unless `--remove-packages` is given, which never removes `python3` and refuses if apt would
+  remove anything else with them. Where the engine was there before the install, the uninstall leaves everything it
+  set up under the home, puts the old engine back and only reverts the root changes. If a step fails, or a backup
+  to restore is missing or changed, the uninstall stops short of deleting the manifest and backups, so running it
+  again picks up where it stopped.
+
+  Two things are left for you: run `omarchy agent local forget <host>` (the host's tailnet name) on each Omarchy
+  machine paired with it, and remove the controller's key from the host's `~/.ssh/authorized_keys` if it shouldn't
+  reach it any more.
 
 ## Credits
 

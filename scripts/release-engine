@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Tags a fork checkout of omarchy-local-ai as an engine release. Never pushes.
+# Usage: release-engine <vX.Y.Z-dgx.N> [fork-path]
+set -eu
+tag=${1:?usage: release-engine <vX.Y.Z-dgx.N> [fork-path]}
+fork=${2:-$HOME/StartFS/github/omarchy-local-ai}
+die() { echo "release-engine: $*" >&2; exit 1; }
+
+[[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dgx\.[0-9]+$ ]] || die "$tag isn't of the form vX.Y.Z-dgx.N"
+cd "$fork"
+[ -z "$(git status --porcelain)" ] || die "the checkout has uncommitted changes"
+git fetch -q origin || die "can't fetch origin"
+git merge-base --is-ancestor origin/master HEAD || die "origin/master isn't merged into HEAD"
+tests/engine-test.sh || die "tests/engine-test.sh failed"
+git tag "$tag"
+echo "Tagged $tag at $(git rev-parse "$tag^{commit}"). To publish it:"
+echo "  cd $fork && git push fork $tag"
