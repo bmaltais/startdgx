@@ -448,3 +448,92 @@ test("meter: a setup still waiting has an empty bar that says so, and no speed y
   assert.deepStrictEqual(M.meter(row({ unit: "installing", install: { phase: "waiting", done_bytes: 0, total_bytes: 0, rate_bytes_s: 1.2e9 } }), 0),
     { label: "Waiting", fraction: 0, value: "" })
 })
+
+// ---- a machine's two command slots: a start, and anything else ----
+
+const act = (op, kind, id) => ({ op: op, key: "h1/" + (id || "a"), kind: kind, shows: kind })
+// Submit, then launch what can run, as the poller does after each click.
+const click = (q, action, entry) => {
+  const s = M.submit(q, action, entry || row({ recipe: "a", unit: "inactive" }))
+  const l = M.launch(s.queue)
+  return { queue: l.queue, run: l.run, dropped: s.dropped }
+}
+
+test("a stop runs beside a start that is still loading, and supersedes it", () => {
+  let r = click(M.newQueue(), act(1, "start"))
+  assert.deepStrictEqual(r.run.map((a) => a.kind), ["start"])
+  r = click(r.queue, act(2, "stop"), row({ recipe: "a", unit: "activating" }))
+  assert.deepStrictEqual(r.run.map((a) => a.kind), ["stop"], "the stop does not wait for the start to return")
+  assert.strictEqual(r.queue.starting.superseded, true, "the start's exit is then not a failure to report")
+  assert.deepStrictEqual(M.marks(r.queue, {}), { "h1/a": "stop" }, "Stopping shows once the stop runs")
+})
+
+test("a stop waiting behind another command shows as queued, not as Stopping", () => {
+  let r = click(M.newQueue(), act(1, "delete", "b"))
+  r = click(r.queue, act(2, "stop"), row({ recipe: "a", unit: "active" }))
+  assert.deepStrictEqual(r.run, [])
+  assert.deepStrictEqual(M.marks(r.queue, {}), { "h1/b": "delete", "h1/a": "queued stop" })
+  assert.deepStrictEqual(M.modelState(row({ unit: "active" }), "queued stop"), { kind: "running", text: "Running · stop queued" })
+  assert.strictEqual(M.toggleAction(row({ unit: "active" }), "queued stop"), null, "no second stop")
+  assert.strictEqual(M.removeAction(row({ unit: "active" }), "queued stop"), null)
+  assert.deepStrictEqual(M.meter(row({ unit: "active" }), 0, "queued stop").label, "Memory", "the bar is the machine's")
+})
+
+test("a stop of a start still waiting its turn takes it back, and sends nothing", () => {
+  let r = click(M.newQueue(), act(1, "start", "b"))
+  r = click(r.queue, act(2, "start"))
+  assert.deepStrictEqual(M.marks(r.queue, {}), { "h1/b": "start", "h1/a": "queued start" })
+  assert.deepStrictEqual(M.modelState(row({ unit: "inactive" }), "queued start"), { kind: "stopped", text: "Stopped · start queued" })
+  assert.strictEqual(M.toggleAction(row({ unit: "inactive" }), "queued start"), "stop", "a queued start can be taken back")
+  r = click(r.queue, act(3, "stop"), row({ recipe: "a", unit: "inactive" }))
+  assert.deepStrictEqual(r.dropped.map((a) => a.op), [2])
+  assert.deepStrictEqual(r.run, [])
+  assert.deepStrictEqual(M.marks(r.queue, {}), { "h1/b": "start" })
+})
+
+test("a removal of a model that is loading stops it first: the engine's remove waits on the lock its start holds", () => {
+  let r = click(M.newQueue(), act(1, "start"))
+  r = click(r.queue, act(2, "delete"), row({ recipe: "a", unit: "activating" }))
+  assert.deepStrictEqual(r.run.map((a) => [a.kind, a.shows]), [["stop", "delete"]])
+  assert.strictEqual(r.queue.starting.superseded, true)
+  assert.deepStrictEqual(r.queue.others.map((a) => a.kind), ["delete"])
+  assert.deepStrictEqual(M.marks(r.queue, {}), { "h1/a": "delete" }, "Removing, from the stop on")
+  const f = M.finish(r.queue, "other")
+  assert.strictEqual(f.action.kind, "stop")
+  assert.deepStrictEqual(M.launch(f.queue).run.map((a) => a.kind), ["delete"])
+})
+
+test("starts take turns on their own slot; set up and removal on the other", () => {
+  let r = click(M.newQueue(), act(1, "start", "b"))
+  r = click(r.queue, act(2, "use", "c"))
+  assert.deepStrictEqual(r.run.map((a) => a.kind), ["use"], "a setup is not held up by a load")
+  r = click(r.queue, act(3, "start", "d"))
+  assert.deepStrictEqual(r.run, [], "one start at a time")
+  let f = M.finish(r.queue, "start")
+  assert.strictEqual(f.action.key, "h1/b")
+  assert.deepStrictEqual(M.launch(f.queue).run.map((a) => a.key), ["h1/d"])
+  f = M.finish(M.newQueue(), "start")
+  assert.strictEqual(f.action, null, "nothing running, nothing finished")
+})
+
+test("a start asked for while that model is being stopped or removed is dropped", () => {
+  let r = click(M.newQueue(), act(1, "stop"), row({ recipe: "a", unit: "active" }))
+  r = click(r.queue, act(2, "start"))
+  assert.deepStrictEqual(r.dropped.map((a) => a.op), [2])
+  assert.deepStrictEqual(r.run, [])
+})
+
+test("marks: what a click shows until the machine's next answer after it", () => {
+  const q = M.newQueue()
+  assert.deepStrictEqual(M.marks(q, { "h1/a": { shows: "stop", op: 4 } }), { "h1/a": "stop" }, "a finished stop shows until the status after it")
+  const done = { "h1/a": { shows: "stop", op: 4 }, "h1/b": { shows: "start", op: 5 } }
+  assert.deepStrictEqual(M.settle(done, [{ key: "h1/a", op: 4 }, { key: "h1/b", op: 3 }]), { "h1/b": { shows: "start", op: 5 } }, "an older action's answer leaves a newer click's mark")
+})
+
+test("commandFor: each action's startdgx command and how long it may take", () => {
+  assert.deepStrictEqual(M.commandFor("me@h1", act(1, "start")), ["start", "me@h1", "a", "--timeout", "900"])
+  assert.deepStrictEqual(M.commandFor("me@h1", act(1, "stop")), ["stop", "me@h1", "a", "--timeout", "120"])
+  assert.deepStrictEqual(M.commandFor("me@h1", act(1, "use")), ["use", "--detach", "me@h1", "a", "--timeout", "120"])
+  // A removal may first wait for a start ahead of it that holds the engine's lock (900 s), then remove.
+  assert.deepStrictEqual(M.commandFor("me@h1", act(1, "delete")), ["delete", "me@h1", "a", "--timeout", "1500"])
+})

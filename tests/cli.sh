@@ -694,6 +694,18 @@ ds logs $a $nem >/dev/null; ok $? "demo logs succeeds"
 ds install --dry-run demo@spark-e >/dev/null && ds install demo@spark-e >/dev/null && ds uninstall --dry-run $a >/dev/null && ds uninstall $a >/dev/null
 ok $? "demo install and uninstall only say what they would do"
 ds engine >/dev/null; ds hosts >/dev/null; ds discover >/dev/null; ds list $c >/dev/null 2>&1; ds stop $a >/dev/null
+# A demo start returns only once its model has loaded, as the engine's does, on the real clock (a held one never
+# moves, so the tests above return at once).
+rs() { STARTDGX_DEMO=1 XDG_STATE_HOME=$tmp/state-real PATH=$tmp/demo-bin:$PATH "$here/bin/startdgx" "$@"; }
+out=$(rs start $a $nem --timeout 1 2>&1); ok $((!$?)) "a demo start waits for its model to load, and gives up after --timeout"
+same "$out" "Error: $a didn't answer in time"; ok $? "and says the machine didn't answer in time"
+began=$SECONDS; out=$(rs start $a $nem --timeout 20); ok $? "a demo start returns once its model has loaded"
+same "$out" "Started $nem at http://127.0.0.1:11435/v1" && [ $((SECONDS - began)) -ge 3 ]; ok $? "after its load time, not at once"
+rs status $a | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["models"]["'$nem'"]["unit"] != "active")'; ok $? "and the model then runs"
+rs start $b $nem --timeout 20 >"$tmp/start-out" 2>&1 & starter=$!
+sleep 1; rs stop $b $nem >/dev/null; ok $? "a demo stop runs while that model's start waits for it to load"
+wait $starter; ok $((!$?)) "the start it stopped then fails, as the engine's does"
+grep -q "^Error: $nem didn't start" "$tmp/start-out"; ok $? "and says it didn't start"
 mkdir -p "$tmp/marker/startdgx/demo"; : >"$tmp/marker/startdgx/demo/ENABLED"
 XDG_CONFIG_HOME=$tmp/marker XDG_STATE_HOME=$tmp/state PATH=$tmp/demo-bin:$PATH s hosts --json | grep -q demo@spark-a; ok $? "the demo marker file turns demo mode on too"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"

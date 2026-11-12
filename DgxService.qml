@@ -1,5 +1,5 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
-// machine has its own HostPoller (status poll, and its queue of start, stop, use and delete); the machine list,
+// machine has its own HostPoller (status poll, and its two command slots: a start, and a stop, use or delete); the machine list,
 // adding, forgetting, discovery, a machine's catalog for the model picker, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
@@ -22,7 +22,9 @@ Item {
   readonly property var hostList: Object.keys(service.hosts).sort()
   // target -> { loaded, online, error, status, lastSeenMs }; see DgxModel.
   property var hostState: ({})
-  // "target/model" -> "start" | "stop" | "delete": a click the machine has not answered yet.
+  // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
+  // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
+  property var marks: ({})
   property var pending: ({})
   // "target/model" -> its recipe (from `list`): a model asked to be set up that its machine doesn't list yet.
   property var setups: ({})
@@ -96,16 +98,15 @@ Item {
     service.hostState = next
   }
 
-  function setPending(key, kind) {
-    const next = Object.assign({}, service.pending)
-    next[key] = kind
-    service.pending = next
-  }
-  function clearPending(keys) {
-    if (keys.length === 0) return
-    const next = Object.assign({}, service.pending)
-    for (let i = 0; i < keys.length; i++) delete next[keys[i]]
-    service.pending = next
+  function setMarks(host, value) {
+    if (JSON.stringify(service.marks[host] || {}) === JSON.stringify(value)) return
+    const next = Object.assign({}, service.marks)
+    if (Object.keys(value).length) next[host] = value
+    else delete next[host]
+    service.marks = next
+    const flat = ({})
+    for (const h in next) Object.assign(flat, next[h])
+    service.pending = flat
   }
 
   // Tell the desktop about new failures, each once; not while the manager shows them.
@@ -127,19 +128,16 @@ Item {
     return null
   }
 
-  // The row shows the click at once; the machine's next answer after the command replaces it. A start returns
-  // once the model has loaded, which can take minutes, so it gets a long timeout.
-  function start(host, id) {
+  // Each goes to the machine's poller, which runs it on one of its two slots (DgxModel.submit): a start beside
+  // anything else, so a Stop never waits for a load. Its row shows the click once the command runs, and says it is
+  // queued until then; the machine's next answer after the command replaces it.
+  function start(host, id) { service.act(host, "start", id) }
+  function stop(host, id) { service.act(host, "stop", id) }
+  // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its weights.
+  function remove(host, id) { service.act(host, "delete", id) }
+  function act(host, kind, id) {
     const p = service.poller(host)
-    if (!p) return
-    service.setPending(host + "/" + id, "start")
-    p.run(["start", host, id, "--timeout", "900"], host + "/" + id, "start")
-  }
-  function stop(host, id) {
-    const p = service.poller(host)
-    if (!p) return
-    service.setPending(host + "/" + id, "stop")
-    p.run(["stop", host, id, "--timeout", "120"], host + "/" + id, "stop")
+    if (p) p.run(kind, id, service.entry(host, id))
   }
   // A setup runs on the machine in a unit of its own (`use --detach`), so the command returns at once and the
   // status poll follows the download. The model shows, waiting, from the click until the machine lists it.
@@ -149,15 +147,7 @@ Item {
     const next = Object.assign({}, service.setups)
     next[host + "/" + r.id] = r
     service.setups = next
-    p.run(["use", "--detach", host, r.id, "--timeout", "120"], host + "/" + r.id, "use")
-  }
-  // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its
-  // weights, so it gets a long timeout: a killed ssh could leave the removal half done.
-  function remove(host, id) {
-    const p = service.poller(host)
-    if (!p) return
-    service.setPending(host + "/" + id, "delete")
-    p.run(["delete", host, id, "--timeout", "600"], host + "/" + id, "delete")
+    p.run("use", r.id, null)
   }
   // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
   // settled by the next status read, as on success).
@@ -242,6 +232,7 @@ Item {
     const next = ({})
     for (let n = 0; n < want.length; n++) if (service.hostState[want[n]]) next[want[n]] = service.hostState[want[n]]
     service.hostState = next
+    for (const h in service.marks) if (want.indexOf(h) < 0) service.setMarks(h, {})
     const setups = ({})
     for (const key in service.setups) if (want.indexOf(key.substring(0, key.lastIndexOf("/"))) >= 0) setups[key] = service.setups[key]
     service.setups = setups

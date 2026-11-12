@@ -1,6 +1,8 @@
-// One machine's link to bin/startdgx: its status poller and its own action queue, so a machine that doesn't
-// answer (an SSH timeout) or a start that waits minutes for its model to load never holds up another machine.
-// DgxService makes one per added host and keeps what it learns; this file only runs the commands.
+// One machine's link to bin/startdgx: its status poller and its two command slots, each with its queue (see
+// DgxModel's submit): one for a start, which returns only once its model has loaded (minutes), and one for a stop,
+// set up or removal, so a Stop never waits for a load to end; and a machine that doesn't answer (an SSH timeout)
+// never holds up another machine. DgxService makes one per added host and keeps what it learns; this file only
+// runs the commands, and tells the service each model's mark (DgxModel.marks) whenever it changes.
 import QtQuick
 import Quickshell.Io
 import "DgxModel.js" as Model
@@ -13,27 +15,60 @@ Item {
 
   // As drawn, with the setups just asked for: one of those makes the machine busy, so it is polled quickly.
   readonly property var hostState: poller.owner.shownState[poller.host]
-  // Actions waiting for the one that is running: { args, key, kind } (kind: start, stop, use or delete).
-  property var queue: []
-  // Actions that have finished: their pending mark goes once a status read after them arrives
-  // (`settled`, for the poll running now; `waiting`, for one that began before they finished).
+  // The two slots and their queues (DgxModel.newQueue).
+  property var queue: Model.newQueue()
+  property int lastOp: 0
+  // Finished actions whose mark stays until a status read after them: "host/model" -> { shows, op }.
+  property var done: ({})
+  // Finished actions, [{ key, op }], settled by the poll running now (`settled`) or by the next one (`waiting`,
+  // for a poll that began before they finished).
   property var settled: []
   property var waiting: []
 
   function poll() { if (!statusProc.running) statusProc.running = true }
 
-  function run(args, key, kind) {
-    poller.queue = poller.queue.concat([{ args: args, key: key, kind: kind }])
-    poller.runNext()
+  function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
+
+  // A click: kind is start, stop, use or delete; entry the model's row as drawn.
+  function run(kind, id, entry) {
+    poller.lastOp += 1
+    const s = Model.submit(poller.queue, { op: poller.lastOp, key: poller.host + "/" + id, kind: kind, shows: kind }, entry)
+    poller.queue = s.queue
+    poller.launchNext()
   }
-  function runNext() {
-    if (actionProc.running || poller.queue.length === 0) return
-    const next = poller.queue[0]
-    poller.queue = poller.queue.slice(1)
-    actionProc.key = next.key
-    actionProc.kind = next.kind
-    actionProc.command = [poller.owner.script].concat(next.args)
-    actionProc.running = true
+  function launchNext() {
+    const l = Model.launch(poller.queue)
+    poller.queue = l.queue
+    for (let i = 0; i < l.run.length; i++) {
+      const proc = l.run[i] === l.queue.starting ? startProc : otherProc
+      proc.command = [poller.owner.script].concat(Model.commandFor(poller.host, l.run[i]))
+      proc.running = true
+    }
+    poller.publish()
+  }
+  // A slot's command ended. A start a stop or removal superseded says nothing: the machine's next answer shows how
+  // it ended.
+  function ended(slot, code, out, err) {
+    const f = Model.finish(poller.queue, slot)
+    poller.queue = f.queue
+    const a = f.action
+    if (a && !a.superseded) {
+      if (code !== 0) {
+        poller.owner.error = Model.errorLine(err, "The action failed")
+        poller.owner.actionFailed(a.key, a.kind, poller.owner.error)
+      } else poller.owner.notice = Model.lastLine(out)
+      // A removal's own stop leaves its mark to the removal; a setup has its row instead of a mark.
+      if (a.kind === a.shows && a.kind !== "use") {
+        const next = Object.assign({}, poller.done)
+        next[a.key] = { shows: a.shows, op: a.op }
+        poller.done = next
+      }
+      // Read the machine at once so the row moves on; a poll already on its way began too early to settle it.
+      const mark = { key: a.key, op: a.op }
+      if (statusProc.running) poller.waiting = poller.waiting.concat([mark])
+      else { poller.settled = poller.settled.concat([mark]); statusProc.running = true }
+    }
+    poller.launchNext()
   }
 
   Component.onCompleted: poller.poll()
@@ -52,7 +87,7 @@ Item {
     stdout: StdioCollector { id: statusOut; waitForEnd: true }
     stderr: StdioCollector { id: statusErr; waitForEnd: true }
     onExited: function (code) {
-      const done = poller.settled
+      const answered = poller.settled
       poller.settled = poller.waiting
       poller.waiting = []
       if (poller.settled.length > 0) Qt.callLater(poller.poll)
@@ -63,25 +98,22 @@ Item {
       } else {
         poller.owner.statusFailed(poller.host, Model.errorLine(statusErr.text, poller.host + " didn't answer"))
       }
-      poller.owner.clearPending(done)
+      poller.done = Model.settle(poller.done, answered)
+      poller.publish()
     }
   }
 
   Process {
-    id: actionProc
-    property string key: ""
-    property string kind: ""
-    stdout: StdioCollector { id: actionOut; waitForEnd: true }
-    stderr: StdioCollector { id: actionErr; waitForEnd: true }
-    onExited: function (code) {
-      if (code !== 0) {
-        poller.owner.error = Model.errorLine(actionErr.text, "The action failed")
-        poller.owner.actionFailed(actionProc.key, actionProc.kind)
-      } else poller.owner.notice = Model.lastLine(actionOut.text)
-      // Read the machine at once so the row moves on; a poll already on its way began too early to settle it.
-      if (statusProc.running) poller.waiting = poller.waiting.concat([actionProc.key])
-      else { poller.settled = poller.settled.concat([actionProc.key]); statusProc.running = true }
-      poller.runNext()
-    }
+    id: startProc
+    stdout: StdioCollector { id: startOut; waitForEnd: true }
+    stderr: StdioCollector { id: startErr; waitForEnd: true }
+    onExited: function (code) { poller.ended("start", code, startOut.text, startErr.text) }
+  }
+
+  Process {
+    id: otherProc
+    stdout: StdioCollector { id: otherOut; waitForEnd: true }
+    stderr: StdioCollector { id: otherErr; waitForEnd: true }
+    onExited: function (code) { poller.ended("other", code, otherOut.text, otherErr.text) }
   }
 }

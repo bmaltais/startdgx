@@ -1132,7 +1132,27 @@ def demo_start(args):
         raise Error(f"Not enough memory to start model {args.model}: stop another model first")
       row.update(unit="activating", sub_state="start", result="success", error="", since_ms=demo_now_ms())
     status["last"] = args.model
+  demo_wait_loaded(args)
   print(f"Started {args.model} at {row['endpoint']}")
+
+
+def demo_wait_loaded(args):
+  """Returns once the model has loaded, as the engine's start does, with the state unlocked meanwhile so a stop
+  can come; a model that stops loading (a stop) didn't start. A clock held still (STARTDGX_DEMO_NOW) never moves,
+  so then it returns at once."""
+  if os.environ.get("STARTDGX_DEMO_NOW"):
+    return
+  deadline = time.monotonic() + (args.timeout or 600)
+  while True:
+    with demo_state() as state:
+      unit = demo_host(state, args.host)["status"]["models"].get(args.model, {}).get("unit")
+    if unit == "active":
+      return
+    if unit != "activating":
+      raise Error(f"{args.model} didn't start: it stopped while it loaded")
+    if time.monotonic() >= deadline:
+      raise Error(f"{args.host} didn't answer in time")
+    time.sleep(0.2)
 
 
 def demo_stop(args):
