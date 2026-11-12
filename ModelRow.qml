@@ -15,6 +15,7 @@ Rectangle {
 
   property var entry: ({})           // the model's row of the host's status
   property string pending: ""        // "start" or "stop" while a click waits for the host
+  property string sharing: ""        // "share" or "unshare" while that click waits for the host (DgxModel.shareKey)
   property real nowMs: 0             // the manager's clock, for the progress bars
   property bool current: false       // under the keyboard cursor
   property bool away: false          // the machine isn't answering: its last known state, dimmed, no actions
@@ -22,11 +23,14 @@ Rectangle {
   signal toggleRequested()
   signal logsRequested()
   signal removeRequested()
+  signal shareRequested()
   signal selectRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
+  readonly property string share: Model.shareAction(row.entry, row.pending, row.sharing) || ""   // "share", "unshare" or "" (none)
+  readonly property bool shared: row.entry.shared === true
   readonly property bool blocked: Model.startBlocked(row.entry)
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
@@ -131,6 +135,26 @@ Rectangle {
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
           }
+        }
+      }
+
+      // Shares the model with the other machines on the host's tailnet, or stops: the Tailscale mark, lit while shared
+      // and struck through while private. Dimmed while its click waits for the host.
+      Button {
+        id: shareButton
+        Layout.alignment: Qt.AlignVCenter
+        visible: !row.away && (row.share !== "" || row.sharing !== "")
+        implicitWidth: Style.space(16) + horizontalPadding * 2
+        implicitHeight: Style.space(16) + verticalPadding * 2
+        opacity: row.sharing !== "" ? 0.5 : 1
+        tooltipText: row.sharing !== "" ? "Waiting for the machine"
+          : row.shared ? "Shared with the tailnet. Stop sharing  (t)" : "Share with the tailnet  (t)"
+        onClicked: if (row.share !== "") row.shareRequested()
+        TailscaleMark {
+          anchors.centerIn: parent
+          iconSize: Style.space(13)
+          color: row.shared ? Color.accent : Color.muted
+          crossed: !row.shared
         }
       }
 

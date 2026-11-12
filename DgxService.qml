@@ -1,5 +1,5 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
-// machine has its own HostPoller (status poll, and its two command slots: a start, and a stop, use or delete); the machine list,
+// machine has its own HostPoller (status poll, and its three command slots: a start, a share, and a stop, use or delete); the machine list,
 // adding, forgetting, discovery, a machine's catalog for the model picker, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
@@ -136,11 +136,14 @@ Item {
     return null
   }
 
-  // Each goes to the machine's poller, which runs it on one of its two slots (DgxModel.submit): a start beside
+  // Each goes to the machine's poller, which runs it on one of its three slots (DgxModel.submit): a start beside
   // anything else, so a Stop never waits for a load. Its row shows the click once the command runs, and says it is
   // queued until then; the machine's next answer after the command replaces it.
   function start(host, id) { service.act(host, "start", id) }
   function stop(host, id) { service.act(host, "stop", id) }
+  // Shares a model with the host's tailnet, or stops ("share" or "unshare"): a command of its own, with its own mark
+  // (DgxModel.shareKey), so the row keeps showing what the model does.
+  function share(host, id, kind) { service.act(host, kind, id) }
   // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its weights.
   function remove(host, id) { service.act(host, "delete", id) }
   function act(host, kind, id) {

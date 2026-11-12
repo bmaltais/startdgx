@@ -54,7 +54,8 @@ FocusScope {
     return Model.keyAction(key, view.currentRow,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.entry(view.currentRow.host, view.currentRow.id) : null,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.pending[view.cursorKey] || "" : "",
-      view.currentRow ? Model.isAway(view.dgx.shownState[view.currentRow.host]) : false, repeat)
+      view.currentRow ? Model.isAway(view.dgx.shownState[view.currentRow.host]) : false, repeat,
+      view.currentRow && view.currentRow.kind === "model" ? view.dgx.pending[Model.shareKey(view.currentRow.host, view.currentRow.id)] || "" : "")
   }
   // Keeps the row under the cursor in sight.
   function reveal(item) {
