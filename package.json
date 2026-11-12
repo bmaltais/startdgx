@@ -1,0 +1,11 @@
+{
+  "name": "startdgx",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Checks for StartDGX: shellcheck, the command-line tests, Node tests for the manager's pure JS, qmllint and the Omarchy manifest validator.",
+  "scripts": {
+    "test": "node --test tests/js/",
+    "validate": "omarchy plugin validate .",
+    "check": "scripts/check.sh"
+  }
+}
