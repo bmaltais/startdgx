@@ -326,6 +326,16 @@ ok $? "variants reads a recipe of yours from the engine's state dir, with each v
 echo '{"ur": ["32768/12.3456781/18.0"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source'], v['confirmed']) for v in d] == [(65536, 'drafted', False), (32768, 'estimated', True)]))"
 ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers, written as the float's repr: 12.3456781 and 18.0)"
+# Contract with the engine: when a fork checkout is there (STARTDGX_ENGINE, else ~/StartFS/github/omarchy-local-ai), its own variant_key
+# must give the key the fixture above holds, so a change to the engine's key format fails here and not on a host.
+fork_engine=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
+if [ -f "$fork_engine/agent_local.py" ]; then
+  engine_key=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import agent_local as a; print(a.variant_key({"ctx": 32768, "peak_ram_gib": 12.3456781, "peak_gpu_gib": 18}))' "$fork_engine" 2>/dev/null)
+  matches=1; if [ "$engine_key" = "32768/12.3456781/18.0" ]; then matches=0; fi
+  ok $matches "the engine's variant_key gives the key variants reads (a fork checkout is present)"
+else
+  ok 0 "the engine's variant_key contract is skipped: no fork checkout at $fork_engine"
+fi
 rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes" "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
@@ -682,10 +692,10 @@ replaced() {
   installed "engine=$(echo 'old engine' | sha256sum | cut -c1-64)"; before_root='' install_flags=()
   echo 'new engine' >"$eng/agent_local.py"
 }
-replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
+setrecipes() { local d=$h/.local/state/omarchy/agent-local; mkdir -p "$d/recipes"; echo 'name = "m"' >"$d/recipes/mine.toml"; echo '{}' >"$d/recipes-confirmed.json"; }
+replaced; setrecipes; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
-setrecipes
 s uninstall --dry-run --json --delete-recipes me@spark | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["recipes"] == 0 and not any("recipes" in x for x in d["steps"] + d["kept"])))'
 ok $? "where the engine was there before, the plan has no recipes of ours to keep or delete"
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
@@ -704,7 +714,6 @@ present "$FAKE_MANIFEST" && same "$(cat "$eng/agent_local.py")" 'new engine'; ok
 
 # Recipes of yours live in the engine's state dir, which uninstall deletes: they are kept unless --delete-recipes says
 # otherwise, and the install manifest records nothing for them (they are never created by startdgx).
-setrecipes() { local d=$h/.local/state/omarchy/agent-local; mkdir -p "$d/recipes"; echo 'name = "m"' >"$d/recipes/mine.toml"; echo '{}' >"$d/recipes-confirmed.json"; }
 installed; setrecipes
 m 'not any("recipes" in str(i) for i in d["items"])'; ok $? "the install manifest records nothing for the recipe folder"
 cond='d["recipes"] == 1 and any("keep" in k and "your recipes" in k and "--delete-recipes" in k for k in d["kept"]) and any("except your recipes" in st for st in d["steps"])'
@@ -788,7 +797,7 @@ g() { git -C "$fork" -c user.name=t -c user.email=t@t "$@"; }
 git init -q --bare -b master "$tmp/origin.git"; git init -q --bare "$tmp/fork-remote.git"
 git clone -q "$tmp/origin.git" "$fork" 2>/dev/null
 mkdir "$fork/tests"; printf '#!/usr/bin/env bash\nexit 0\n' >"$fork/tests/engine-test.sh"; chmod +x "$fork/tests/engine-test.sh"
-g add -A; g commit -qm base; g push -q origin HEAD:master; g fetch -q origin
+g add -A; g commit -qm base; g push -q origin HEAD:master; g tag v0.6.3; g push -q origin v0.6.3; g fetch -q origin
 g remote add fork "$tmp/fork-remote.git"
 "$rel" v1.0 "$fork" >/dev/null 2>&1; ok $((!$?)) "release-engine refuses a malformed tag"
 echo x >"$fork/dirty"; "$rel" v0.6.3-dgx.2 "$fork" >/dev/null 2>&1; ok $((!$?)) "release-engine refuses a dirty checkout"
@@ -805,7 +814,13 @@ g rev-parse -q --verify refs/tags/v0.6.3-dgx.2 >/dev/null; ok $? "release-engine
 echo "$out" | grep -q 'git push fork v0.6.3-dgx.2'; ok $? "release-engine prints the push command"
 echo "$out" | grep -q "$(g rev-parse 'v0.6.3-dgx.2^{commit}')"; ok $? "release-engine prints the tag's commit"
 git -C "$tmp/fork-remote.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to fork"
-git -C "$tmp/origin.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to origin"
+git -C "$tmp/origin.git" tag | grep -q -- '-dgx'; ok $((!$?)) "release-engine never pushes to origin"
+# The tag names the upstream release it contains (v0.6.3-dgx.3 once held v0.6.4 and was cut anyway)
+git -C "$other" -c user.name=t -c user.email=t@t tag v0.6.4 && git -C "$other" push -q origin v0.6.4
+out=$("$rel" v0.6.3-dgx.3 "$fork" 2>&1); ok $((!$?)) "release-engine refuses a tag that names an older upstream release than HEAD contains"
+echo "$out" | grep -q 'tag it v0.6.4-dgx.N'; ok $? "release-engine says which release to name the tag for"
+g rev-parse -q --verify refs/tags/v0.6.3-dgx.3 >/dev/null; ok $((!$?)) "release-engine creates no tag when it refuses"
+"$rel" v0.6.4-dgx.1 "$fork" >/dev/null 2>&1; ok $? "release-engine accepts the tag named for the upstream release HEAD contains"
 
 # discover, against a fake tailscale and a fake ssh that answers per peer from $tmp/disco/peers
 disco=$tmp/disco; mkdir -p "$disco/bin" "$disco/peers"
