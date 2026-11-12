@@ -7,7 +7,7 @@ The session, the checks and reload are the devkit's (`scripts/devkit`, a git sub
 `scripts/check.sh` runs the devkit's `check` (bash -n and shellcheck on `scripts/`, `tests/`, `.githooks/` and `devkit.conf`, the kit's lint rules, qmllint against `scripts/qmllint-baseline.txt`, `omarchy plugin validate .`), then:
 
 - `tests/cli.sh`: the CLI against a fake ssh and a fake host, and demo mode with shims that fail the run if it ever starts ssh, rsync, sudo, tailscale or a terminal.
-- `node --test tests/js/`: the manager's rules in `DgxModel.js` (scoped to `tests/js/` so the devkit's own tests are not swept in).
+- `node --test tests/js/`: the manager's rules in `DgxModel.js` (scoped to `tests/js/` so the devkit's own tests are not swept in). They run on the demo's fixtures and on a real DGX Spark's answers (`tests/js/fixtures/gx10-status.json` and `gx10-list.json`, `startdgx status` and `list` of gx10-f5f4 at engine v0.6.3-dgx.1; nothing secret in them), so a change in the engine's output shows up there.
 - The icon check: an empty `iconText` fails (write icons as `\uXXXX` escapes).
 
 The qmllint baseline holds only what qmllint cannot know outside the shell: the `qs.Commons`/`qs.Ui`/Quickshell imports it cannot resolve, and what follows from them (`Color.*` read as a plain colour, `Style`/`Util` unqualified, `anchors` on unresolved types). Anything else is fixed, not baselined.

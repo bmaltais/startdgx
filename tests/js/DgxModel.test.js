@@ -24,7 +24,6 @@ test("parseStatus refuses what isn't the engine's status", () => {
   assert.strictEqual(M.parseStatus("[]"), null)
   assert.strictEqual(M.parseStatus(JSON.stringify({ models: [] })), null)
   assert.strictEqual(M.parseStatus(JSON.stringify({ models: { a: row({ recipe: "b" }) } })), null, "a row filed under another id")
-  assert.strictEqual(M.parseStatus(JSON.stringify({ models: { "qwen3.8-27b-tensorfold": row({ unit: "exploded" }) } })), null, "an unknown unit")
   assert.strictEqual(M.parseStatus(JSON.stringify({ models: { "qwen3.8-27b-tensorfold": null } })), null)
 })
 
@@ -536,4 +535,57 @@ test("commandFor: each action's startdgx command and how long it may take", () =
   assert.deepStrictEqual(M.commandFor("me@h1", act(1, "use")), ["use", "--detach", "me@h1", "a", "--timeout", "120"])
   // A removal may first wait for a start ahead of it that holds the engine's lock (900 s), then remove.
   assert.deepStrictEqual(M.commandFor("me@h1", act(1, "delete")), ["delete", "me@h1", "a", "--timeout", "1500"])
+})
+
+// ---- the engine's real answers (tests/js/fixtures: `startdgx status` and `list` of a DGX Spark, gx10-f5f4) ----
+
+const fs = require("node:fs")
+const path = require("node:path")
+const realStatus = fs.readFileSync(path.join(__dirname, "fixtures", "gx10-status.json"), "utf8")
+const realList = fs.readFileSync(path.join(__dirname, "fixtures", "gx10-list.json"), "utf8")
+
+test("a real status: parsed, and each model as the row draws it", () => {
+  const s = M.parseStatus(realStatus)
+  assert.ok(s, "the engine's own status parses")
+  assert.deepStrictEqual(M.modelList(s).map((e) => [e.name, M.modelState(e).text, M.toggleAction(e)]), [
+    ["Nemotron 3.5 Bolt", "Stopped", "start"],
+    ["Qwen3.8 27B", "Stopped", "start"],
+    ["Qwen3.8 27B Abliterated", "Running", "stop"],
+  ])
+  const running = s.models["qwen3.8-27b-abliterated-tensorfold"]
+  assert.deepStrictEqual(M.meter(running, 0), { label: "Memory", fraction: 27.9 / 121.6, value: "28 of 122 GiB" })
+  assert.strictEqual(M.modelFacts(s.models["nemotron-3.5-bolt-tensorfold"]), "256K context · 31 GiB")
+  const h = { "me@gx10": { loaded: true, online: true, status: s } }
+  assert.strictEqual(M.subtitle(M.summarize(Object.keys(h), h)), "1 MACHINE · 1 RUNNING")
+})
+
+test("a real catalog: the picker's offers on that machine", () => {
+  const offers = M.recipeOffers(M.parseRecipes(realList), M.parseStatus(realStatus))
+  assert.deepStrictEqual(offers.map((o) => [o.recipe.id, o.action, o.text]), [
+    ["qwen3.8-flash-next-tensorfold", "use", "Recommended for this machine"],
+    ["nemotron-3.5-bolt-tensorfold", null, "On this machine"],
+    ["qwen3.8-27b-tensorfold", null, "On this machine"],
+    ["qwen3.8-27b-abliterated-tensorfold", null, "On this machine"],
+    ["glm-5.3-flash-tensorfold-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
+    ["qwen3.8-27b-gufo", null, "runtime gufo can't run on nvidia-gb10"],
+    ["qwen3.8-flash-next-gufo", null, "runtime gufo can't run on nvidia-gb10"],
+  ])
+})
+
+test("parseStatus: a unit systemd has and the engine's list doesn't is read as inactive, as the engine's REMOTE_UNITS does", () => {
+  for (const unit of ["reloading", "maintenance", "refreshing", "something-new"]) {
+    const doc = JSON.parse(realStatus)
+    doc.models["qwen3.8-27b-tensorfold"].unit = unit
+    const s = M.parseStatus(JSON.stringify(doc))
+    assert.ok(s, unit + " keeps the machine's status")
+    assert.strictEqual(s.models["qwen3.8-27b-tensorfold"].unit, "inactive", unit)
+    assert.strictEqual(s.models["qwen3.8-27b-abliterated-tensorfold"].unit, "active", "the others are left as they are")
+  }
+})
+
+test("statusAnswer: what a status read says, and an answer that can't be read is said, not swallowed", () => {
+  assert.ok(M.statusAnswer(0, realStatus, "", "me@gx10").status)
+  assert.deepStrictEqual(M.statusAnswer(0, "half a docu", "", "me@gx10"), { status: null, error: "me@gx10 sent an unreadable status" })
+  assert.deepStrictEqual(M.statusAnswer(1, "", "Error: me@gx10 didn't answer in time\n", "me@gx10"), { status: null, error: "me@gx10 didn't answer in time" })
+  assert.deepStrictEqual(M.statusAnswer(255, "", "", "me@gx10"), { status: null, error: "me@gx10 didn't answer" })
 })

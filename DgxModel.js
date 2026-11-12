@@ -13,17 +13,30 @@ function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
-// A status document, or null when it isn't one: a missing or half-written answer keeps the last good one.
+// JSON text as a value, or undefined when it isn't JSON.
+function parseJson(text) {
+  try { return JSON.parse(String(text || "")) } catch (e) { return undefined }
+}
+
+// A status document, or null when it isn't one. A unit the engine's list doesn't have (systemd's reloading,
+// maintenance, refreshing, ...) is read as inactive, as the engine's own REMOTE_UNITS does for a paired machine's.
 function parseStatus(text) {
-  let parsed
-  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  const parsed = parseJson(text)
   if (!isPlainObject(parsed) || !isPlainObject(parsed.models)) return null
   for (const id in parsed.models) {
     const entry = parsed.models[id]
     if (!isPlainObject(entry) || entry.recipe !== id || id === "") return null
-    if (UNITS.indexOf(entry.unit) < 0) return null
+    if (UNITS.indexOf(entry.unit) < 0) parsed.models[id] = Object.assign({}, entry, { unit: "inactive" })
   }
   return parsed
+}
+
+// What a status read says: { status } or { status: null, error }. An answer that can't be read is a failure to say,
+// not one to keep quiet about: the machine shows as not answering, with why.
+function statusAnswer(code, stdout, stderr, host) {
+  if (code !== 0) return { status: null, error: errorLine(stderr, host + " didn't answer") }
+  const status = parseStatus(stdout)
+  return status ? { status: status } : { status: null, error: host + " sent an unreadable status" }
 }
 
 // A click's mark on its model ("host/model" in the service's `pending`): "start", "stop" or "delete" from the moment
@@ -149,8 +162,7 @@ function modelFacts(entry) {
 
 // `startdgx hosts --json`: { target: { profile } }, or null when it isn't that.
 function parseHosts(text) {
-  let parsed
-  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  const parsed = parseJson(text)
   if (!isPlainObject(parsed)) return null
   for (const host in parsed) if (!isPlainObject(parsed[host])) return null
   return parsed
@@ -270,8 +282,7 @@ function pollInterval(windowOpen, hs) {
 
 // `startdgx discover --json`: a list of peers, each with at least a name and a target, or null.
 function parsePeers(text) {
-  let parsed
-  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  const parsed = parseJson(text)
   if (!Array.isArray(parsed)) return null
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]
@@ -466,8 +477,7 @@ function alerts(hostList, hostStates, announced) {
 // `startdgx list HOST`: the engine's catalog for that machine (recipe_listing), a list of recipes each with an id,
 // or null when it isn't that.
 function parseRecipes(text) {
-  let parsed
-  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  const parsed = parseJson(text)
   if (!Array.isArray(parsed)) return null
   for (let i = 0; i < parsed.length; i++) {
     const r = parsed[i]
@@ -581,8 +591,7 @@ function removeConfirm(entry, host, bytes, unknown) {
 
 // `startdgx delete HOST MODEL --dry-run --json`: { recipe, setting_up, bytes } (what the removal frees), or null.
 function parseRemovePlan(text) {
-  let parsed
-  try { parsed = JSON.parse(String(text || "")) } catch (e) { return null }
+  const parsed = parseJson(text)
   if (!isPlainObject(parsed) || typeof parsed.recipe !== "string" || typeof parsed.bytes !== "number" || !(parsed.bytes >= 0)) return null
   return parsed
 }

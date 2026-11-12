@@ -91,13 +91,10 @@ Item {
       poller.settled = poller.waiting
       poller.waiting = []
       if (poller.settled.length > 0) Qt.callLater(poller.poll)
-      if (code === 0) {
-        const status = Model.parseStatus(statusOut.text)
-        // A garbled answer keeps the last good status and says nothing.
-        if (status) poller.owner.statusRead(poller.host, status)
-      } else {
-        poller.owner.statusFailed(poller.host, Model.errorLine(statusErr.text, poller.host + " didn't answer"))
-      }
+      // An answer that can't be read shows the machine as not answering, with why, keeping its last good status.
+      const answer = Model.statusAnswer(code, statusOut.text, statusErr.text, poller.host)
+      if (answer.status) poller.owner.statusRead(poller.host, answer.status)
+      else poller.owner.statusFailed(poller.host, answer.error)
       poller.done = Model.settle(poller.done, answered)
       poller.publish()
     }
