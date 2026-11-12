@@ -1,6 +1,6 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
 // machine has its own HostPoller (status poll, and its three command slots: a start, a share, and a stop, use or delete); the machine list,
-// adding, forgetting, discovery, a machine's catalog for the model picker, the uninstall and remove plans and the
+// adding, forgetting, discovery, a machine's catalog for the model picker, the Add recipe card's check, add and remove, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
 pragma ComponentBehavior: Bound
@@ -72,6 +72,34 @@ Item {
   property var variants: null
   property string variantsError: ""
   readonly property bool variantsLoading: variantsQuery.busy
+
+  // The Add recipe card: the answer to the last check or add ({ ok, id, errors, message, added }), a failure to ask at all,
+  // and what the card is doing (recipeStep: "checking" | "adding" | ""). The machine's own recipes are listed from it.
+  property string recipeHost: ""
+  property var recipeResult: null
+  property string recipeError: ""
+  property string recipeStep: ""
+  property bool recipeThenAdd: false
+  property int recipeSeq: 0
+  property var userRecipes: null
+  property string userRecipesError: ""
+  property string recipeRemoving: ""
+  property string recipeRemoveError: ""
+  // A write (an add or a removal) is running: the card waits, and nothing kills it.
+  readonly property bool recipeWriting: recipeAddProc.running || recipeRemoveProc.running
+  readonly property bool recipeBusy: service.recipeStep !== "" || service.recipeWriting || service.recipeMeasuring !== "" || service.recipeConfirming !== ""
+  // "host/id" of a measure running (minutes, on the machine; nothing ends it) and the id whose numbers are being confirmed.
+  property string recipeMeasuring: ""
+  property string recipeConfirming: ""
+
+  // The confirmation card's dry run (`recipe measure HOST ID --ctx N`, which changes nothing): what a measure or a setup
+  // of a recipe of yours would download and load, as the engine says it.
+  property string runHost: ""
+  property string runId: ""
+  property int runCtx: 0
+  property var runPlan: null
+  property string runError: ""
+  readonly property bool runPlanning: runQuery.busy
 
   // The remove card's plan (`delete HOST MODEL --dry-run --json`): what the removal frees, -1 until it is read.
   property string removeHost: ""
@@ -159,13 +187,14 @@ Item {
   }
   // A setup runs on the machine in a unit of its own (`use --detach`), so the command returns at once and the
   // status poll follows the download. The model shows, waiting, from the click until the machine lists it.
-  function use(host, r) {
+  // `yes`: the person has read what a recipe of theirs downloads (the confirmation card), which the engine wants.
+  function use(host, r, yes) {
     const p = service.poller(host)
     if (!p || !r) return
     const next = Object.assign({}, service.setups)
     next[Model.modelKey(host, r.id)] = r
     service.setups = next
-    p.run("use", r.id, null)
+    p.run("use", r.id, null, yes ? { yes: true } : undefined)
   }
   // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
   // settled by the next status read, as on success); one that failed for want of the machine's root setup makes
@@ -208,6 +237,86 @@ Item {
   function setContext(host, id, ctx) {
     const p = service.poller(host)
     if (p) p.run("context", id, service.entry(host, id), { ctx: ctx })
+  }
+
+  // Validates a recipe file on this computer on the machine (`recipe validate`, which changes nothing) and, when asked and
+  // it passes, adds it (`recipe add`). The path is only handed to bin/startdgx, which reads the file.
+  function checkRecipe(host, path, thenAdd) {
+    if (service.recipeWriting || Model.recipePathProblem(path) !== "") return
+    service.recipeHost = host
+    service.recipeResult = null
+    service.recipeError = ""
+    service.recipeThenAdd = thenAdd
+    service.recipeStep = "checking"
+    service.recipeSeq += 1
+    service.recipePathAsked = path.trim()
+    recipeQuery.ask(host + "\n" + service.recipeSeq, [service.script].concat(Model.recipeSendCommand("validate", host, service.recipePathAsked)))
+  }
+  property string recipePathAsked: ""
+
+  function finishRecipe(code, out, err, verb) {
+    const r = code === 0 ? Model.parseRecipeResult(out) : null
+    if (!r) {
+      service.recipeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+      service.recipeStep = ""
+      return
+    }
+    service.recipeStep = ""
+    service.recipeResult = Object.assign({}, r, { added: verb === "add" && r.ok })
+    if (verb === "add" && r.ok) {
+      service.notice = r.message
+      // The picker's catalog and the card's list now have a recipe more.
+      if (service.listHost === service.recipeHost) service.recipes = null
+      service.loadUserRecipes(service.recipeHost)
+    }
+  }
+
+  function loadUserRecipes(host) {
+    if (service.recipeHost !== host) { service.userRecipes = null; service.recipeHost = host }
+    service.userRecipesError = ""
+    userRecipesQuery.ask(host, [service.script, "recipe", "list", host, "--json", "--timeout", "60"])
+  }
+
+  function planRecipeRun(host, id, ctx) {
+    const key = [host, id, ctx].join(" ")
+    if (runQuery.busy && runQuery.asked.wanted === key) return
+    service.runHost = host
+    service.runId = id
+    service.runCtx = ctx
+    service.runPlan = null
+    service.runError = ""
+    runQuery.ask(key, [service.script, "recipe", "measure", host, id, "--ctx", String(ctx), "--timeout", "60"])
+  }
+
+  // Measures a recipe of yours (`recipe measure --yes`): the machine downloads it, loads it and benches it, which takes
+  // minutes. A write: closing the card doesn't end it, and the answer comes as a message.
+  function measureRecipe(host, id, ctx) {
+    if (service.recipeBusy) return
+    service.recipeMeasuring = Model.modelKey(host, id)
+    service.error = ""
+    service.notice = "Measuring " + id + " on " + Model.hostName(host) + "; the machine is busy for a few minutes"
+    recipeMeasureProc.host = host
+    recipeMeasureProc.command = [service.script, "recipe", "measure", host, id, "--ctx", String(ctx), "--yes"]
+    recipeMeasureProc.running = true
+  }
+
+  // Accepts an estimated recipe's numbers (`recipe confirm`): it then counts as fitting.
+  function confirmRecipe(host, id) {
+    if (service.recipeBusy) return
+    service.recipeConfirming = id
+    service.recipeRemoveError = ""
+    recipeConfirmProc.host = host
+    recipeConfirmProc.command = [service.script, "recipe", "confirm", host, id, "--timeout", "60"]
+    recipeConfirmProc.running = true
+  }
+
+  function removeRecipe(host, id) {
+    if (service.recipeBusy) return
+    service.recipeRemoving = id
+    service.recipeRemoveError = ""
+    recipeRemoveProc.host = host
+    recipeRemoveProc.command = [service.script, "recipe", "remove", host, id, "--timeout", "60"]
+    recipeRemoveProc.running = true
   }
 
   function planRemove(host, id) {
@@ -384,6 +493,95 @@ Item {
       const found = code === 0 ? Model.parseVariants(out) : null
       if (found) service.variants = found
       else service.variantsError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+
+  // Validating is a question (a new one ends the old); adding and removing are writes, which nothing ends.
+  Query {
+    id: recipeQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.recipeHost + "\n" + service.recipeSeq) return
+      const r = code === 0 ? Model.parseRecipeResult(out) : null
+      if (r && r.ok && service.recipeThenAdd) {
+        service.recipeStep = "adding"
+        recipeAddProc.command = [service.script].concat(Model.recipeSendCommand("add", service.recipeHost, service.recipePathAsked))
+        recipeAddProc.running = true
+      } else service.finishRecipe(code, out, err, "validate")
+    }
+  }
+
+  Process {
+    id: recipeAddProc
+    stdout: StdioCollector { id: recipeAddOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeAddErr; waitForEnd: true }
+    onExited: function (code) { service.finishRecipe(code, recipeAddOut.text, recipeAddErr.text, "add") }
+  }
+
+  Process {
+    id: recipeRemoveProc
+    property string host: ""
+    stdout: StdioCollector { id: recipeRemoveOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeRemoveErr; waitForEnd: true }
+    onExited: function (code) {
+      service.recipeRemoving = ""
+      if (code !== 0) service.recipeRemoveError = Model.errorLine(recipeRemoveErr.text, "The recipe could not be removed")
+      else {
+        service.notice = Model.lastLine(recipeRemoveOut.text)
+        if (service.listHost === recipeRemoveProc.host) service.recipes = null
+      }
+      service.loadUserRecipes(recipeRemoveProc.host)
+    }
+  }
+
+  Query {
+    id: runQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== [service.runHost, service.runId, service.runCtx].join(" ")) return
+      const plan = code === 0 ? Model.parseMeasurePlan(out) : null
+      if (plan) service.runPlan = plan
+      else service.runError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+
+  Process {
+    id: recipeMeasureProc
+    property string host: ""
+    stdout: StdioCollector { id: recipeMeasureOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeMeasureErr; waitForEnd: true }
+    onExited: function (code) {
+      service.recipeMeasuring = ""
+      if (code !== 0) service.error = Model.errorLine(recipeMeasureErr.text, "The measuring failed")
+      else service.notice = Model.lastLine(recipeMeasureOut.text)
+      if (service.listHost === recipeMeasureProc.host) service.recipes = null
+      service.loadUserRecipes(recipeMeasureProc.host)
+      // The machine now runs the recipe at that context: read it again, and the variants on show.
+      const p = service.poller(recipeMeasureProc.host)
+      if (p) p.poll()
+      if (service.variantsId !== "") service.planContext(service.variantsHost, service.variantsId)
+    }
+  }
+
+  Process {
+    id: recipeConfirmProc
+    property string host: ""
+    stdout: StdioCollector { id: recipeConfirmOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeConfirmErr; waitForEnd: true }
+    onExited: function (code) {
+      service.recipeConfirming = ""
+      if (code !== 0) service.recipeRemoveError = Model.errorLine(recipeConfirmErr.text, "The numbers could not be confirmed")
+      else service.notice = Model.lastLine(recipeConfirmOut.text)
+      if (service.listHost === recipeConfirmProc.host) service.recipes = null
+      service.loadUserRecipes(recipeConfirmProc.host)
+    }
+  }
+
+  Query {
+    id: userRecipesQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.recipeHost) return
+      const list = code === 0 ? Model.parseRecipes(out) : null
+      if (list) service.userRecipes = Model.userRecipes(list)
+      else service.userRecipesError = code === 0 ? "The machine's recipes could not be read" : Model.errorLine(err, "The machine's recipes could not be read")
     }
   }
 

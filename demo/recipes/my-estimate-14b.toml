@@ -1,0 +1,10 @@
+# Estimated: a figure someone worked out, not measured; it counts only once confirmed.
+name = "My Estimate 14B"
+summary = "A 14B model whose footprint is a good guess."
+runtime = "tensorfold"
+
+[[variant]]
+ctx = 65536
+peak_ram_gib = 20
+peak_gpu_gib = 18
+source = "estimated"

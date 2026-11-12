@@ -24,6 +24,7 @@ scripts/dev uninstall demo@spark-a   # a machine's uninstall card
 scripts/dev forget demo@spark-a      # a machine's forget card
 scripts/dev models demo@spark-a      # a machine's model picker
 scripts/dev remove demo@spark-a qwen3.8-27b-tensorfold   # a model's remove card
+scripts/dev recipe demo@spark-a $PWD/demo/recipes/broken-recipe.toml   # the Add recipe card, with a path typed in (Return checks and adds)
 scripts/dev shot FILE       # look at it; click PX PY, key j, key Return ...
 scripts/dev errors          # 0 = clean
 scripts/dev reload          # after a QML edit

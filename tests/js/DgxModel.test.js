@@ -888,3 +888,167 @@ test("the c key opens a model's context card, and the command it sends carries t
   assert.strictEqual(M.keyAction("c", { host: "h1", kind: "host" }, null, "", false, false, ""), null)
   assert.deepStrictEqual(M.commandFor("h1", { key: "h1/a", kind: "context", ctx: 65536 }), ["use", "--detach", "h1", "a", "--ctx", "65536", "--timeout", "120"])
 })
+
+// ---- user recipes ----------------------------------------------------------------------------------------
+
+test("recipeSource: a row without one is measured, a drafted or unknown one never counts as fitting", () => {
+  assert.strictEqual(M.recipeSource({ id: "a" }), "measured")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "estimated" }), "estimated")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "drafted" }), "drafted")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "guessed" }), "drafted", "an unrecognised word is the cautious one")
+})
+
+test("the real host's catalog (no user, no source) reads as curated and measured", () => {
+  const list = M.parseRecipes(require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "gx10-list.json"), "utf8"))
+  assert.ok(list.length > 0)
+  for (const r of list) {
+    assert.strictEqual(M.isUserRecipe(r), false)
+    assert.strictEqual(M.recipeSource(r), "measured")
+  }
+})
+
+test("recipeOffers: a drafted recipe is not yet fitting even if the engine says it is available", () => {
+  const r = { id: "mine", name: "Mine", user: true, source: "drafted", available: true, installed: false, best: false }
+  const o = M.recipeOffers([r], { models: {} })[0]
+  assert.strictEqual(o.action, null)
+  assert.match(o.text, /not yet fitting/)
+})
+
+test("recipeOffers: an estimated or measured user recipe that is available can be set up", () => {
+  const r = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
+  assert.strictEqual(M.recipeOffers([r], { models: {} })[0].action, "use")
+})
+
+test("recipeMarks: yours, and the source of a user recipe's numbers", () => {
+  assert.deepStrictEqual(M.recipeMarks({ id: "a" }), [])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "measured" }), ["yours"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "estimated" }), ["yours", "estimated"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "drafted" }), ["yours", "drafted, not yet fitting"])
+})
+
+test("userRecipes keeps only the user's", () => {
+  const list = [{ id: "a", user: false }, { id: "b", user: true }, { id: "c" }]
+  assert.deepStrictEqual(M.userRecipes(list).map((r) => r.id), ["b"])
+  assert.deepStrictEqual(M.userRecipes(null), [])
+})
+
+test("parseRecipeResult reads the CLI's validate and add answers", () => {
+  assert.deepStrictEqual(M.parseRecipeResult(JSON.stringify({ ok: true, id: "mine", errors: [], message: "Recipe mine is valid" })),
+    { ok: true, id: "mine", errors: [], message: "Recipe mine is valid" })
+  const bad = M.parseRecipeResult(JSON.stringify({ ok: false, id: "mine", errors: ["recipes/mine: no name", "recipes/mine: no runtime"], message: "" }))
+  assert.strictEqual(bad.ok, false)
+  assert.strictEqual(bad.errors.length, 2)
+  assert.strictEqual(M.parseRecipeResult("nope"), null)
+  assert.strictEqual(M.parseRecipeResult(JSON.stringify({ ok: false, errors: [] })), null, "a rejection with no reason is not an answer")
+  assert.strictEqual(M.parseRecipeResult(JSON.stringify({ ok: "yes", errors: [] })), null)
+})
+
+test("recipePathProblem: says what is wrong with a path before asking the machine", () => {
+  assert.match(M.recipePathProblem(""), /path/i)
+  assert.match(M.recipePathProblem("notes.txt"), /\.toml/)
+  assert.strictEqual(M.recipePathProblem("~/recipes/mine.toml"), "")
+  assert.strictEqual(M.recipePathProblem("  /x/mine.toml  "), "")
+})
+
+test("variantsText names each context with its source", () => {
+  assert.strictEqual(M.variantsText([{ ctx: 131072, source: "measured" }, { ctx: 65536, source: "drafted" }, { ctx: 32768 }]),
+    "128K measured · 64K drafted · 32K measured")
+  assert.strictEqual(M.variantsText([]), "")
+})
+
+test("parseVariants keeps a variant's source; contextChoices marks drafted as not fitting and estimated as such", () => {
+  const v = M.parseVariants(JSON.stringify([
+    { ctx: 131072, peak_ram_gib: 40, peak_gpu_gib: 38, source: "measured" },
+    { ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 28, source: "drafted" },
+    { ctx: 32768, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated" },
+    { ctx: 16384, peak_ram_gib: 10, peak_gpu_gib: 8 }]))
+  const c = M.contextChoices(v, 0, 128)
+  assert.deepStrictEqual(c.map((x) => x.source), ["measured", "drafted", "estimated", "measured"])
+  assert.deepStrictEqual(c.map((x) => x.fits), [true, false, true, true])
+  assert.match(c[1].text, /not yet fitting/)
+  assert.match(c[2].text, /Estimated/)
+})
+
+test("keyAction: e adds a recipe to the machine", () => {
+  assert.deepStrictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", false, false), { type: "addRecipe", host: "u@h" })
+  assert.strictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", true, false), null, "not on a machine that doesn't answer")
+})
+
+// ---- measuring, confirming and setting up a user recipe -------------------------------------------------------
+
+test("variantActions: a drafted variant can be measured, an estimated one confirmed or measured, a measured one neither", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "drafted" }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated" }), ["confirm", "measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "measured" }), [])
+  assert.deepStrictEqual(M.variantActions({}), [])
+  assert.deepStrictEqual(M.variantActions({ source: "guessed" }), ["measure"], "an unrecognised source is drafted")
+})
+
+test("recipeOffers: setting up a user recipe asks first, a curated one doesn't", () => {
+  const mine = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
+  const theirs = { id: "theirs", name: "Theirs", available: true, installed: false, best: false, context: 65536 }
+  const [a, b] = M.recipeOffers([mine, theirs], { models: {} })
+  assert.deepStrictEqual([a.recipe.id, a.action, a.confirm], ["mine", "use", true])
+  assert.deepStrictEqual([b.recipe.id, b.action, b.confirm], ["theirs", "use", false])
+})
+
+test("recipeOffers: a user recipe whose context is unknown can't show its download, so it isn't offered", () => {
+  const o = M.recipeOffers([{ id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false }], { models: {} })[0]
+  assert.strictEqual(o.action, null)
+  assert.match(o.text, /download/)
+})
+
+test("parseMeasurePlan: the engine's dry-run lines, without its closing 'nothing was changed'", () => {
+  const text = "Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download (3.5 GiB in 2 file(s))\n  load: Mine on tensorfold\nNothing was changed. Run again with --yes to do it.\n"
+  assert.deepStrictEqual(M.parseMeasurePlan(text), ["Measure mine at context 65536 (now a drafted variant)", "download: 3.5 GiB to download (3.5 GiB in 2 file(s))", "load: Mine on tensorfold"])
+  assert.strictEqual(M.parseMeasurePlan(""), null)
+  assert.strictEqual(M.parseMeasurePlan("Nothing was changed. Run again with --yes to do it."), null)
+})
+
+test("recipeRunWords: what the confirmation card says for a measure and for a setup", () => {
+  const measure = M.recipeRunWords("measure", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(measure.title, /Measure Mine/)
+  assert.match(measure.title, /64K/)
+  assert.strictEqual(measure.button, "Download and measure")
+  assert.match(measure.body, /runs it/i)
+  const setup = M.recipeRunWords("setup", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(setup.title, /Set up Mine/)
+  assert.strictEqual(setup.button, "Download and set up")
+})
+
+test("commandFor: a setup the person confirmed passes --yes to use, and one that wasn't doesn't", () => {
+  const act = (extra) => Object.assign({ op: 1, key: "me@h1/a", kind: "use", shows: "use" }, extra)
+  assert.deepStrictEqual(M.commandFor("me@h1", act({ yes: true })), ["use", "--detach", "me@h1", "a", "--yes", "--timeout", "120"])
+  assert.deepStrictEqual(M.commandFor("me@h1", act({})), ["use", "--detach", "me@h1", "a", "--timeout", "120"])
+})
+
+test("uninstallChoices: your recipes are an opt-in only when there are some, and say they go with it", () => {
+  const withRecipes = M.uninstallChoices(uninstallPlan({ recipes: 2 }))
+  const c = withRecipes.find((x) => x.flag === "--delete-recipes")
+  assert.ok(c)
+  assert.match(c.label, /recipes/)
+  assert.match(c.description, /2/)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan({ recipes: 0 })).some((x) => x.flag === "--delete-recipes"), false)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan()).some((x) => x.flag === "--delete-recipes"), false, "a plan from an older CLI has no count")
+})
+
+test("a confirmed estimated variant says so, and offers only Measure", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: true }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: false }), ["confirm", "measure"])
+  const c = M.contextChoices([{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true },
+    { ctx: 32768, peak_ram_gib: 10, peak_gpu_gib: 9, source: "estimated" }], 0, 128)
+  assert.match(c[0].text, /confirmed/)
+  assert.doesNotMatch(c[1].text, /confirmed/)
+})
+
+test("recipeSendCommand: the typed path comes after --, so one that starts with - is a path, not an option", () => {
+  assert.deepStrictEqual(M.recipeSendCommand("validate", "me@h1", "-x.toml"), ["recipe", "validate", "me@h1", "--json", "--timeout", "60", "--", "-x.toml"])
+  assert.deepStrictEqual(M.recipeSendCommand("add", "me@h1", "  ~/a b.toml "), ["recipe", "add", "me@h1", "--json", "--timeout", "60", "--", "~/a b.toml"])
+})
+
+test("parseMeasurePlan keeps the engine's up-front note that other commands wait for the measure", () => {
+  const note = "while it runs, every other omarchy agent local command waits for it (the agents panel's start and stop too): typically 10 minutes"
+  const plan = M.parseMeasurePlan("Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download\n  " + note + "\n  then: restarts the model\nNothing was changed. Run again with --yes to do it.\n")
+  assert.ok(plan.includes(note))
+  assert.strictEqual(plan.length, 4)
+})

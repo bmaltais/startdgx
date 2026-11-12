@@ -385,6 +385,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (away) return null
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
+  if (k === "e") return { type: "addRecipe", host: row.host }
   if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "context", host: row.host, id: row.id }
   if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
   if (k === "t" && row.kind === "model" && entry) {
@@ -500,7 +501,8 @@ function commandFor(host, action) {
   switch (action.kind) {
   case "start": return ["start", host, id, "--timeout", "900"]
   case "stop": return ["stop", host, id, "--timeout", "120"]
-  case "use": return ["use", "--detach", host, id, "--timeout", "120"]
+  // --yes only for a setup the person confirmed (a recipe of theirs): the engine refuses one without it.
+  case "use": return ["use", "--detach", host, id].concat(action.yes ? ["--yes"] : [], ["--timeout", "120"])
   case "context": return ["use", "--detach", host, id, "--ctx", String(action.ctx), "--timeout", "120"]
   case "delete": return ["delete", host, id, "--timeout", "1500"]
   // The engine publishes the model's route with tailscale serve, which can take a while.
@@ -566,12 +568,97 @@ function recipeOffers(list, status) {
     const best = r.best === true
     if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best, rank: entry.unit === "installing" ? 2 : 3 }
     if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best, rank: 3 }
-    if (r.available !== true) return { recipe: r, action: null, text: String(r.reason || "") || "Can't run on this machine", best: best, rank: 4 }
-    return { recipe: r, action: "use", text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
+    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best, rank: 4 }
+    // A recipe of yours downloads what it names and runs it: the engine wants --yes, which the panel sends only after the
+    // person has seen the download (its dry run, which needs the context). Without one there is nothing to show.
+    if (isUserRecipe(r) && !(Number(r.context) > 0)) return { recipe: r, action: null, text: "Its context is unknown, so its download can't be shown yet", best: best, rank: 4 }
+    return { recipe: r, action: "use", confirm: isUserRecipe(r), text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
   })
   const label = function (o) { return String(o.recipe.name || o.recipe.id) }
   offers.sort(function (a, b) { return a.rank - b.rank || label(a).localeCompare(label(b)) || a.recipe.id.localeCompare(b.recipe.id) })
-  return offers.map(function (o) { return { recipe: o.recipe, action: o.action, text: o.text, best: o.best } })
+  return offers.map(function (o) { return { recipe: o.recipe, action: o.action, confirm: o.confirm === true, text: o.text, best: o.best } })
+}
+
+// ---- user recipes ----------------------------------------------------------------------------------------
+// A user recipe is one the person added (the engine marks it `user`); a curated one ships with the engine. A variant's
+// (and a listing row's) `source` says where its numbers come from: measured (the default, and what every curated recipe
+// has), estimated, or drafted, which never counts as fitting.
+
+var DRAFTED_TEXT = "Drafted: its numbers are not measured yet, so it is not yet fitting"
+
+// "measured" when none is given; a word we don't know is treated as the cautious one, drafted.
+function recipeSource(r) {
+  const s = r && r.source !== undefined && r.source !== null && r.source !== "" ? String(r.source) : "measured"
+  return s === "measured" || s === "estimated" ? s : "drafted"
+}
+
+function isUserRecipe(r) { return !!r && r.user === true }
+
+// The marks a recipe wears in the picker and the Add recipe card: "yours", then where its numbers come from when that isn't
+// measured. Curated recipes wear none.
+function recipeMarks(r) {
+  const marks = []
+  if (!isUserRecipe(r)) return marks
+  marks.push("yours")
+  const s = recipeSource(r)
+  if (s === "estimated") marks.push("estimated")
+  else if (s === "drafted") marks.push("drafted, not yet fitting")
+  return marks
+}
+
+function userRecipes(list) { return (Array.isArray(list) ? list : []).filter(isUserRecipe) }
+
+// `startdgx recipe validate|add HOST FILE --json`: { ok, id, errors, message }, or null when it isn't that. A rejection
+// has to say why.
+function parseRecipeResult(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || typeof p.ok !== "boolean" || !Array.isArray(p.errors)) return null
+  const errors = p.errors.map(String).filter(function (e) { return e !== "" })
+  if (!p.ok && errors.length === 0) return null
+  return { ok: p.ok, id: String(p.id || ""), errors: errors, message: String(p.message || "") }
+}
+
+// The CLI's arguments to validate or add the recipe file at `path`: after `--`, so a path that starts with - is a path.
+function recipeSendCommand(verb, host, path) {
+  return ["recipe", verb, host, "--json", "--timeout", "60", "--", String(path).trim()]
+}
+
+// What is wrong with the path typed, before the machine is asked; "" when nothing.
+function recipePathProblem(path) {
+  const p = String(path || "").trim()
+  if (p === "") return "Type the path to a recipe file on this computer."
+  if (!/\.toml$/.test(p)) return "A recipe file ends in .toml, and its name (without it) is the recipe's id."
+  return ""
+}
+
+// What can be done with a variant of a user recipe: measure it (a drafted or estimated one; the engine runs it and records
+// what it showed), or confirm an estimated one's numbers (it then counts as fitting). A measured one needs neither.
+function variantActions(v) {
+  const source = recipeSource(v)
+  return source === "measured" ? [] : source === "estimated" ? (v.confirmed === true ? ["measure"] : ["confirm", "measure"]) : ["measure"]
+}
+
+// `startdgx recipe measure HOST ID --ctx N` without --yes: the engine's dry run, as lines (what it would download and
+// load), without its closing "Nothing was changed", which the card says its own way; or null when it said nothing.
+function parseMeasurePlan(text) {
+  const all = lines(text).filter(function (l) { return l.indexOf("Nothing was changed") !== 0 })
+  return all.length ? all : null
+}
+
+// The confirmation card's words, for a measure or a setup of `r` at `ctx` on `host`: { title, body, button }.
+function recipeRunWords(mode, r, ctx, host) {
+  const name = String(r.name || r.id)
+  const size = Math.round(Number(ctx) / 1024) + "K"
+  const runs = "A recipe of yours downloads what it names and runs it on " + host + ". Read what it will do, then say go."
+  return mode === "measure"
+    ? { title: "Measure " + name + " at " + size + "?", button: "Download and measure",
+        body: runs + " Measuring loads it at this context, benches it for a few minutes and records the memory and speed it showed; a model that runs there is restarted." }
+    : { title: "Set up " + name + " on " + host + "?", button: "Download and set up", body: runs }
+}
+
+// "128K measured · 64K drafted": a recipe's variants and where each one's numbers come from.
+function variantsText(variants) {
+  return (Array.isArray(variants) ? variants : []).map(function (v) { return Math.round(Number(v.ctx) / 1024) + "K " + recipeSource(v) }).join(" · ")
 }
 
 // The facts under a recipe in the picker: the memory it takes, its context and its speed, measured on this machine class.
@@ -654,11 +741,15 @@ function parseVariants(text) {
 function contextChoices(variants, currentCtx, ramTotalGib) {
   return variants.map(function (v) {
     const need = Number(v.peak_ram_gib)
-    const fits = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+    const source = recipeSource(v)
+    const room = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+    const fits = room && source !== "drafted"
     return {
-      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx),
-      text: fits ? "Needs " + need + " GiB of memory"
-        : "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx), source: source,
+      text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
+        : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+        : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (v.confirmed === true ? "; you confirmed it" : "")
+        : "Needs " + need + " GiB of memory"
     }
   })
 }
@@ -725,6 +816,7 @@ function parseUninstallPlan(text) {
   const p = parseJson(text)
   if (!isPlainObject(p) || !stringList(p.steps) || !stringList(p.kept) || !stringList(p.manual) || !stringList(p.packages)) return null
   if (p.models_bytes !== null && !(typeof p.models_bytes === "number" && p.models_bytes >= 0)) return null
+  if (p.recipes !== undefined && !(typeof p.recipes === "number" && p.recipes >= 0)) return null
   return p
 }
 
@@ -739,6 +831,10 @@ function uninstallChoices(plan) {
   const out = []
   if (plan.models_bytes !== null && plan.models_bytes > 0) {
     out.push({ flag: "--delete-models", label: "Also delete the model weights", description: "Frees " + sizeText(plan.models_bytes) + ". Setting a model up again downloads it again." })
+  }
+  if (typeof plan.recipes === "number" && plan.recipes > 0) {
+    out.push({ flag: "--delete-recipes", label: "Also delete the recipes you added",
+      description: plan.recipes + (plan.recipes === 1 ? " recipe is" : " recipes are") + " kept otherwise. Adding one again needs its file." })
   }
   if (plan.packages.length > 0) {
     out.push({ flag: "--remove-packages", label: "Also remove the packages the install added",

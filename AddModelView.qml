@@ -3,7 +3,8 @@
 // A machine's model picker, over the manager: its catalog (`startdgx list HOST`), best first, each recipe with
 // whether it runs there (and why not), whether it is set up, what it takes and what it is. Set up starts the
 // setup on the machine (`use --detach`), closes the card and puts the cursor on the new row, which follows the
-// download. Keyboard: Up/Down (or j/k) move, Enter sets up the recipe under the cursor, r looks again, Esc closes.
+// download. Add recipe… (e) opens the card that adds a recipe of your own. Keyboard: Up/Down (or j/k) move, Enter sets up
+// the recipe under the cursor, r looks again, Esc closes.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -26,7 +27,8 @@ FocusScope {
   readonly property string failure: card.mine && !card.dgx.listing ? card.dgx.recipesError : ""
 
   function act(offer) {
-    if (offer && offer.action === "use") card.svc.dispatch({ type: "use", host: card.host, recipe: offer.recipe })
+    // A recipe of yours downloads what it names and runs it: a card shows the download and asks first.
+    if (offer && offer.action === "use") card.svc.dispatch({ type: offer.confirm ? "setupYours" : "use", host: card.host, recipe: offer.recipe })
   }
 
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
@@ -43,6 +45,7 @@ FocusScope {
       event.accepted = true
     }
     else if (event.text === "r") { card.dgx.listRecipes(card.host); event.accepted = true }
+    else if (event.text === "e") { card.svc.dispatch({ type: "addRecipe", host: card.host }); event.accepted = true }
   }
 
   ColumnLayout {
@@ -123,6 +126,7 @@ FocusScope {
           readonly property bool current: index === card.cursor
           readonly property bool can: modelData.action === "use"
           readonly property string facts: Model.recipeFacts(recipeRow.r)
+          readonly property string marks: Model.recipeMarks(recipeRow.r).join(" · ")
           width: ListView.view.width
           implicitHeight: recipeBody.implicitHeight + Style.spacing.lg * 2
           radius: Math.max(Style.cornerRadius, Style.space(6))
@@ -155,7 +159,7 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: Style.spacing.md
                 Text {
-                  Layout.fillWidth: !recipeRow.modelData.best
+                  Layout.fillWidth: !recipeRow.modelData.best && recipeRow.marks === ""
                   textFormat: Text.PlainText
                   text: String(recipeRow.r.name || recipeRow.r.id)
                   color: Color.foreground
@@ -163,6 +167,16 @@ FocusScope {
                   font.pixelSize: Style.font.body
                   font.bold: true
                   elide: Text.ElideRight
+                }
+                // Yours, and where a user recipe's numbers come from when they aren't measured.
+                Text {
+                  Layout.fillWidth: !recipeRow.modelData.best
+                  visible: recipeRow.marks !== ""
+                  textFormat: Text.PlainText
+                  text: recipeRow.marks
+                  color: recipeRow.r.source === "drafted" ? Color.muted : Color.accent
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
                 }
                 // The engine's own recommendation for this machine.
                 Text {
@@ -212,9 +226,9 @@ FocusScope {
             Button {
               Layout.alignment: Qt.AlignVCenter
               visible: recipeRow.can
-              text: "Set up"
+              text: recipeRow.modelData.confirm ? "Set up…" : "Set up"
               bordered: true
-              tooltipText: "Download " + String(recipeRow.r.name || recipeRow.r.id) + " to " + Model.hostName(card.host) + " and set it up; it starts if there is room  (Enter)"
+              tooltipText: "Download " + String(recipeRow.r.name || recipeRow.r.id) + " to " + Model.hostName(card.host) + " and set it up; it starts if there is room" + (recipeRow.modelData.confirm ? ". A recipe of yours shows its download and asks first" : "") + "  (Enter)"
               onClicked: card.act(recipeRow.modelData)
             }
           }
@@ -237,6 +251,12 @@ FocusScope {
         enabled: !card.dgx.listing
         tooltipText: "Read the machine's catalog again  (r)"
         onClicked: card.dgx.listRecipes(card.host)
+      }
+      Button {
+        text: "Add recipe…"
+        bordered: true
+        tooltipText: "Add a recipe of your own, a .toml file from this computer, to " + Model.hostName(card.host) + "'s catalog  (e)"
+        onClicked: card.svc.dispatch({ type: "addRecipe", host: card.host })
       }
       Text {
         Layout.fillWidth: true
