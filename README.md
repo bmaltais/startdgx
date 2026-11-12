@@ -69,6 +69,13 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
     1.2 GB/s; a load takes 6 s). Delete that folder
     to start over. `STARTDGX_DEMO_NOW` (seconds since the epoch) holds the demo's clock still, for tests.
 
+## Safety
+
+- Everything `startdgx` passes on from a host (status, logs, an error line, uninstall's output, what the root script
+  prints in its terminal) has its terminal controls taken out first: C0 but newline and tab, DEL and C1 (in the root
+  script's terminal, carriage returns stay). So a host can't write to this machine's clipboard (OSC 52) or redraw its
+  terminal. Bytes that aren't UTF-8 show as `�`.
+
 ## Credits
 
 Parts of the panel are adapted from Omarchy's `agents` plugin, MIT, Copyright (c) David Heinemeier Hansson; its images in `assets/` keep their notice in `assets/NOTICE`, and the model makers' logos there are their companies' trademarks.

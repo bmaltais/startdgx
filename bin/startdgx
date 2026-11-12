@@ -13,8 +13,10 @@ import datetime
 import fcntl
 import getpass
 import hashlib
+import codecs
 import json
 import os
+import pty
 import re
 import shlex
 import subprocess
@@ -199,6 +201,45 @@ class Error(Exception):
   pass
 
 
+# Terminal controls a host could print to act on this terminal (an OSC 52 clipboard write, a CSI that redraws it):
+# C0 but newline and tab, DEL, and C1. Everything startdgx passes on from a host goes through clean().
+CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# What the root script prints reaches a terminal through a pty, where a line ends in a carriage return too.
+TTY_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def clean(text):
+  return CONTROLS.sub("", text)
+
+
+def run_process(cmd, stdin=None, timeout=None):
+  """subprocess.run for a command whose output comes from a host: text with undecodable bytes replaced, and
+  terminal controls taken out of stdout and stderr."""
+  result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
+  return subprocess.CompletedProcess(cmd, result.returncode, clean(result.stdout), clean(result.stderr))
+
+
+def run_on_tty(cmd):
+  """Runs cmd on a pty of its own, relaying this terminal's input to it (sudo's password prompt) and its output back
+  without terminal controls; returns its exit code."""
+  decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+  # What was printed here before goes first: the relay writes to the terminal directly.
+  sys.stdout.flush()
+  sys.stderr.flush()
+
+  def read(fd):
+    while True:
+      data = os.read(fd, 4096)
+      if not data:
+        return data
+      shown = TTY_CONTROLS.sub("", decoder.decode(data)).encode()
+      # An empty answer would read as the end of the output.
+      if shown:
+        return shown
+
+  return os.waitstatus_to_exitcode(pty.spawn(cmd, read))
+
+
 def config_dir():
   return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "startdgx")
 
@@ -239,7 +280,7 @@ def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command",
   """Runs a fixed shell command on the host; anything variable in it must already be shlex-quoted."""
   cmd = ["ssh", *opts, "--", host, command]
   try:
-    result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
+    result = run_process(cmd, stdin=stdin, timeout=timeout)
   except subprocess.TimeoutExpired as error:
     raise Error(f"{host} didn't answer in time") from error
   if check and result.returncode == 255:
@@ -378,7 +419,7 @@ def tailnet_peers():
     raise Error((result.stderr.strip().splitlines() or ["tailscale status failed"])[-1])
   try:
     peers = json.loads(result.stdout).get("Peer") or {}
-    names = {(p.get("DNSName") or "").split(".")[0] or p.get("HostName") or ""
+    names = {clean(str((p.get("DNSName") or "").split(".")[0] or p.get("HostName") or ""))
              for p in peers.values() if p.get("Online") and str(p.get("OS", "")).lower() == "linux"}
   except (ValueError, AttributeError) as error:
     raise Error("tailscale status gave unexpected JSON") from error
@@ -505,7 +546,7 @@ def run_root(host, script, argv, doing):
   """Runs a script as root on the host in one sudo call, with argv as its $0 and arguments; sudo asks for the
   password on this terminal."""
   remote = shlex.join(["sudo", "bash", "-c", script, *argv])
-  if subprocess.run(["ssh", "-t", *SSH_OPTS, "--", host, remote], check=False).returncode != 0:
+  if run_on_tty(["ssh", "-t", *SSH_OPTS, "--", host, remote]) != 0:
     raise Error(f"{doing} {host} as root failed (see above)")
 
 
@@ -1398,7 +1439,8 @@ def main(argv):
       args.fn = DEMO_COMMANDS.get(args.command, args.fn)
     args.fn(args)
   except Error as error:
-    print(f"Error: {error}", file=sys.stderr)
+    # An error can quote a host (rsync's or git's stderr, a tailnet name): its controls go too.
+    print(f"Error: {clean(str(error))}", file=sys.stderr)
     return 1
   return 0
 

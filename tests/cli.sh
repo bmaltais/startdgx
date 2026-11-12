@@ -30,11 +30,15 @@ case "$cmd" in
   "sudo bash -c "*" startdgx-uninstall") printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi
     script=$(printf '%s' "${cmd#sudo }" | rooted); FAKE_AS_ROOT=1 host eval "$script";;
   "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/engine-root" ]; then root=$root bash "$FAKE_HOST/engine-root"; fi
+    if [ -n "${FAKE_ROOT_ESC:-}" ]; then printf 'root\033]52;c;ZXZpbA==\007says\n'; fi
     if [ -f "$FAKE_HOST/probe.after" ]; then cp "$FAKE_HOST/probe.after" "$FAKE_HOST/probe"; fi
     if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi;;
   *"cat > "*manifest*) mkdir -p "${FAKE_MANIFEST%/*}"; cat >"$FAKE_MANIFEST";;
   *"cat "*manifest.json*) cat "$FAKE_MANIFEST" 2>/dev/null; true;;
   *"profile"*) echo '{"ram_class":128,"gpus":[]}';;
+  # A host that prints terminal controls: an OSC 52 clipboard write, a C1 CSI, a byte that isn't UTF-8.
+  *"logs ctlerr"*) printf 'Error: bad\033[2Jthing\n' >&2; exit 1;;
+  *"logs ctl"*) printf 'a\033]52;c;ZXZpbA==\007b\302\233c\td\n\377e\n';;
   *"start slow-load"*) sleep 2; echo "Started slow-load";;
   # The engine's detach_use: it starts one setup unit per model and says so, or that it's already running.
   *" use "*" --detach") rid=${cmd% --detach}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
@@ -194,6 +198,9 @@ same "$out" "q-detach is already being set up; follow it with: journalctl"; ok $
 s use me@dgx q-plain >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use q-plain$'; ok $? "use without --detach waits for the setup"
 s logs me@dgx q-detach >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai logs q-detach$'; ok $? "logs shows a model's logs from the engine"
 s logs me@dgx >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai logs$'; ok $? "logs without a model shows the last one started"
+out=$(s logs me@dgx ctl | od -An -c | tr -s ' \n' ' '); ok $? "logs passes on output with terminal controls in it, and output that isn't UTF-8"
+same "$out" " a ] 5 2 ; c ; Z X Z p b A = = b c \t d \n 357 277 275 e \n "; ok $? "with the controls taken out (C0 and C1, but newline and tab), and bad bytes shown as such"
+out=$(s logs me@dgx ctlerr 2>&1 | od -An -c | tr -s ' \n' ' '); same "$out" " E r r o r : b a d [ 2 J t h i n g \n "; ok $? "and an error line from the host is cleaned too"
 # launch, against a fake terminal launcher that records how many arguments it got, then each one.
 cat >"$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<'F'
 #!/usr/bin/env bash
@@ -256,6 +263,8 @@ fresh_host linger=yes podman=no podman_major= link_kind=symlink link_target=/opt
 after linger=yes podman_major=4 "file:$limits=abc123 engine" link_kind=symlink "link_target=$entry" engine=e1
 s install me@spark --engine-path "$engine" >/dev/null; ok $? "install succeeds on a Spark"
 grep -qx -- -t "$FAKE_HOST/root-call"; ok $? "the root script runs with a terminal, for sudo's password prompt"
+out=$(FAKE_ROOT_ESC=1 s install me@spark --engine-path "$engine" 2>&1); echo "$out" | grep -q 'root]52;c;ZXZpbA==says' && ! echo "$out" | grep -q $'\033'
+ok $? "what the root script prints reaches this terminal without its terminal controls"
 grep -q engine-host-setup "$FAKE_HOST/root-call" && grep -q engine-cdi-compat "$FAKE_HOST/root-call" \
   && grep -q "ln -sf \"\$2\" /usr/local/bin/omarchy-agent-local" "$FAKE_HOST/root-call"; ok $? "the root script is the engine's own HOST_SETUP and MACHINE_SETUP_TAIL"
 tail -1 "$FAKE_HOST/root-call" | grep -q "startdgx-install me $entry\$"; ok $? "the root script gets the user and the engine path"
