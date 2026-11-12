@@ -30,9 +30,11 @@ Item {
   function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
 
   // A click: kind is start, stop, use, delete, share or unshare; entry the model's row as drawn.
-  function run(kind, id, entry) {
+  // `extra` is what the command needs besides (a context's size). A context change shows as a setup does: no mark of its own.
+  function run(kind, id, entry, extra) {
     poller.lastOp += 1
-    const s = Model.submit(poller.queue, { op: poller.lastOp, key: Model.actionKey(poller.host, id, kind), kind: kind, shows: kind }, entry)
+    const action = Object.assign({ op: poller.lastOp, key: Model.actionKey(poller.host, id, kind), kind: kind, shows: kind === "context" ? "use" : kind }, extra || {})
+    const s = Model.submit(poller.queue, action, entry)
     poller.queue = s.queue
     poller.launchNext()
   }

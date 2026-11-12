@@ -34,7 +34,7 @@ Item {
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
   // A card floats over the manager: "add" (Add machine), "uninstall" or "forget" (one machine's), "addModel" (a
-  // machine's model picker) or "remove" (one model's), or "" for none.
+  // machine's model picker) or "remove" or "context" (one model's), or "" for none.
   property string card: ""
   property string cardHost: ""
   property string cardModel: ""
@@ -110,6 +110,14 @@ Item {
     root.card = "addModel"
     core.listRecipes(host)
   }
+  function showContext(host, id) {
+    if (!Model.contextAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardModel = id
+    root.card = "context"
+    core.planContext(host, id)
+  }
   function showRemove(host, id) {
     if (!Model.removeAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
     root.ensureManager()
@@ -143,6 +151,8 @@ Item {
     case "uninstallNow": core.launch("uninstall", action.host, "", action.flags || []); root.close(); break
     case "addModel": root.showAddModel(action.host); break
     case "use": root.setUp(action.host, action.recipe); break
+    case "context": root.showContext(action.host, action.id); break
+    case "contextNow": core.setContext(action.host, action.id, action.ctx); root.closeCard(); break
     case "removeModel": root.showRemove(action.host, action.id); break
     case "removeNow": core.remove(action.host, action.id); root.closeCard(); break
     }
@@ -382,13 +392,15 @@ Item {
         anchors.fill: parent
         active: root.card !== ""
         sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard
-          : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard : addCard
+          : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
+          : root.card === "context" ? contextCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: contextCard; ContextView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
       Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
 
       Button {
