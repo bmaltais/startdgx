@@ -18,7 +18,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 - [x] Add and remove models from the manager (`use --detach`, `delete`), issue #6: the picker lists every recipe of the
   machine's catalog, best first, with why one can't run there; Remove… (Cancel the setup… on a download in progress)
   asks first and says the space it frees.
-- [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS]`: lists the tailnet's online Linux peers
+- [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS] [--limit SECONDS]`: (`--limit`, default 60, is how long the whole discover may take: a peer not heard from by then is unreachable, and one never asked says the limit ran out) lists the tailnet's online Linux peers
   (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new`
   with the install's read-only Spark probe (GB10 in `nvidia-smi`, DGX name in `/etc/dgx-release`), 8 at a time. It
   installs nothing and changes nothing on the peers. It does take the host key of a peer ssh has never seen (`accept-new`, discover's probes only: they go to the tailnet's own machines, which you chose to list) and saves it in `~/.ssh/known_hosts`, so a never-seen Spark can be offered Install; a key that changed is still refused, and says so. A peer that wants a password says `ssh needs a key: run ssh-copy-id USER@HOST`. The UI offers Install per machine. `--user` is the ssh user (default: this

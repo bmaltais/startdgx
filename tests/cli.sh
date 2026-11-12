@@ -247,6 +247,11 @@ mkdir -p "$tmp/empty"; out=$(PATH=$tmp/empty s launch install me@spark 2>&1); ok
 echo "$out" | grep -q '^Error: '; ok $? "and says so in one line"
 s use --help | tr -s ' \n' ' ' | grep -q 'default: 3600, or 120 with --detach'; ok $? "use --detach waits only for the setup to start"
 s forget me@dgx >/dev/null; s hosts --json | grep -q me@dgx; ok $((!$?)) "forget drops the host"
+# Adds and forgets run at once (the panel's forget doesn't wait behind an add): none may lose another's change.
+for i in $(seq 1 12); do s add "me@par$i" >/dev/null & done; s forget me@nothing >/dev/null 2>&1 & wait
+same "$(s hosts | grep -c '^me@par')" 12; ok $? "adds at the same time all land in hosts.json"
+for i in $(seq 1 12); do s forget "me@par$i" >/dev/null & done; wait
+same "$(s hosts | grep -c '^me@par')" 0; ok $? "and so do forgets"
 s engine | grep -Eq '^https://github.com/bmaltais/omarchy-local-ai v[0-9]+\.[0-9]+\.[0-9]+-dgx\.[0-9]+$'; ok $? "engine prints the pinned repo and tag"
 s engine --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["repo"].startswith("https://") and "-dgx." in d["tag"]))'; ok $? "engine --json gives repo and tag"
 
@@ -661,6 +666,13 @@ for _ in $(seq 50); do [ "$(wc -l <"$DISCO_PIDS")" -ge 8 ] && break; sleep 0.1; 
 kill -TERM "$cli_pid"; wait "$cli_pid"; sleep 0.5
 alive=0; while read -r p; do kill -0 "$p" 2>/dev/null && alive=$((alive+1)) && kill "$p"; done <"$DISCO_PIDS"
 same "$alive:$(wc -l <"$DISCO_PIDS")" "0:8"; ok $? "a stopped discover ends all its probes, and starts no more"
+: >"$DISCO_PIDS"; began=$SECONDS
+out=$(PATH=$disco/bin:$PATH "$here/bin/startdgx" discover --user me --json --timeout 20 --limit 2); ok $? "discover with a time limit succeeds when peers hang"
+same "$((SECONDS - began <= 5))" 1; ok $? "and ends at its limit, not each peer's timeout"
+echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (len(d) == 12 and all(not p["reachable"] and p["reason"] for p in d)))'
+ok $? "every peer it didn't hear from in time is unreachable, with why"
+echo "$out" | grep -q "discover's time limit"; ok $? "one it never asked says the limit ran out"
+"$here/bin/startdgx" discover --help | grep -q -- '--limit'; ok $? "discover --help names --limit"
 # Demo mode: fixtures from demo/, state under $XDG_STATE_HOME/startdgx-demo, and nothing run. Every tool that could
 # reach a machine is a shim here that records its call; the last test fails if demo mode ran any of them.
 mkdir -p "$tmp/demo-bin"; export DEMO_CALLS=$tmp/demo-calls; : >"$DEMO_CALLS"

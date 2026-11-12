@@ -34,8 +34,10 @@ Item {
   property string error: ""
   property string notice: ""
 
-  // The machine-list actions (add, forget) wait their turn here: { args }.
+  // Adds wait their turn here ({ args }); forgets in their own line (`forgets`, targets), so forgetting a machine
+  // never waits behind an add that is timing out on another (the CLI locks hosts.json for each change).
   property var queue: []
+  property var forgets: []
   readonly property bool busy: hostsActionProc.running || service.queue.length > 0
 
   // Discovery, for the Add machine card.
@@ -208,7 +210,19 @@ Item {
     hostsActionProc.running = true
   }
   function addHost(target) { service.run(["add", target]) }
-  function forget(host) { service.run(["forget", host]) }
+  function forget(host) {
+    service.forgets = service.forgets.concat([host])
+    service.nextForget()
+  }
+  function nextForget() {
+    if (forgetProc.running || service.forgets.length === 0) return
+    const host = service.forgets[0]
+    service.forgets = service.forgets.slice(1)
+    service.error = ""
+    service.notice = ""
+    forgetProc.command = [service.script, "forget", host]
+    forgetProc.running = true
+  }
 
   // `user`: the ssh user on the machines, or "" for this machine's.
   function discover(user) {
@@ -303,6 +317,18 @@ Item {
       }
       service.refreshHosts()
       service.runNext()
+    }
+  }
+
+  Process {
+    id: forgetProc
+    stdout: StdioCollector { id: forgetOut; waitForEnd: true }
+    stderr: StdioCollector { id: forgetErr; waitForEnd: true }
+    onExited: function (code) {
+      if (code !== 0) service.error = Model.errorLine(forgetErr.text, "The machine could not be forgotten")
+      else service.notice = Model.lastLine(forgetOut.text)
+      service.refreshHosts()
+      service.nextForget()
     }
   }
 

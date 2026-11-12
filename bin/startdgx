@@ -287,11 +287,16 @@ def load_hosts():
     return {}
 
 
-def save_hosts(hosts):
+@contextlib.contextmanager
+def hosts_changing():
+  """The hosts to change, saved when the block ends; one change at a time, so an add and a forget running at once
+  (the panel runs them in parallel) never lose each other's."""
   os.makedirs(os.path.dirname(config_path()), exist_ok=True)
-  with open(config_path(), "w") as f:
-    json.dump(hosts, f, indent=2)
-    f.write("\n")
+  with open(config_path() + ".lock", "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    hosts = load_hosts()
+    yield hosts
+    write_json(config_path(), hosts)
 
 
 def target(host):
@@ -335,17 +340,15 @@ def recipe(value):
 
 def cmd_add(args):
   profile = json.loads(ssh(ssh_target(args.host), "profile").stdout)
-  hosts = load_hosts()
-  hosts[args.host] = {"profile": profile}
-  save_hosts(hosts)
+  with hosts_changing() as hosts:
+    hosts[args.host] = {"profile": profile}
   print(f"{args.host} added")
 
 
 def cmd_remove_host(args):
-  hosts = load_hosts()
-  if hosts.pop(args.host, None) is None:
-    raise Error(f"{args.host} isn't added")
-  save_hosts(hosts)
+  with hosts_changing() as hosts:
+    if hosts.pop(args.host, None) is None:
+      raise Error(f"{args.host} isn't added")
   print(f"{args.host} removed from startdgx")
 
 
@@ -456,16 +459,21 @@ def tailnet_peers():
   return sorted(names - {""})
 
 
-def discover_peer(name, user, timeout, added):
-  """One peer's record. Pure: it reads nothing shared and writes nothing, so peers can be probed in parallel."""
+def discover_peer(name, user, timeout, added, deadline, limit):
+  """One peer's record. Pure: it reads nothing shared and writes nothing, so peers can be probed in parallel. A probe
+  never runs past discover's deadline (time.monotonic())."""
   host = f"{user}@{name}"
   record = {"name": name, "target": host, "reachable": False, "reason": None, "spark": None, "installed": None, "engine": None,
             "added": host in added}
   if not TARGET_RE.match(name) or name.startswith("-") or not TARGET_RE.match(host):
     record["reason"] = "not a valid ssh name"
     return record
+  left = deadline - time.monotonic()
+  if left < 1:
+    record["reason"] = f"not asked: discover's time limit ({limit} s) ran out"
+    return record
   try:
-    result = ssh_raw(host, "bash -s", stdin=DISCOVER_PROBE, timeout=timeout, check=False, what="probe", opts=DISCOVER_SSH_OPTS)
+    result = ssh_raw(host, "bash -s", stdin=DISCOVER_PROBE, timeout=min(timeout, left), check=False, what="probe", opts=DISCOVER_SSH_OPTS)
   except Error as error:
     record["reason"] = str(error)
     return record
@@ -488,17 +496,18 @@ def ssh_failure(host, stderr):
   return (stderr.strip().splitlines() or ["ssh failed"])[-1]
 
 
-def discover_peers(user, timeout):
+def discover_peers(user, timeout, limit):
   names, added = tailnet_peers(), set(load_hosts())
+  deadline = time.monotonic() + limit
   with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVER_WORKERS) as pool:
-    return list(pool.map(lambda name: discover_peer(name, user, timeout, added), names))
+    return list(pool.map(lambda name: discover_peer(name, user, timeout, added, deadline, limit), names))
 
 
 def cmd_discover(args):
   user = args.user or ("demo" if DEMO else getpass.getuser())
   if not TARGET_RE.match(user) or user.startswith("-") or "@" in user:
     raise Error("Not a valid user name")
-  records = demo_peers(user) if DEMO else discover_peers(user, args.timeout)
+  records = demo_peers(user) if DEMO else discover_peers(user, args.timeout, args.limit)
   if args.json:
     print(json.dumps(records, indent=2))
     return
@@ -1346,9 +1355,8 @@ def demo_add(args):
   if not known:
     peer = next((p for p in read_fixture("discover.json") if p["name"] == name and p["reachable"]), None)
     raise Error(f"{args.host} has no engine: run startdgx install {args.host}" if peer else f"{args.host} didn't answer in time")
-  hosts = load_hosts()
-  hosts[args.host] = {"profile": next(iter(read_fixture("hosts.json").values()))["profile"]}
-  save_hosts(hosts)
+  with hosts_changing() as hosts:
+    hosts[args.host] = {"profile": next(iter(read_fixture("hosts.json").values()))["profile"]}
   print(f"{args.host} added")
 
 
@@ -1431,6 +1439,7 @@ def build_parser():
   d.add_argument("--json", action="store_true")
   d.add_argument("--user", help="the ssh user on the peers (default: this machine's user)")
   d.add_argument("--timeout", type=int, default=20, help="seconds to wait for each peer")
+  d.add_argument("--limit", type=int, default=60, help="seconds the whole discover may take; a peer not heard from by then is unreachable")
   d.set_defaults(fn=cmd_discover)
   add("forget", cmd_remove_host)
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)

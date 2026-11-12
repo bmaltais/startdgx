@@ -100,6 +100,7 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-12 | Forget has its own line, beside adds; discover stops at a time limit (60 s) and when its card closes | A forget waited behind an add to a machine that was timing out; a tailnet of hung peers kept discover going for minutes. The CLI locks hosts.json for each change, so the two lines can't lose each other's. |
 | 2026-11-11 | A card's question (catalog, removal or uninstall plan, the tailnet) runs through one Query each: a new one ends the old, waits for its exit, drops that answer, then asks | Killing and restarting one Process let the old one's exit arrive after the restart and read as the new card's error. Closing Add machine ends its discover. |
 | 2026-11-11 | notify-send and the status folder's mkdir stay in the QML; AGENTS.md's Layout rule now says so | The smaller of the two fixes the review allowed: moving them into the CLI would add two commands, and demo mode's wall (which refuses every process) would then take the nested session's notifications away. Neither reaches a machine; notify-send gets `--` before its text and the body's `&<>` escaped (`DgxModel.notifyCommand`). |
 | 2026-11-11 | The uninstall card offers `--delete-models` and `--remove-packages` as opt-ins, off by default, read from a new `uninstall --dry-run --json` | They were command-line only; each states its cost (the space, the packages), and the plan is asked again with them so what the terminal does is what was shown. |
