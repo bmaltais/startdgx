@@ -37,6 +37,7 @@ F
 cat >"$tmp/bin/rsync" <<'F'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_HOST/rsync.log"
+if [ -n "${FAKE_RSYNC_FAIL:-}" ]; then echo "rsync: connection unexpectedly closed" >&2; exit 12; fi
 F
 chmod +x "$tmp/bin/ssh" "$tmp/bin/rsync"; export FAKE_LOG=$tmp/log FAKE_HOST=$tmp/host
 export FAKE_MANIFEST=$FAKE_HOST/home/.local/share/startdgx/manifest.json FAKE_HOSTBIN=$tmp/hostbin
@@ -196,8 +197,11 @@ same "$(items)" "$first"; ok $? "a second install keeps the manifest's items, pr
 fresh_host
 after linger=yes "file:$limits=abc123 engine"
 FAKE_ROOT_FAIL=1 s install me@spark --engine-path "$engine" >/dev/null 2>&1; ok $((!$?)) "install fails when the root script fails"
-m 'item("linger", "me")["previous"] == {"linger": "no"}'; ok $? "a failed install still records what was there before"
-s install me@spark --engine-path "$engine" >/dev/null; m 'item("linger", "me")["created_by_us"]'; ok $? "a rerun after a failure marks what the failed run changed as ours"
+m 'item("linger", "me")["previous"] == {"linger": "no"} and item("linger", "me")["created_by_us"]'; ok $? "a failed install records what was there before and what its root script changed"
+s install me@spark --engine-path "$engine" >/dev/null; m 'item("linger", "me")["previous"] == {"linger": "no"} and item("linger", "me")["created_by_us"]'; ok $? "a rerun after a failure keeps both"
+fresh_host; after linger=yes
+FAKE_RSYNC_FAIL=1 s install me@spark --engine-path "$engine" >/dev/null 2>&1; ok $((!$?)) "install fails when copying the engine fails"
+m 'item("linger", "me")["created_by_us"]'; ok $? "a failed copy still records what the root script changed"
 
 cdi=/etc/cdi/nvidia.yaml compat=/usr/local/sbin/nvidia-cdi-podman-compat bk=$FAKE_HOST/home/.local/share/startdgx/backup
 fresh_host; put $cdi 'cdiVersion: 0.6.0'; put $compat '#!/bin/sh'; put /etc/other 'not ours'
@@ -322,6 +326,10 @@ same "$(cat "$r$cdi")" 'cdiVersion: 0.7.0' && echo "$out" | grep -q "backup .* i
 ok $? "it leaves that file, says why, and still reverts the rest"
 present "$FAKE_MANIFEST" "$h/.local/share/startdgx/backup/etc_cdi_nvidia.yaml" && grep -q '"me@spark"' "$XDG_CONFIG_HOME/startdgx/hosts.json"
 ok $? "a failed restore keeps the manifest, the backups and the host"
+
+FAKE_ROOT_FAIL=1 installed 2>/dev/null
+s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall after a failed install succeeds"
+grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link" "$FAKE_MANIFEST"; ok $? "it undoes what the failed install's root script did"
 
 before_root="put $link '#!/bin/sh old agent'"; installed; before_root=''
 m 'item("symlink", "'$link'")["changed_by_us"] and item("symlink", "'$link'")["previous"]["type"] == "file"'; ok $? "a plain file where the agent link goes is recorded as changed"

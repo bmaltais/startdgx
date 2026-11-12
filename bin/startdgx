@@ -440,10 +440,19 @@ def cmd_install(args):
     # Recorded before anything changes, so an install that fails halfway still knows what was there.
     ssh_raw(host, "bash -s -- startdgx-backup", stdin=BACKUP, what="backup")
     write_manifest(host, build_manifest(old, before, before, engine))
-    print(f"Preparing {host} (sudo there asks for your password)")
-    run_root(host, script, ["startdgx-install", before["user"], engine_entry(before)], "Preparing")
-    print(f"Copying the engine to {host}")
-    sync_engine(host, src)
+    try:
+      print(f"Preparing {host} (sudo there asks for your password)")
+      run_root(host, script, ["startdgx-install", before["user"], engine_entry(before)], "Preparing")
+      print(f"Copying the engine to {host}")
+      sync_engine(host, src)
+    except BaseException:
+      # What a failed root script or copy changed is recorded too, so an uninstall can still undo it.
+      try:
+        write_manifest(host, build_manifest(old, before, probe(host), engine))
+      except Error as error:
+        print(f"Warning: can't record what the failed install changed ({error}); "
+              f"{host}:{MANIFEST} has only what was there before", file=sys.stderr)
+      raise
     write_manifest(host, build_manifest(old, before, probe(host), engine))
   print(f"Install recorded in {host}:{MANIFEST}")
   cmd_add(args)
