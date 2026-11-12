@@ -4,13 +4,71 @@
 Every command is `ssh host <engine> <args>`; hosts are kept in ~/.config/startdgx/hosts.json.
 Output is JSON when --json is given, which is what the Omarchy panel reads.
 """
-import argparse, json, os, re, shlex, subprocess, sys
+import argparse
+import ast
+import contextlib
+import datetime
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
 ENGINE_TAG = "v0.6.3-dgx.1"
 TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$")
 RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]*$")
+HOME_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+
+# What the engine's host setup (HOST_SETUP + MACHINE_SETUP_TAIL in its agent_local.py) may create or change as root.
+ROOT_FILES = (
+  "/etc/security/limits.d/99-rdma-memlock.conf",
+  "/etc/systemd/user.conf.d/99-rdma-memlock.conf",
+  "/usr/local/sbin/nvidia-cdi-podman-compat",
+  "/etc/systemd/system/nvidia-cdi-refresh.service.d/podman-compat.conf",
+  "/etc/cdi/nvidia.yaml",
+)
+PACKAGES = ("podman", "rsync", "python3")
+AGENT_LINK = "/usr/local/bin/omarchy-agent-local"
+ENGINE_DIR = ".local/share/omarchy-local-ai"
+MANIFEST = "~/.local/share/startdgx/manifest.json"
+
+# Read-only: prints key=value lines about the host. Bash, since python3 may be one of the missing tools.
+PROBE = r'''
+echo "user=$(id -un)"
+echo "home=$HOME"
+echo "gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+echo "dgx_name=$(sed -n 's/^DGX_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/dgx-release 2>/dev/null | head -1)"
+for tool in podman rsync python3; do
+  if command -v "$tool" >/dev/null; then echo "$tool=yes"; else echo "$tool=no"; fi
+done
+echo "linger=$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
+echo "podman_major=$(podman version --format '{{.Client.Version}}' 2>/dev/null | cut -d. -f1)"
+if grep -qs additionalGids /var/run/cdi/nvidia.yaml; then echo var_cdi_gids=yes; else echo var_cdi_gids=no; fi
+if grep -qs '^\*[[:space:]]*hard[[:space:]]*memlock[[:space:]]*unlimited' /etc/security/limits.d/*.conf; then
+  echo memlock_limits=yes; else echo memlock_limits=no; fi
+for path in @ROOT_FILES@; do
+  if [ -e "$path" ]; then
+    if head -2 "$path" | grep -q -e 'RDMA between paired DGX Sparks' -e 'Written by omarchy-local-ai'; then owner=engine; else owner=other; fi
+    echo "file:$path=$(sha256sum <"$path" | cut -c1-64) $owner"
+  else
+    echo "file:$path="
+  fi
+done
+link=/usr/local/bin/omarchy-agent-local
+if [ -L "$link" ]; then echo link_kind=symlink; echo "link_target=$(readlink "$link")"
+elif [ -e "$link" ]; then echo link_kind=file; echo link_target=
+else echo link_kind=none; echo link_target=; fi
+engine=$HOME/.local/share/omarchy-local-ai
+if [ -f "$engine/agent_local.py" ]; then echo "engine=$(sha256sum <"$engine/agent_local.py" | cut -c1-64)"
+elif [ -d "$engine" ]; then echo engine=present
+else echo engine=; fi
+'''.replace("@ROOT_FILES@", " ".join(ROOT_FILES))
 
 
 class Error(Exception):
@@ -46,15 +104,26 @@ def target(host):
 
 
 def ssh(host, *argv, timeout=None, check=True):
-  cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", host, f"{ENGINE} {shlex.join(argv)}"]
+  return ssh_raw(host, f"{ENGINE} {shlex.join(argv)}", timeout=timeout, check=check, what=argv[0])
+
+
+def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command"):
+  """Runs a fixed shell command on the host; anything variable in it must already be shlex-quoted."""
+  cmd = ["ssh", *SSH_OPTS, "--", host, command]
   try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-  except subprocess.TimeoutExpired:
-    raise Error(f"{host} didn't answer in time")
+    result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
+  except subprocess.TimeoutExpired as error:
+    raise Error(f"{host} didn't answer in time") from error
   if check and result.returncode != 0:
-    lines = (result.stderr.strip().splitlines() or [f"{argv[0]} failed on {host}"])
+    lines = (result.stderr.strip().splitlines() or [f"{what} failed on {host}"])
     raise Error(lines[-1].removeprefix("Error: "))
   return result
+
+
+def ssh_target(host):
+  if not TARGET_RE.match(host) or host.startswith("-"):
+    raise Error("Name the machine as SSH reaches it, e.g. user@spark-1234.local")
+  return host
 
 
 def recipe(value):
@@ -64,9 +133,7 @@ def recipe(value):
 
 
 def cmd_add(args):
-  if not TARGET_RE.match(args.host) or args.host.startswith("-"):
-    raise Error("Name the machine as SSH reaches it, e.g. user@spark-1234.local")
-  profile = json.loads(ssh(args.host, "profile").stdout)
+  profile = json.loads(ssh(ssh_target(args.host), "profile").stdout)
   hosts = load_hosts()
   hosts[args.host] = {"profile": profile}
   save_hosts(hosts)
@@ -122,6 +189,175 @@ def cmd_delete(args):
   sys.stdout.write(ssh(target(args.host), "remove", recipe(args.model), timeout=args.timeout).stdout)
 
 
+def probe(host):
+  """The host's state as a dict, from the read-only PROBE; a key given twice keeps its last value."""
+  out = ssh_raw(host, "bash -s", stdin=PROBE, timeout=60, what="probe").stdout
+  state = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+  if not USER_RE.match(state.get("user", "")) or not HOME_RE.match(state.get("home", "")):
+    raise Error(f"{host} reported an unexpected user or home directory")
+  return state
+
+
+def is_spark(state):
+  return "GB10" in state.get("gpu", "") or "Spark" in state.get("dgx_name", "")
+
+
+def engine_entry(state):
+  return f"{state['home']}/{ENGINE_DIR}/omarchy-local-ai"
+
+
+def plan(state, args):
+  """What an install would change, predicted from the probe with HOST_SETUP's own conditions."""
+  steps = [f"copy the engine from {os.path.abspath(args.engine_path)}" if args.engine_path else f"clone {ENGINE_REPO} at {ENGINE_TAG}"]
+  if state.get("memlock_limits") != "yes":
+    steps.append(f"create {ROOT_FILES[0]} (unlimited locked memory)")
+  if not state.get(f"file:{ROOT_FILES[1]}"):
+    steps.append(f"create {ROOT_FILES[1]} (unlimited locked memory for user services)")
+  missing = [tool for tool in PACKAGES if state.get(tool) != "yes"]
+  if missing:
+    steps.append(f"install {' '.join(missing)}")
+  major = state.get("podman_major", "")
+  if (not major.isdigit() or int(major) < 5) and state.get("var_cdi_gids") == "yes":
+    steps.append(f"write the Podman 4 CDI compat: {', '.join(ROOT_FILES[2:])}")
+  if state.get("linger") != "yes":
+    steps.append(f"enable linger for {state['user']}")
+  if state.get("link_target") != engine_entry(state):
+    steps.append(f"link {AGENT_LINK} -> {engine_entry(state)}")
+  steps += [f"copy the engine to ~/{ENGINE_DIR}", f"write {MANIFEST}", f"add {args.host} to startdgx"]
+  return steps
+
+
+@contextlib.contextmanager
+def engine_source(args):
+  """A checkout of the engine on this machine: --engine-path, or the pinned tag cloned into a temporary directory."""
+  if args.engine_path:
+    path = os.path.abspath(args.engine_path)
+    if not os.path.isfile(os.path.join(path, "agent_local.py")):
+      raise Error(f"{path} isn't an omarchy-local-ai checkout (no agent_local.py)")
+    yield path
+    return
+  with tempfile.TemporaryDirectory(prefix="startdgx-engine-") as tmp:
+    path = os.path.join(tmp, "engine")
+    clone = subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", ENGINE_TAG, "--", ENGINE_REPO, path],
+                           capture_output=True, text=True, check=False)
+    if clone.returncode != 0:
+      raise Error(f"Can't clone {ENGINE_REPO} at {ENGINE_TAG}: {clone.stderr.strip()[-400:]}")
+    yield path
+
+
+def engine_setup_script(src):
+  """The engine's own root setup, HOST_SETUP (with its CDI compat) then MACHINE_SETUP_TAIL, read from its
+  agent_local.py without running any of it."""
+  path = os.path.join(src, "agent_local.py")
+  try:
+    with open(path) as f:
+      tree = ast.parse(f.read(), path)
+  except (OSError, SyntaxError) as error:
+    raise Error(f"Can't read the engine's host setup in {path}: {error}") from error
+  found = {target.id: node.value.value for node in tree.body if isinstance(node, ast.Assign)
+           and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+           for target in node.targets if isinstance(target, ast.Name)}
+  missing = [name for name in ("HOST_SETUP", "CDI_COMPAT", "MACHINE_SETUP_TAIL") if name not in found]
+  if missing:
+    raise Error(f"The engine in {src} has no {', '.join(missing)}: is it older than machine add?")
+  return found["HOST_SETUP"].replace("@CDI_COMPAT@", found["CDI_COMPAT"]) + found["MACHINE_SETUP_TAIL"]
+
+
+def run_root(host, script, state):
+  """Runs the setup as root on the host in one sudo call; sudo asks for the password on this terminal."""
+  remote = shlex.join(["sudo", "bash", "-c", script, "startdgx-install", state["user"], engine_entry(state)])
+  if subprocess.run(["ssh", "-t", *SSH_OPTS, "--", host, remote], check=False).returncode != 0:
+    raise Error(f"Preparing {host} as root failed (see above)")
+
+
+def sync_engine(host, src):
+  ssh_raw(host, f"mkdir -p ~/{ENGINE_DIR}", what="mkdir")
+  copy = subprocess.run(["rsync", "-a", "--delete", "--exclude=.git", "--exclude=__pycache__", "-e", shlex.join(["ssh", *SSH_OPTS]),
+                         src + "/", f"{host}:{ENGINE_DIR}/"], capture_output=True, text=True, check=False)
+  if copy.returncode != 0:
+    raise Error(f"Copying the engine to {host} failed: {copy.stderr.strip()[-400:]}")
+
+
+NAMED_KINDS = ("package", "linger")
+
+
+def snapshot(state):
+  """Everything the install may create or change, by (kind, path or name), as it is in this probe."""
+  items = {}
+  for path in ROOT_FILES:
+    sha, _, owner = state.get(f"file:{path}", "").partition(" ")
+    items[("file", path)] = {"exists": bool(sha), "sha256": sha or None, "engine_header": owner == "engine"}
+  for tool in PACKAGES:
+    items[("package", tool)] = {"installed": state.get(tool) == "yes"}
+  items[("linger", state["user"])] = {"linger": state.get("linger", "")}
+  items[("symlink", AGENT_LINK)] = {"type": state.get("link_kind", "none"), "target": state.get("link_target") or None}
+  engine = state.get("engine", "")
+  items[("engine", f"{state['home']}/{ENGINE_DIR}")] = {"exists": bool(engine), "agent_local_sha256": engine if len(engine) == 64 else None}
+  return items
+
+
+def item_key(item):
+  return (item["kind"], item.get("path") or item.get("name"))
+
+
+def build_manifest(old, before, now, engine):
+  """The manifest after an install: each item keeps the earliest `previous` any install recorded, and is ours
+  when it differs from that now."""
+  earliest = {item_key(item): item["previous"] for item in old.get("items", [])}
+  start, current = snapshot(before), snapshot(now)
+  items = []
+  for (kind, ref), state in current.items():
+    previous = earliest.get((kind, ref), start[(kind, ref)])
+    items.append({"kind": kind, "name" if kind in NAMED_KINDS else "path": ref, "created_by_us": previous != state, "previous": previous})
+  items += [item for item in old.get("items", []) if item_key(item) not in current]
+  stamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
+  return {"schema_version": 1, "engine": engine, "installed_at": old.get("installed_at") or stamp, "updated_at": stamp,
+          "pre_state": old.get("pre_state") or before, "items": items}
+
+
+def read_manifest(host):
+  text = ssh_raw(host, f"cat {MANIFEST} 2>/dev/null || true", what="cat").stdout
+  try:
+    return json.loads(text) if text.strip() else {}
+  except ValueError as error:
+    raise Error(f"{host}:{MANIFEST} isn't valid JSON; move it aside to install again") from error
+
+
+def write_manifest(host, manifest):
+  tmp = MANIFEST + ".tmp"
+  ssh_raw(host, f"mkdir -p {os.path.dirname(MANIFEST)} && cat > {tmp} && mv {tmp} {MANIFEST}",
+          stdin=json.dumps(manifest, indent=2) + "\n", what="manifest")
+
+
+def engine_record(args, state):
+  local = os.path.abspath(args.engine_path) if args.engine_path else None
+  return {"repo": None if local else ENGINE_REPO, "tag": None if local else ENGINE_TAG, "local_checkout": local,
+          "path": f"{state['home']}/{ENGINE_DIR}"}
+
+
+def cmd_install(args):
+  host = ssh_target(args.host)
+  before = probe(host)
+  if not is_spark(before):
+    raise Error(f"{host} isn't a DGX Spark (no GB10 GPU and no DGX Spark in /etc/dgx-release)")
+  if args.dry_run:
+    print(f"Would, on {host}:")
+    for step in plan(before, args):
+      print(f"  {step}")
+    return
+  with engine_source(args) as src:
+    script, old, engine = engine_setup_script(src), read_manifest(host), engine_record(args, before)
+    # Recorded before anything changes, so an install that fails halfway still knows what was there.
+    write_manifest(host, build_manifest(old, before, before, engine))
+    print(f"Preparing {host} (sudo there asks for your password)")
+    run_root(host, script, before)
+    print(f"Copying the engine to {host}")
+    sync_engine(host, src)
+    write_manifest(host, build_manifest(old, before, probe(host), engine))
+  print(f"Install recorded in {host}:{MANIFEST}")
+  cmd_add(args)
+
+
 def cmd_engine(args):
   if args.json:
     print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
@@ -147,6 +383,9 @@ def build_parser():
 
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
+  i = add("install", cmd_install, timeout=3600)
+  i.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
+  i.add_argument("--engine-path", metavar="DIR", help=f"copy this engine checkout instead of cloning {ENGINE_TAG}")
   add("forget", cmd_remove_host)
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)
   add("status", cmd_status)
