@@ -1,0 +1,11 @@
+{
+  "note": "Architecture names (the `architectures` value of a repo's config.json) of the families TensorFold is known to serve on a GB10: its README's table and the curated recipes. `source` is the repo whose config.json the name was read from.",
+  "families": {
+    "Qwen3_5ForConditionalGeneration": {"family": "Qwen3.5/3.6/3.8", "checked": "TensorFold README (GB10); curated recipes qwen3.8-27b-tensorfold and qwen3.8-27b-abliterated-tensorfold", "source": "TensorFold/Qwen3.8-27B-MLX-4bit"},
+    "Qwen4ExpForConditionalGeneration": {"family": "Qwen3.8 Flash Next", "checked": "TensorFold README (GB10); curated recipe qwen3.8-flash-next-tensorfold", "source": "TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP"},
+    "NemotronHForCausalLM": {"family": "Nemotron 3.5 Lightning", "checked": "TensorFold README (GB10)", "source": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit"},
+    "NemotronH_Omni_Reasoning_V3": {"family": "Nemotron 3.5 Bolt", "checked": "curated recipe nemotron-3.5-bolt-tensorfold", "source": "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"},
+    "Lfm2MoeForCausalLM": {"family": "LFM2.5", "checked": "TensorFold README (GB10)", "source": "LiquidAI/LFM2.5-24B-A2B-MLX-4bit"},
+    "Gemma4ForConditionalGeneration": {"family": "Gemma 4 31B", "checked": "TensorFold README (GB10)", "source": "mlx-community/gemma-4-31b-it-4bit"}
+  }
+}

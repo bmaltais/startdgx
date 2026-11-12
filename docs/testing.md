@@ -7,6 +7,7 @@ The session, the checks and reload are the devkit's (`scripts/devkit`, a git sub
 `scripts/check.sh` runs the devkit's `check` (bash -n and shellcheck on `scripts/`, `tests/`, `.githooks/` and `devkit.conf`, the kit's lint rules, qmllint against `scripts/qmllint-baseline.txt`, `omarchy plugin validate .`), then:
 
 - `tests/cli.sh`: the CLI against a fake ssh and a fake host, and demo mode with shims that fail the run if it ever starts ssh, rsync, sudo, tailscale or a terminal.
+- `hf search` cases run against the fixture folder `demo/hf` through `STARTDGX_HF_BASE` (a URL, or a folder laid out like the API: `api/models.json`, `api/models/OWNER/NAME/tree/main.json`, `OWNER/NAME/raw/main/config.json`); rate limit and offline use a throwaway local server and a closed local port. Demo mode ignores the variable and reads `demo/hf`. Nothing reaches the real site. The known families are `known-families.json` (JSON, since the installer drops `.md`).
 - `node --test tests/js/`: the manager's rules in `DgxModel.js` (scoped to `tests/js/` so the devkit's own tests are not swept in). They run on the demo's fixtures and on a real DGX Spark's answers (`tests/js/fixtures/gx10-status.json` and `gx10-list.json`, `startdgx status` and `list` of gx10-f5f4 at engine v0.6.3-dgx.1; nothing secret in them), so a change in the engine's output shows up there.
 - The icon check: an empty `iconText` fails (write icons as `\uXXXX` escapes).
 

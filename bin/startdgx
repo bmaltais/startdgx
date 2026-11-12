@@ -25,6 +25,9 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
@@ -1374,6 +1377,109 @@ def cmd_engine(args):
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
 
 
+# hf search: the anonymous Hugging Face API, read-only, on this computer (no host, no ssh). The base address is
+# STARTDGX_HF_BASE: a URL, or a folder of fixtures (api/models.json, api/models/OWNER/NAME/tree/main.json and
+# OWNER/NAME/raw/main/config.json) for tests; demo mode always uses the folder in demo/hf and never the network.
+HF_DEFAULT_BASE = "https://huggingface.co"
+HF_LIMIT = 50
+HF_WORKERS = 8
+HF_TIMEOUT = 20
+KNOWN_FAMILIES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "known-families.json")
+HF_LABEL_RE = re.compile(r"abliterated|uncensored", re.I)
+
+
+def hf_get(base, path, query=None):
+  """A JSON document from the Hugging Face API, or None when the repo has no such file. Errors: rate limited, offline."""
+  if not re.match(r"^https?://", base):
+    local = os.path.join(base.removeprefix("file://"), *path.split("/"))
+    try:
+      with open(local if local.endswith(".json") else local + ".json") as f:
+        return json.load(f)
+    except (OSError, ValueError):
+      return None
+  url = f"{base.rstrip('/')}/{path}" + (f"?{query}" if query else "")
+  request = urllib.request.Request(url, headers={"User-Agent": "startdgx", "Accept": "application/json"})
+  try:
+    with urllib.request.urlopen(request, timeout=HF_TIMEOUT) as response:
+      return json.load(response)
+  except urllib.error.HTTPError as error:
+    if error.code == 429:
+      try:
+        wait = max(1, -(-int(error.headers.get("Retry-After") or 60) // 60))
+      except ValueError:
+        wait = 1
+      raise Error(f"Hugging Face is limiting requests, try again in {wait} minute{'s' if wait != 1 else ''}") from error
+    if error.code in (401, 403, 404):
+      return None
+    raise Error(f"Hugging Face answered {error.code}") from error
+  except ValueError:
+    return None
+  except (urllib.error.URLError, OSError) as error:
+    raise Error("Can't reach Hugging Face: check the network") from error
+
+
+def hf_known_families():
+  with open(KNOWN_FAMILIES) as f:
+    return set(json.load(f)["families"])
+
+
+def hf_is_affine_4bit(config):
+  quantization = config.get("quantization") if isinstance(config, dict) else None
+  return isinstance(quantization, dict) and quantization.get("mode") == "affine" and quantization.get("bits") == 4
+
+
+def hf_row(base, item):
+  """A listing item whose config passed, as its row; the weights' size is the repo's .safetensors files."""
+  repo = item["id"]
+  card = item.get("cardData") or {}
+  base_model = card.get("base_model")
+  if isinstance(base_model, list):
+    base_model = base_model[0] if base_model else None
+  tree = hf_get(base, f"api/models/{repo}/tree/main") or []
+  sizes = [e.get("size") for e in tree if isinstance(e, dict) and str(e.get("path", "")).endswith(".safetensors")]
+  label = HF_LABEL_RE.search(" ".join([repo, *(item.get("tags") or [])]))
+  return {"repo": repo, "params": (item.get("safetensors") or {}).get("total"),
+          "size_bytes": sum(s for s in sizes if isinstance(s, int)) if sizes else None,
+          "license": card.get("license"), "base_model": base_model, "label": label.group(0).lower() if label else None}
+
+
+def hf_search(base, query):
+  known = hf_known_families()
+  fields = "".join(f"&expand[]={f}" for f in ("safetensors", "gated", "cardData", "tags"))
+  listing = hf_get(base, "api/models", f"filter=mlx&search={urllib.parse.quote(query)}&limit={HF_LIMIT}&sort=downloads&direction=-1{fields}")
+  if not isinstance(listing, list):
+    raise Error("Hugging Face gave an answer startdgx can't read")
+  items = [i for i in listing if isinstance(i, dict) and isinstance(i.get("id"), str) and not i.get("gated")]
+
+  def check(item):
+    config = hf_get(base, f"{item['id']}/raw/main/config.json")
+    archs = config.get("architectures") if isinstance(config, dict) else None
+    if hf_is_affine_4bit(config) and isinstance(archs, list) and known.intersection(a for a in archs if isinstance(a, str)):
+      return hf_row(base, item)
+    return None
+
+  with concurrent.futures.ThreadPoolExecutor(HF_WORKERS) as pool:
+    return [row for row in pool.map(check, items) if row]
+
+
+def hf_line(row):
+  size = f"{row['size_bytes'] / 2**30:.1f} GiB" if row["size_bytes"] else "-"
+  params = f"{row['params'] / 1e9:.1f}B" if row["params"] else "-"
+  cells = [row["repo"], params, size, row["license"] or "-", row["base_model"] or "-"] + ([f"[{row['label']}]"] if row["label"] else [])
+  return "  ".join(cells)
+
+
+def cmd_hf_search(args):
+  base = os.path.join(DEMO_FIXTURES, "hf") if DEMO else os.environ.get("STARTDGX_HF_BASE") or HF_DEFAULT_BASE
+  rows = hf_search(base, args.query)
+  if args.json:
+    print(json.dumps(rows))
+  elif rows:
+    print("\n".join(hf_line(row) for row in rows))
+  else:
+    print("No known-family MLX 4-bit repos matched", file=sys.stderr)
+
+
 # Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
 # demo/ and change a copy of them under $XDG_STATE_HOME/startdgx-demo, so the panel can be clicked through, and no
 # process is ever run. Starts, stops, setups and removals take effect over time, as on a real host: each row is
@@ -1965,6 +2071,13 @@ def build_parser():
   de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
   de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
+  hp = sub.add_parser("hf", description="Hugging Face, read-only, from this computer: search the MLX affine 4-bit repos of known families.")
+  hv = hp.add_subparsers(dest="verb", required=True, metavar="search")
+  hs = hv.add_parser("search", description="List the top 50 mlx repos for QUERY that are affine 4-bit by their config.json, of a "
+                     "known family (known-families.json) and not gated. Memory is shown as facts only, never a fit.")
+  hs.add_argument("query")
+  hs.add_argument("--json", action="store_true", help="as [{repo, params, size_bytes, license, base_model, label}]")
+  hs.set_defaults(fn=cmd_hf_search)
   la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
                       "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
   la.add_argument("verb", metavar="install|uninstall|logs")
