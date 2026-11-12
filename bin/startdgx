@@ -594,7 +594,7 @@ def step_script(steps, preamble=""):
 
 SERVE_OFF = '''serve_off() {
   if ! out=$(tailscale serve --yes --set-path "$1" off 2>&1); then
-    case $out in *"not found"*) ;; *) echo "$out" >&2; return 1;; esac
+    case ${out,,} in *"not found"*) ;; *) echo "$out" >&2; return 1;; esac
   fi
 }'''
 FINISH = f"rm -rf ~/{BACKUP_DIR} && rm -f {MANIFEST} ~/{UNINSTALL_IMAGES} && rmdir --ignore-fail-on-non-empty ~/{STARTDGX_DIR}\n"
