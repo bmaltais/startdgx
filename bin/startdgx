@@ -670,11 +670,13 @@ def root_plan(manifest, state, args):
   elif ("symlink", AGENT_LINK) in changed:
     previous, backup = previous_of(changed[("symlink", AGENT_LINK)]), f"{home}/{BACKUP_DIR}/{BACKUPS[('symlink', AGENT_LINK)]}"
     target, sha = str(previous.get("target")), str(previous.get("sha256"))
+    # What was there goes with the manifest and backups, so a link that can't go back fails the script to keep them.
+    stuck = f'{left[:-1]}; put back what was there, then run uninstall again" >&2; failed=1'
     if previous.get("type") == "symlink" and HOME_RE.match(target):
       steps.append((f"point {AGENT_LINK} back at {target}", f'if [ "$(readlink {AGENT_LINK})" = {q(target)} ]; then :; '
-                                                            f"elif {at_engine}; then ln -sfn {q(target)} {AGENT_LINK}; else {left}; fi"))
+                                                            f"elif {at_engine}; then ln -sfn {q(target)} {AGENT_LINK}; else {stuck}; fi"))
     elif previous.get("type") == "file" and SHA_RE.match(sha):
-      put_back = f"if {at_engine}; then rm -f {AGENT_LINK} && cp {q(backup)} {AGENT_LINK}; else {left}; fi"
+      put_back = f"if {at_engine}; then rm -f {AGENT_LINK} && cp {q(backup)} {AGENT_LINK}; else {stuck}; fi"
       steps.append((f"restore {AGENT_LINK} from {backup}", restore(AGENT_LINK, backup, sha, put_back)))
     else:
       kept.append(f"keep {AGENT_LINK}: the manifest doesn't say what was there before")
@@ -734,7 +736,10 @@ def cmd_uninstall(args):
     print_manual_steps(host)
     return
   # The manifest and backups go only once everything else has, so a rerun after a failure finds them.
-  print(f"Removing what the engine set up on {host}")
+  if engine_is_ours(manifest, state):
+    print(f"Removing what the engine set up on {host}")
+  elif user_steps:
+    print(f"Putting back the engine that was on {host} before the install")
   run_steps(host, "user", step_script(user_steps, SERVE_OFF), args.timeout)
   if root_steps:
     print(f"Restoring {host} as root (sudo there asks for your password)")

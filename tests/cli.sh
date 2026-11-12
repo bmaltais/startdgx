@@ -162,7 +162,7 @@ out=$(s install me@pc --engine-path "$engine" 2>&1); ok $((!$?)) "install refuse
 echo "$out" | grep -q "isn't a DGX Spark"; ok $? "install says why it refused"
 none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log"; ok $? "a refused install changes nothing"
 
-fresh_host 'user=me;x'; s install --dry-run me@spark --engine-path "$engine" >/dev/null 2>&1; ok $((!$?)) "install refuses a host that reports an odd user"
+fresh_host 'user=me;x'; s install --dry-run me@spark --engine-path "$engine" 2>&1 | grep -q 'unexpected user'; ok $? "install refuses a host that reports an odd user"
 fresh_host podman=no; : >"$FAKE_LOG"
 out=$(s install --dry-run me@spark --engine-path "$engine"); ok $? "install --dry-run succeeds"
 none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log" "$FAKE_MANIFEST" \
@@ -313,7 +313,8 @@ echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/model
   && [ "$(echo "$out" | grep -c "$img")" = 1 ] && echo "$out" | grep -q 'disable linger for me' \
   && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
-FAKE_ID='me;x' s uninstall --dry-run me@spark >/dev/null 2>&1; ok $((!$?)) "uninstall refuses a host that reports an odd user"
+out=$(FAKE_ID='me;x' s uninstall --dry-run me@spark 2>&1); ok $((!$?)) "uninstall refuses a host that reports an odd user"
+echo "$out" | grep -q 'unexpected user'; ok $? "and says so, before comparing it with the manifest's"
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds"
 earlier "$(call 'engine share q1 --off')" "$(call 'systemctl --user stop')" && earlier "$(call 'systemctl --user stop')" "$(call 'tailscale serve --yes')" \
@@ -378,6 +379,7 @@ replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -pa
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
+! echo "$out" | grep -q 'Removing what the engine set up'; ok $? "and doesn't say it removes the engine's setup"
 same "$(ls "$eng")" agent_local.py && same "$(cat "$eng/agent_local.py")" 'old engine'; ok $? "it puts the old engine back"
 same "$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)" "$before" \
   && present "$FAKE_HOST/podman/network" "$FAKE_HOST/podman/secret" "$FAKE_HOST/podman/image-${img//[\/:@]/_}" \
@@ -394,6 +396,24 @@ before_root="put $link '#!/bin/sh old agent'"; installed; before_root=''
 m 'item("symlink", "'$link'")["changed_by_us"] and item("symlink", "'$link'")["previous"]["type"] == "file"'; ok $? "a plain file where the agent link goes is recorded as changed"
 s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where the agent link replaced a plain file"
 [ ! -L "$r$link" ] && same "$(cat "$r$link")" '#!/bin/sh old agent'; ok $? "the plain file is restored from its backup"
+
+for previous in "put $link '#!/bin/sh old agent'" "mkdir -p $r/usr/local/bin; ln -s /opt/old/agent $r$link"; do
+  before_root=$previous engine_root="ln -sfn /opt/someone-else \"\$root$link\""; installed; before_root='' engine_root=''
+  out=$(s uninstall me@spark 2>&1); ok $((!$?)) "uninstall fails when it can't put back an agent link that was there (${previous%% *})"
+  same "$(readlink "$r$link")" /opt/someone-else && present "$FAKE_MANIFEST" && echo "$out" | grep -q "left .*$link: it no longer points at the engine; put back"; ok $? "it leaves the link, says what to do, and keeps the manifest and backups"
+done
+
+compat_header='# Written by omarchy-local-ai link setup'
+dropin=/etc/systemd/system/nvidia-cdi-refresh.service.d/podman-compat.conf
+engine_root="mkdir -p \"\$root/usr/local/sbin\" \"\$root${dropin%/*}\" \"\$root/etc/cdi\"
+printf '#!/usr/bin/python3\\n%s\\n' '$compat_header' >\"\$root$compat\"
+printf '[Service]\\nExecStartPost=%s\\n' \"\$root$compat\" >\"\$root$dropin\"
+echo 'cdiVersion: 0.6.0' >\"\$root$cdi\""
+installed; engine_root=''
+s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where the install wrote the Podman 4 CDI compat"
+none_of "$r$compat" "$r$dropin" "$r${dropin%/*}" "$r$cdi" && grep -qx 'systemctl daemon-reload' "$FAKE_HOST/calls"; ok $? "it removes the compat script, its drop-in and the CDI spec, and reloads systemd"
+engine_root="mkdir -p \"\$root$(dirname $dropin)\"; printf '[Service]\\nExecStartPost=/opt/mine\\n' >\"\$root$dropin\""; installed; engine_root=''
+s uninstall me@spark >/dev/null 2>&1; present "$r$dropin"; ok $? "a drop-in that no longer runs the compat script is left"
 
 engine_root="ln -sfn /opt/someone-else \"\$root$link\""; installed; engine_root=''
 printf '# mine now\n' >"$r$limits"
