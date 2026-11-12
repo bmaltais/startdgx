@@ -61,5 +61,9 @@
   "best": "qwen3.8-flash-next-tensorfold",
   "link": {
     "state": "none"
+  },
+  "engine_update": {
+    "from": "v0.6.3-dgx.1",
+    "to": "v0.6.3-dgx.2"
   }
 }

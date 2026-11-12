@@ -839,3 +839,13 @@ test("a query cancelled, then asked the same again (Esc, then n): the killed run
   e = M.queryExited(e.query)
   assert.strictEqual(e.current, true)
 })
+
+test("engineUpdate reads the update the CLI found for a machine's engine", () => {
+  const status = (update) => M.parseStatus(statusText({}, { engine_update: update }))
+  assert.deepStrictEqual(M.engineUpdate(status({ from: "v0.6.3-dgx.1", to: "v0.6.3-dgx.2" })),
+    { from: "v0.6.3-dgx.1", to: "v0.6.3-dgx.2", text: "Engine v0.6.3-dgx.1; v0.6.3-dgx.2 is available" })
+  assert.strictEqual(M.engineUpdate(M.parseStatus(statusText({}))), null)
+  assert.strictEqual(M.engineUpdate(null), null)
+  assert.strictEqual(M.engineUpdate(status({ from: "v1", to: 2 })), null)
+  assert.strictEqual(M.engineUpdate(status("v0.6.3-dgx.2")), null)
+})

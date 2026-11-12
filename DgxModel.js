@@ -668,6 +668,17 @@ function stringList(value) {
   return Array.isArray(value) && value.every(function (s) { return typeof s === "string" })
 }
 
+// ---- updating the engine ---------------------------------------------------------------------------------------
+
+// What a machine's status says of its engine: `engine_update` is {from, to} when the engine startdgx installed there
+// is an older release than the one this plugin pins (the CLI decides, from the host's manifest). Returns
+// {from, to, text}, or null.
+function engineUpdate(status) {
+  const update = status && isPlainObject(status.engine_update) ? status.engine_update : null
+  if (!update || typeof update.from !== "string" || typeof update.to !== "string") return null
+  return { from: update.from, to: update.to, text: "Engine " + update.from + "; " + update.to + " is available" }
+}
+
 // `startdgx uninstall HOST --dry-run --json`: { host, steps, kept, manual, models_bytes, packages }, or null.
 function parseUninstallPlan(text) {
   const p = parseJson(text)
