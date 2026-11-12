@@ -113,6 +113,14 @@ FAKE_ROOT_FAIL=1 s install me@spark --engine-path "$engine" >/dev/null 2>&1; ok 
 m 'item("linger", "me")["previous"] == {"linger": "no"}'; ok $? "a failed install still records what was there before"
 s install me@spark --engine-path "$engine" >/dev/null; m 'item("linger", "me")["created_by_us"]'; ok $? "a rerun after a failure marks what the failed run changed as ours"
 
+cdi=/etc/cdi/nvidia.yaml; fresh_host "file:$cdi=y1 other"; : >"$FAKE_LOG"
+s install me@spark --engine-path "$engine" >/dev/null
+m 'item("file", "'$cdi'")["previous"]["backup"] == "/home/me/.local/share/startdgx/backup/etc_cdi_nvidia.yaml" and not item("file", "'$cdi'")["created_by_us"]'
+ok $? "a root file that was there before is backed up, and isn't marked ours for it"
+first_line() { grep -n -m1 -e "$1" "$FAKE_LOG" | cut -d: -f1; }
+earlier() { [ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]; }
+earlier "$(first_line startdgx/backup)" "$(first_line '^sudo bash -c')"; ok $? "the backup is taken before the root script runs"
+
 # Without --engine-path, the pinned tag is cloned here (a fake git, on this test's PATH only, copies $engine).
 mkdir -p "$tmp/fakegit"
 cat >"$tmp/fakegit/git" <<F

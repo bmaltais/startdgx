@@ -37,6 +37,19 @@ PACKAGES = ("podman", "rsync", "python3")
 AGENT_LINK = "/usr/local/bin/omarchy-agent-local"
 ENGINE_DIR = ".local/share/omarchy-local-ai"
 MANIFEST = "~/.local/share/startdgx/manifest.json"
+BACKUP_DIR = ".local/share/startdgx/backup"
+# Files the root setup overwrites that may predate it (NVIDIA's docs have users generate /etc/cdi/nvidia.yaml; a
+# plain file may sit where the agent link goes), copied as the user before it runs; an earlier copy is kept.
+BACKUPS = {("file", "/etc/cdi/nvidia.yaml"): "etc_cdi_nvidia.yaml", ("symlink", AGENT_LINK): "usr_local_bin_omarchy-agent-local"}
+BACKUP = f'''
+set -e
+mkdir -p ~/{BACKUP_DIR}
+cd ~/{BACKUP_DIR}
+if [ -f /etc/cdi/nvidia.yaml ] && [ ! -e etc_cdi_nvidia.yaml ]; then cp -p /etc/cdi/nvidia.yaml etc_cdi_nvidia.yaml; fi
+if [ -f {AGENT_LINK} ] && [ ! -L {AGENT_LINK} ] && [ ! -e usr_local_bin_omarchy-agent-local ]; then
+  cp -p {AGENT_LINK} usr_local_bin_omarchy-agent-local
+fi
+'''
 
 # Read-only: prints key=value lines about the host. Bash, since python3 may be one of the missing tools.
 PROBE = r'''
@@ -300,6 +313,14 @@ def item_key(item):
   return (item["kind"], item.get("path") or item.get("name"))
 
 
+def with_backup(key, previous, home):
+  """The pre-state, plus where BACKUP copied it when it was a file the root setup overwrites."""
+  existed = previous.get("exists") or previous.get("type") == "file"
+  if key in BACKUPS and existed:
+    return {**previous, "backup": f"{home}/{BACKUP_DIR}/{BACKUPS[key]}"}
+  return previous
+
+
 def build_manifest(old, before, now, engine):
   """The manifest after an install: each item keeps the earliest `previous` any install recorded, and is ours
   when it differs from that now."""
@@ -307,8 +328,9 @@ def build_manifest(old, before, now, engine):
   start, current = snapshot(before), snapshot(now)
   items = []
   for (kind, ref), state in current.items():
-    previous = earliest.get((kind, ref), start[(kind, ref)])
-    items.append({"kind": kind, "name" if kind in NAMED_KINDS else "path": ref, "created_by_us": previous != state, "previous": previous})
+    previous = earliest.get((kind, ref)) or with_backup((kind, ref), start[(kind, ref)], before["home"])
+    ours = {k: v for k, v in previous.items() if k != "backup"} != state
+    items.append({"kind": kind, "name" if kind in NAMED_KINDS else "path": ref, "created_by_us": ours, "previous": previous})
   items += [item for item in old.get("items", []) if item_key(item) not in current]
   stamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
   return {"schema_version": 1, "engine": engine, "installed_at": old.get("installed_at") or stamp, "updated_at": stamp,
@@ -348,6 +370,7 @@ def cmd_install(args):
   with engine_source(args) as src:
     script, old, engine = engine_setup_script(src), read_manifest(host), engine_record(args, before)
     # Recorded before anything changes, so an install that fails halfway still knows what was there.
+    ssh_raw(host, BACKUP, what="backup")
     write_manifest(host, build_manifest(old, before, before, engine))
     print(f"Preparing {host} (sudo there asks for your password)")
     run_root(host, script, before)
