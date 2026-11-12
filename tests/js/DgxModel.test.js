@@ -620,3 +620,24 @@ test("actionError: the footer's line when a command failed, short when the machi
   assert.strictEqual(M.actionError("Error: Not enough memory\n", "demo@spark-f"), "Not enough memory")
   assert.strictEqual(M.actionError("", "demo@spark-f"), "The action failed")
 })
+
+test("a model that doesn't fit is never started, by button or key, even when it failed before", () => {
+  const model = { kind: "model", host: "h1", id: "a" }
+  for (const over of [{ unit: "failed", fits: false, error: "CUDA error" }, { unit: "inactive", fits: false, error: "Port 11436 is taken" }, { unit: "inactive", fits: false }]) {
+    const e = row(over)
+    assert.strictEqual(M.startBlocked(e), true, JSON.stringify(over))
+    assert.strictEqual(M.toggleAction(e), null, JSON.stringify(over))
+    assert.strictEqual(M.keyAction("s", model, e), null, JSON.stringify(over))
+    assert.strictEqual(M.keyAction("enter", model, e), null, JSON.stringify(over))
+  }
+})
+
+test("keyAction: f asks before it forgets, and a held key acts once", () => {
+  const model = { kind: "model", host: "h1", id: "a" }
+  const host = { kind: "host", host: "h1" }
+  assert.deepStrictEqual(M.keyAction("f", host, null), { type: "forget", host: "h1" }, "the forget card, not the forgetting")
+  for (const key of ["enter", "s", "d", "delete", "f"]) {
+    assert.strictEqual(M.keyAction(key, model, b, "", false, true), null, key + " held down")
+  }
+  assert.deepStrictEqual(M.keyAction("r", host, null, "", false, true), { type: "refresh" }, "a held r only looks again")
+})

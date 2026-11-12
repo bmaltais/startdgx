@@ -28,6 +28,9 @@ BarWidget.qml	unqualified	anchors
 BarWidget.qml	unqualified	parent
 BarWidget.qml	unresolved-type	Type BarWidget is used but it is not resolved
 BarWidget.qml	unresolved-type	Type anchors is used but it is not resolved
+ForgetView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+ForgetView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+ForgetView.qml	unqualified	Style
 HostSection.qml	import	PanelToolTip was not found. Did you add all imports and dependencies?
 HostSection.qml	missing-property	Member "accent" not found on type "QQuickColor"
 HostSection.qml	missing-property	Member "foreground" not found on type "QQuickColor"

@@ -1,13 +1,14 @@
 // StartDGX: DGX Spark machines and their models, from the Omarchy shell. This file owns the window, the
 // cards over it, the IPC entry points and the bar icon's status; DgxService.qml owns the machines and every
-// call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, AddModelView.qml and
-// RemoveView.qml draw what is in it.
+// call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, ForgetView.qml, AddModelView.qml
+// and RemoveView.qml draw what is in it.
 //
 //   omarchy-shell io.github.bmaltais.startdgx open               toggle the manager
 //   omarchy-shell io.github.bmaltais.startdgx addMachine         the manager with its Add machine card
 //   omarchy-shell io.github.bmaltais.startdgx uninstall <host>   the manager with a machine's uninstall card
 //   omarchy-shell io.github.bmaltais.startdgx addModel <host>    the manager with a machine's model picker
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
+//   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Effects
@@ -32,8 +33,8 @@ Item {
 
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
-  // A card floats over the manager: "add" (Add machine), "uninstall" (one machine's), "addModel" (a machine's
-  // model picker) or "remove" (one model's), or "" for none.
+  // A card floats over the manager: "add" (Add machine), "uninstall" or "forget" (one machine's), "addModel" (a
+  // machine's model picker) or "remove" (one model's), or "" for none.
   property string card: ""
   property string cardHost: ""
   property string cardModel: ""
@@ -87,6 +88,13 @@ Item {
     core.plan(host)
   }
 
+  function showForget(host) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.card = "forget"
+  }
+
   function showAddModel(host) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -117,7 +125,8 @@ Item {
     case "stop": core.stop(action.host, action.id); break
     case "logs": core.launch("logs", action.host, action.id); root.close(); break
     case "uninstall": root.showUninstall(action.host); break
-    case "forget": core.forget(action.host); break
+    case "forget": root.showForget(action.host); break
+    case "forgetNow": core.forget(action.host); root.closeCard(); break
     case "refresh": core.refreshAll(); break
     case "addMachine": root.showAddMachine(); break
     case "addHost": core.addHost(action.host); break
@@ -150,6 +159,7 @@ Item {
     function uninstall(host: string): void { root.showUninstall(host) }
     function addModel(host: string): void { root.showAddModel(host) }
     function removeModel(host: string, model: string): void { root.showRemove(host, model) }
+    function forget(host: string): void { root.showForget(host) }
     function start(host: string, model: string): string { core.start(host, model); return "ok" }
     function stop(host: string, model: string): string { core.stop(host, model); return "ok" }
   }
@@ -360,11 +370,13 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard : addCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard
+          : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
 

@@ -37,7 +37,11 @@ FocusScope {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
     else if (event.key === Qt.Key_Up || event.text === "k") { card.cursor = Math.max(0, card.cursor - 1); event.accepted = true }
     else if (event.key === Qt.Key_Down || event.text === "j") { card.cursor = Math.min(card.offers.length - 1, card.cursor + 1); event.accepted = true }
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { if (card.offers.length) card.act(card.offers[card.cursor]); event.accepted = true }
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      // A held Enter would set up the next recipe too.
+      if (!event.isAutoRepeat && card.offers.length) card.act(card.offers[card.cursor])
+      event.accepted = true
+    }
     else if (event.text === "r") { card.dgx.listRecipes(card.host); event.accepted = true }
   }
 

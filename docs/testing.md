@@ -21,6 +21,7 @@ scripts/dev up              # nested Hyprland + shell, this checkout as the plug
 scripts/dev open            # the manager
 scripts/dev add             # the manager with its Add machine card
 scripts/dev uninstall demo@spark-a   # a machine's uninstall card
+scripts/dev forget demo@spark-a      # a machine's forget card
 scripts/dev models demo@spark-a      # a machine's model picker
 scripts/dev remove demo@spark-a qwen3.8-27b-tensorfold   # a model's remove card
 scripts/dev shot FILE       # look at it; click PX PY, key j, key Return ...

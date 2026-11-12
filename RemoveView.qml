@@ -45,7 +45,11 @@ FocusScope {
 
   Keys.onPressed: event => {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { card.confirm(); event.accepted = true }
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      // A held Enter must not answer the question.
+      if (!event.isAutoRepeat) card.confirm()
+      event.accepted = true
+    }
   }
 
   ColumnLayout {

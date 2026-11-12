@@ -147,8 +147,8 @@ ColumnLayout {
       }
       TextLink {
         Layout.alignment: Qt.AlignVCenter
-        text: "Forget"
-        tooltip: "Take " + section.machine + " off this list; nothing on it changes  (f)"
+        text: "Forget…"
+        tooltip: "Take " + section.machine + " off this list, after a question; nothing on it changes  (f)"
         onClicked: section.actionRequested({ type: "forget", host: section.host })
       }
     }

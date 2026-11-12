@@ -347,11 +347,16 @@ function rows(hostList, hostStates) {
   return out
 }
 
+// The keys that act on a model or machine: held down, they act once, not again on each repeat.
+var ONCE_KEYS = ["enter", "s", "d", "delete", "f"]
+
 // A key typed in the manager ("enter" for Return, "delete" for Delete). `row` is the one under the cursor (or null), `entry` its
-// model's status row, `pending` a start or stop already asked for, and `away` whether its machine isn't
-// answering (it then has no Start, Stop or Logs). A model's row acts for its machine too.
-function keyAction(key, row, entry, pending, away) {
+// model's status row, `pending` a start or stop already asked for, `away` whether its machine isn't answering (it
+// then has no Start, Stop or Logs), and `repeat` whether this is the key's auto-repeat. A model's row acts for its
+// machine too. Forget, like Uninstall and Remove, opens a card that asks first.
+function keyAction(key, row, entry, pending, away, repeat) {
   const k = String(key).toLowerCase()
+  if (repeat && ONCE_KEYS.indexOf(k) >= 0) return null
   if (k === "r") return { type: "refresh" }
   if (k === "n") return { type: "addMachine" }
   if (!row) return null

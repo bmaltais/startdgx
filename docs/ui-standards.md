@@ -32,13 +32,13 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 ```
 
 - **Header.** The chip mark, the name, the count line in small capitals (red while a machine doesn't answer or a model failed), and look again (refresh). The words come from `DgxModel.subtitle`.
-- **A machine.** A dot (accent when it answers, red when it doesn't, muted before its first answer), its name, its SSH target and what it is (`DgxModel.hostLine`). Under it: "Asking the machine…", "No models set up yet", or why it doesn't answer and when it last did (`offlineText`). On the right, quiet text links: **Logs…** (the model started last), **Uninstall…** and **Forget**. A machine that doesn't answer keeps its last known models, dimmed and without buttons.
+- **A machine.** A dot (accent when it answers, red when it doesn't, muted before its first answer), its name, its SSH target and what it is (`DgxModel.hostLine`). Under it: "Asking the machine…", "No models set up yet", or why it doesn't answer and when it last did (`offlineText`). On the right, quiet text links: **Logs…** (the model started last), **Uninstall…** and **Forget…**. A machine that doesn't answer keeps its last known models, dimmed and without buttons.
 - **A model.** Its maker's mark, its name (the endpoint on hover), a status dot and line (`DgxModel.modelState`: Running, Loading, Stopping, Removing, Cancelling, Waiting to download, Downloading, Failed, Not enough memory, Stopped) with its context and the memory it took, then **Logs…**, **Remove…** (a muted trash; **Cancel the setup…**, an ✕, while it downloads) and **Start/Stop**. A model that doesn't fit has its play button greyed out with the reason as its tooltip. Under it, a meter (`DgxModel.meter`): memory while it runs; progress while it loads, stops or is removed, against how long that took last time; the download while it is set up (an empty Waiting bar until it begins). A failure's reason is a red link to its logs.
 - **Start and stop** show once their command runs on the machine ("pending"), and the machine's next answer after the command replaces it. So does a **removal**: the row says Removing (Cancelling, for a setup) until the model is gone. Each machine runs two commands at once: a start (which returns only once its model has loaded), and a stop, set up or removal beside it, each with its queue (`DgxModel.submit`). A command waiting its turn leaves the row as the machine says, with "· stop queued" (start, removal) after it; a start waiting its turn can be taken back with Stop.
 - **A machine that needs its root setup.** When Set up fails because the engine says the machine needs Podman set up as root first (`DgxModel.setupNeeded`), the machine says so in red and gets an **Install…** link: `install --replace-engine` in a terminal, which backs up an engine startdgx didn't install and does the root setup. The footer only points at it.
 - **Add model…** is the last row of a machine that answers (a cursor row like the others); it opens the machine's model picker.
 - **Footer.** **Add machine…** on the left, the latest message (six seconds, red for an error) or "Esc to close" on the right. A setup's message drops the engine's pointers to the agents panel and journalctl (`DgxModel.actionNotice`): the row follows the setup.
-- **Keyboard.** The keys are `DgxModel.keyAction`, so a key and a button cannot disagree (a machine that isn't answering has no Start, Stop or Logs either way); each button's tooltip names its key.
+- **Keyboard.** The keys are `DgxModel.keyAction`, so a key and a button cannot disagree (a machine that isn't answering has no Start, Stop or Logs either way, and a model that doesn't fit is never started); each button's tooltip names its key. No single key destroys anything: `d`, `u` and `f` open a card that asks. A held Enter, `s`, `d` or `f` acts once (its auto-repeat is ignored, in the cards too).
 
 | Key | Does |
 |---|---|
@@ -48,7 +48,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 | `d`, Delete | Remove the model… (or cancel its setup) |
 | `l` | Its logs… (a machine's row: the model started last) |
 | `u` | Uninstall the machine… |
-| `f` | Forget the machine |
+| `f` | Forget the machine… (a card asks first) |
 | `n` | Add machine… |
 | `r` | Look again |
 | Esc | Close |
@@ -65,6 +65,10 @@ A machine's model picker: every recipe of its catalog (`startdgx list HOST`), so
 
 `startdgx delete` stops the model if it runs and deletes its weights at once, so the card is the question: it first asks the machine what that frees (`delete HOST MODEL --dry-run --json`, read-only) and says so (`removeConfirm`: "freeing 47.5 GiB that no other model uses", or that the weights are shared and nothing is freed). For a download in progress it is *Cancel the setup…*, which deletes what was downloaded so far. The **Remove** pill (danger) and Enter wait for that answer; if the machine can't give it, the card says why in red and the removal can still go ahead. **Keep it**, Esc or a click outside close it and nothing happens. The removal runs with a 600 s timeout, since it returns only once the model is gone.
 
+## Forget
+
+A machine's **Forget…** (`f`) asks in a card: it takes the machine off this list, nothing on the machine changes, and Add machine can add it again. **Forget** (danger) or Enter forgets it; **Keep it**, Esc or a click outside close it.
+
 ## Uninstall
 
 `startdgx launch uninstall` runs the real uninstall at once, so the card is the confirmation: it first shows the plan (`startdgx uninstall HOST --dry-run`, which changes nothing), and its **Uninstall…** pill (danger, enabled only once a plan has been read) opens the terminal that does it. **Cancel**, Esc or a click outside close it and nothing happens. The weights are kept; `--delete-models` is left to the command line.
@@ -76,7 +80,7 @@ Install, uninstall and logs need a person at a terminal, so they run in Omarchy'
 ## Words
 
 - A **machine** is a DGX Spark added to startdgx (its SSH target); a **model** is one of the engine's recipes set up on it.
-- *Add* puts a machine that already runs the engine on the list; *Install…* sets the engine up on one; *Uninstall…* takes it off again; *Forget* only takes the machine off this list.
+- *Add* puts a machine that already runs the engine on the list; *Install…* sets the engine up on one; *Uninstall…* takes it off again; *Forget…* only takes the machine off this list, after a question.
 
 ## The bar icon
 
@@ -96,6 +100,7 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-11 | Forget asks in a card; a held key acts once | No single key should be destructive: `f` alone took a machine off the list, and a held Enter or `s` started and stopped a model again and again. |
 | 2026-11-11 | A Spark with an engine startdgx didn't install offers Add and Install…; a Set up that fails for want of the root setup offers Install… on its machine | Add works with that engine as it is; Install (`--replace-engine`, harmless where the engine is startdgx's) is the way to the root setup the engine asks for in a terminal. |
 | 2026-11-11 | Add machine has a User on the machines field (discover `--user`), not a free-form target | Discover asked only as this machine's user; a typed user keeps the card's list, host keys and offers. |
 | 2026-11-11 | Discover's ssh takes a never-seen machine's host key (`accept-new`), and only discover's | With BatchMode alone a Spark this machine never reached was unreachable and got no Install. Its peers are the tailnet's, which the user chose to list; a changed key is still refused and says so. Add and install check against the key it saved. |

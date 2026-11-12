@@ -1,7 +1,8 @@
 // The manager: your machines, the models on each and what they are doing, and a way to add more. Opened from
 // the launcher or the bar icon. Keyboard: Up/Down (or j/k) move, Enter or s starts or stops the model under the
 // cursor, l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
-// machine, f forgets it, n adds a machine, r looks again. Esc closes.
+// machine, f forgets it (each of d, u and f after a question in a card), n adds a machine, r looks again. Esc
+// closes. A held key acts once.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -49,11 +50,11 @@ FocusScope {
     }
     view.forceActiveFocus()
   }
-  function keyFor(key) {
+  function keyFor(key, repeat) {
     return Model.keyAction(key, view.currentRow,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.entry(view.currentRow.host, view.currentRow.id) : null,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.pending[view.cursorKey] || "" : "",
-      view.currentRow ? Model.isAway(view.dgx.shownState[view.currentRow.host]) : false)
+      view.currentRow ? Model.isAway(view.dgx.shownState[view.currentRow.host]) : false, repeat)
   }
   // Keeps the row under the cursor in sight.
   function reveal(item) {
@@ -76,7 +77,7 @@ FocusScope {
     else {
       const key = event.key === Qt.Key_Return || event.key === Qt.Key_Enter ? "enter" : event.key === Qt.Key_Delete ? "delete" : event.text
       if (key === "") return
-      const action = view.keyFor(key)
+      const action = view.keyFor(key, event.isAutoRepeat)
       if (action) { view.svc.dispatch(action); event.accepted = true }
     }
   }
