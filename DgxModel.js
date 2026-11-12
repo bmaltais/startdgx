@@ -501,7 +501,8 @@ function commandFor(host, action) {
   switch (action.kind) {
   case "start": return ["start", host, id, "--timeout", "900"]
   case "stop": return ["stop", host, id, "--timeout", "120"]
-  case "use": return ["use", "--detach", host, id, "--timeout", "120"]
+  // --yes only for a setup the person confirmed (a recipe of theirs): the engine refuses one without it.
+  case "use": return ["use", "--detach", host, id].concat(action.yes ? ["--yes"] : [], ["--timeout", "120"])
   case "context": return ["use", "--detach", host, id, "--ctx", String(action.ctx), "--timeout", "120"]
   case "delete": return ["delete", host, id, "--timeout", "1500"]
   // The engine publishes the model's route with tailscale serve, which can take a while.
@@ -568,11 +569,14 @@ function recipeOffers(list, status) {
     if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best, rank: entry.unit === "installing" ? 2 : 3 }
     if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best, rank: 3 }
     if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best, rank: 4 }
-    return { recipe: r, action: "use", text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
+    // A recipe of yours downloads what it names and runs it: the engine wants --yes, which the panel sends only after the
+    // person has seen the download (its dry run, which needs the context). Without one there is nothing to show.
+    if (isUserRecipe(r) && !(Number(r.context) > 0)) return { recipe: r, action: null, text: "Its context is unknown, so its download can't be shown yet", best: best, rank: 4 }
+    return { recipe: r, action: "use", confirm: isUserRecipe(r), text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
   })
   const label = function (o) { return String(o.recipe.name || o.recipe.id) }
   offers.sort(function (a, b) { return a.rank - b.rank || label(a).localeCompare(label(b)) || a.recipe.id.localeCompare(b.recipe.id) })
-  return offers.map(function (o) { return { recipe: o.recipe, action: o.action, text: o.text, best: o.best } })
+  return offers.map(function (o) { return { recipe: o.recipe, action: o.action, confirm: o.confirm === true, text: o.text, best: o.best } })
 }
 
 // ---- user recipes ----------------------------------------------------------------------------------------
@@ -620,6 +624,31 @@ function recipePathProblem(path) {
   if (p === "") return "Type the path to a recipe file on this computer."
   if (!/\.toml$/.test(p)) return "A recipe file ends in .toml, and its name (without it) is the recipe's id."
   return ""
+}
+
+// What can be done with a variant of a user recipe: measure it (a drafted or estimated one; the engine runs it and records
+// what it showed), or confirm an estimated one's numbers (it then counts as fitting). A measured one needs neither.
+function variantActions(v) {
+  const source = recipeSource(v)
+  return source === "measured" ? [] : source === "estimated" ? ["confirm", "measure"] : ["measure"]
+}
+
+// `startdgx recipe measure HOST ID --ctx N` without --yes: the engine's dry run, as lines (what it would download and
+// load), without its closing "Nothing was changed", which the card says its own way; or null when it said nothing.
+function parseMeasurePlan(text) {
+  const all = lines(text).filter(function (l) { return l.indexOf("Nothing was changed") !== 0 })
+  return all.length ? all : null
+}
+
+// The confirmation card's words, for a measure or a setup of `r` at `ctx` on `host`: { title, body, button }.
+function recipeRunWords(mode, r, ctx, host) {
+  const name = String(r.name || r.id)
+  const size = Math.round(Number(ctx) / 1024) + "K"
+  const runs = "A recipe of yours downloads what it names and runs it on " + host + ". Read what it will do, then say go."
+  return mode === "measure"
+    ? { title: "Measure " + name + " at " + size + "?", button: "Download and measure",
+        body: runs + " Measuring loads it at this context, benches it for a few minutes and records the memory and speed it showed; a model that runs there is restarted." }
+    : { title: "Set up " + name + " on " + host + "?", button: "Download and set up", body: runs }
 }
 
 // "128K measured · 64K drafted": a recipe's variants and where each one's numbers come from.
@@ -781,6 +810,7 @@ function parseUninstallPlan(text) {
   const p = parseJson(text)
   if (!isPlainObject(p) || !stringList(p.steps) || !stringList(p.kept) || !stringList(p.manual) || !stringList(p.packages)) return null
   if (p.models_bytes !== null && !(typeof p.models_bytes === "number" && p.models_bytes >= 0)) return null
+  if (p.recipes !== undefined && !(typeof p.recipes === "number" && p.recipes >= 0)) return null
   return p
 }
 
@@ -795,6 +825,10 @@ function uninstallChoices(plan) {
   const out = []
   if (plan.models_bytes !== null && plan.models_bytes > 0) {
     out.push({ flag: "--delete-models", label: "Also delete the model weights", description: "Frees " + sizeText(plan.models_bytes) + ". Setting a model up again downloads it again." })
+  }
+  if (typeof plan.recipes === "number" && plan.recipes > 0) {
+    out.push({ flag: "--delete-recipes", label: "Also delete the recipes you added",
+      description: plan.recipes + (plan.recipes === 1 ? " recipe is" : " recipes are") + " kept otherwise. Adding one again needs its file." })
   }
   if (plan.packages.length > 0) {
     out.push({ flag: "--remove-packages", label: "Also remove the packages the install added",

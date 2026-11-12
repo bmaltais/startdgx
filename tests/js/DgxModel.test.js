@@ -915,7 +915,7 @@ test("recipeOffers: a drafted recipe is not yet fitting even if the engine says 
 })
 
 test("recipeOffers: an estimated or measured user recipe that is available can be set up", () => {
-  const r = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false }
+  const r = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
   assert.strictEqual(M.recipeOffers([r], { models: {} })[0].action, "use")
 })
 
@@ -972,4 +972,62 @@ test("parseVariants keeps a variant's source; contextChoices marks drafted as no
 test("keyAction: e adds a recipe to the machine", () => {
   assert.deepStrictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", false, false), { type: "addRecipe", host: "u@h" })
   assert.strictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", true, false), null, "not on a machine that doesn't answer")
+})
+
+// ---- measuring, confirming and setting up a user recipe -------------------------------------------------------
+
+test("variantActions: a drafted variant can be measured, an estimated one confirmed or measured, a measured one neither", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "drafted" }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated" }), ["confirm", "measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "measured" }), [])
+  assert.deepStrictEqual(M.variantActions({}), [])
+  assert.deepStrictEqual(M.variantActions({ source: "guessed" }), ["measure"], "an unrecognised source is drafted")
+})
+
+test("recipeOffers: setting up a user recipe asks first, a curated one doesn't", () => {
+  const mine = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
+  const theirs = { id: "theirs", name: "Theirs", available: true, installed: false, best: false, context: 65536 }
+  const [a, b] = M.recipeOffers([mine, theirs], { models: {} })
+  assert.deepStrictEqual([a.recipe.id, a.action, a.confirm], ["mine", "use", true])
+  assert.deepStrictEqual([b.recipe.id, b.action, b.confirm], ["theirs", "use", false])
+})
+
+test("recipeOffers: a user recipe whose context is unknown can't show its download, so it isn't offered", () => {
+  const o = M.recipeOffers([{ id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false }], { models: {} })[0]
+  assert.strictEqual(o.action, null)
+  assert.match(o.text, /download/)
+})
+
+test("parseMeasurePlan: the engine's dry-run lines, without its closing 'nothing was changed'", () => {
+  const text = "Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download (3.5 GiB in 2 file(s))\n  load: Mine on tensorfold\nNothing was changed. Run again with --yes to do it.\n"
+  assert.deepStrictEqual(M.parseMeasurePlan(text), ["Measure mine at context 65536 (now a drafted variant)", "download: 3.5 GiB to download (3.5 GiB in 2 file(s))", "load: Mine on tensorfold"])
+  assert.strictEqual(M.parseMeasurePlan(""), null)
+  assert.strictEqual(M.parseMeasurePlan("Nothing was changed. Run again with --yes to do it."), null)
+})
+
+test("recipeRunWords: what the confirmation card says for a measure and for a setup", () => {
+  const measure = M.recipeRunWords("measure", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(measure.title, /Measure Mine/)
+  assert.match(measure.title, /64K/)
+  assert.strictEqual(measure.button, "Download and measure")
+  assert.match(measure.body, /runs it/i)
+  const setup = M.recipeRunWords("setup", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(setup.title, /Set up Mine/)
+  assert.strictEqual(setup.button, "Download and set up")
+})
+
+test("commandFor: a setup the person confirmed passes --yes to use, and one that wasn't doesn't", () => {
+  const act = (extra) => Object.assign({ op: 1, key: "me@h1/a", kind: "use", shows: "use" }, extra)
+  assert.deepStrictEqual(M.commandFor("me@h1", act({ yes: true })), ["use", "--detach", "me@h1", "a", "--yes", "--timeout", "120"])
+  assert.deepStrictEqual(M.commandFor("me@h1", act({})), ["use", "--detach", "me@h1", "a", "--timeout", "120"])
+})
+
+test("uninstallChoices: your recipes are an opt-in only when there are some, and say they go with it", () => {
+  const withRecipes = M.uninstallChoices(uninstallPlan({ recipes: 2 }))
+  const c = withRecipes.find((x) => x.flag === "--delete-recipes")
+  assert.ok(c)
+  assert.match(c.label, /recipes/)
+  assert.match(c.description, /2/)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan({ recipes: 0 })).some((x) => x.flag === "--delete-recipes"), false)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan()).some((x) => x.flag === "--delete-recipes"), false, "a plan from an older CLI has no count")
 })

@@ -78,6 +78,9 @@ BACKUP_ENGINE = f"if [ -d ~/{ENGINE_DIR} ] && [ ! -e ~/{ENGINE_BACKUP} ]; then c
 ENGINE_STATE = ".local/state/omarchy/agent-local"
 ENGINE_CONFIG = ".config/omarchy/agent-local"
 ENGINE_DATA = ".local/share/omarchy/agent-local"
+# The user's recipes (and what they confirmed) live in the engine's state dir, which uninstall deletes: they are kept
+# unless --delete-recipes, and the install manifest never records them (startdgx creates none).
+ENGINE_RECIPES = f"{ENGINE_STATE}/recipes"
 QUADLET_DIR = ".config/containers/systemd"
 SHARE_UNIT = ".config/systemd/user/omarchy-agent-local-share.service"
 SHARED_PARENTS = (".local/share/omarchy", ".local/state/omarchy", ".config/omarchy", QUADLET_DIR)
@@ -117,6 +120,7 @@ for path in {ENGINE_DIR} {ENGINE_STATE} {ENGINE_CONFIG} {ENGINE_DATA} {SHARE_UNI
   if [ -e "$HOME/$path" ]; then echo "exists=$path"; fi
 done
 if [ -d ~/{ENGINE_DATA} ]; then echo "models_bytes=$(du -sb ~/{ENGINE_DATA} | cut -f1)"; fi
+if [ -d ~/{ENGINE_RECIPES} ]; then echo "recipes=$(ls ~/{ENGINE_RECIPES}/*.toml 2>/dev/null | wc -l | tr -d ' ')"; fi
 exit 0
 '''
 
@@ -423,7 +427,9 @@ def cmd_stop(args):
 def cmd_use(args):
   # --ctx picks one of the contexts the recipe has measured (see variants); on a model already set up the engine
   # restarts it with that one.
-  ctx = ["--ctx", str(args.ctx)] if args.ctx else []
+  # --yes is the engine's for a recipe of yours: it downloads what the recipe names and runs it, so it is sent only when
+  # the person said so (the panel after its confirmation card).
+  ctx = (["--ctx", str(args.ctx)] if args.ctx else []) + (["--yes"] if args.yes else [])
   if not args.detach:
     sys.stdout.write(ssh(target(args.host), "use", recipe(args.model), *ctx, timeout=args.timeout or 3600).stdout)
     return
@@ -433,15 +439,20 @@ def cmd_use(args):
   print((out.strip().splitlines() or [f"Setting up {args.model} in the background"])[-1])
 
 
-# Read-only, for variants: the measured [[variant]] entries of the recipe (argv[1]) in the engine's own recipes folder,
+# Read-only, for variants: the [[variant]] entries of the recipe (argv[1]) in the engine's recipes folder or the user's,
 # largest context first (with each one's source: measured unless the recipe says otherwise). Prints a JSON list, or nothing for a recipe the host doesn't have.
 VARIANTS_PROBE = f'''
 import json, os, sys, tomllib
-path = os.path.expanduser("~/{ENGINE_DIR}/recipes/" + sys.argv[1] + ".toml")
-try:
-  with open(path, "rb") as handle:
-    recipe = tomllib.load(handle)
-except OSError:
+recipe = None
+# The engine's own recipes, then the user's: a user recipe's id never clashes with a curated one.
+for folder in ("{ENGINE_DIR}/recipes/", "{ENGINE_STATE}/recipes/"):
+  try:
+    with open(os.path.expanduser("~/" + folder + sys.argv[1] + ".toml"), "rb") as handle:
+      recipe = tomllib.load(handle)
+    break
+  except OSError:
+    pass
+if recipe is None:
   sys.exit(0)
 out = [{{"ctx": v["ctx"], "peak_ram_gib": v["peak_ram_gib"], "peak_gpu_gib": v["peak_gpu_gib"], "source": v.get("source", "measured")}} for v in recipe.get("variant", [])]
 print(json.dumps(sorted(out, key=lambda v: (-v["ctx"], -v["peak_ram_gib"]))))
@@ -574,8 +585,21 @@ def cmd_recipe_remove(args):
   sys.stdout.write(result.stdout)
 
 
+def cmd_recipe_measure(args):
+  """The engine's measure: it loads the recipe at a context, benches it and records what it showed. Without --yes it
+  only says what it would download and load (its own dry run); with it, it runs, which takes minutes."""
+  host, rid = target(args.host), recipe(args.id)
+  argv = ["measure", rid, "--ctx", str(args.ctx)] + (["--yes"] if args.yes else [])
+  sys.stdout.write(clean(ssh(host, *argv, timeout=args.timeout or (3600 if args.yes else 60)).stdout))
+
+
+def cmd_recipe_confirm(args):
+  sys.stdout.write(clean(ssh(target(args.host), "recipe", "confirm", recipe(args.id), timeout=args.timeout).stdout))
+
+
 def cmd_recipe(args):
-  return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove}[args.verb](args)
+  return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
+          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm}[args.verb](args)
 
 
 def cmd_delete(args):
@@ -975,6 +999,22 @@ def engine_is_ours(manifest, state):
   return ("engine", f"{state['home']}/{ENGINE_DIR}") in ours(manifest, "created_by_us")
 
 
+def recipe_count(state):
+  count = state.get("recipes", "")
+  return int(count) if count.isdigit() else 0
+
+
+def uninstall_state_text(keeping, recipes=0):
+  """The uninstall step for the engine's state dir, which holds the user's recipes."""
+  if keeping:
+    return f"delete ~/{ENGINE_STATE} except your recipes (the engine's state)"
+  return f"delete ~/{ENGINE_STATE} (the engine's state{', with your recipes' if recipes else ''})"
+
+
+def uninstall_recipes_kept():
+  return f"keep your recipes in ~/{ENGINE_RECIPES} (--delete-recipes deletes them)"
+
+
 def user_plan(manifest, state, args):
   """The steps under the user's home, in order, and what is kept: each step is (what it does, its shell).
   Units stop first; the engine goes last, since the units' hooks call it."""
@@ -1010,9 +1050,16 @@ def user_plan(manifest, state, args):
     steps.append((f"remove the image {image} unless a container uses it",
                   f'if podman image exists {q(image)}; then if [ -n "$(podman ps -a -q --filter ancestor={q(image)})" ]; then '
                   f'echo "  kept {image}: a container uses it"; else podman image rm {q(image)} >/dev/null; fi; fi'))
+  recipes = recipe_count(state)
   for path, what in ((ENGINE_STATE, "state"), (ENGINE_CONFIG, "key, overlays and shares")):
-    if path in exists:
-      steps.append((f"delete ~/{path} (the engine's {what})", f"rm -rf ~/{path}"))
+    if path not in exists:
+      continue
+    if path == ENGINE_STATE and recipes and not args.delete_recipes:
+      steps.append((uninstall_state_text(True), f"find ~/{path} -mindepth 1 -maxdepth 1 ! -name recipes ! -name recipes-confirmed.json -exec rm -rf {{}} +"))
+      kept.append(uninstall_recipes_kept())
+    else:
+      steps.append((uninstall_state_text(False, recipes), f"rm -rf ~/{path}") if path == ENGINE_STATE
+                   else (f"delete ~/{path} (the engine's {what})", f"rm -rf ~/{path}"))
   if ENGINE_DATA in exists:
     size = state.get("models_bytes", "")
     weights = f"~/{ENGINE_DATA} ({size_text(int(size)) if size.isdigit() else 'unknown size'} of model weights"
@@ -1212,6 +1259,7 @@ def cmd_uninstall(args):
       # --remove-packages would remove.
       "models_bytes": int(weights) if ENGINE_DATA in state["exists"] and weights.isdigit() and engine_is_ours(manifest, state) else None,
       "packages": removable_packages(manifest),
+      "recipes": recipe_count(state) if engine_is_ours(manifest, state) else 0,
     }))
     return
   if args.dry_run:
@@ -1277,13 +1325,14 @@ def cmd_launch(args):
     raise Error(f"launch {args.verb} takes no model")
   if args.replace_engine and args.verb != "install":
     raise Error("--replace-engine goes only with launch install")
-  if (args.delete_models or args.remove_packages) and args.verb != "uninstall":
-    raise Error("--delete-models and --remove-packages go only with launch uninstall")
+  if (args.delete_models or args.remove_packages or args.delete_recipes) and args.verb != "uninstall":
+    raise Error("--delete-models, --remove-packages and --delete-recipes go only with launch uninstall")
   argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
   argv += [recipe(args.model)] if args.model else []
   argv += ["--replace-engine"] if args.replace_engine else []
   argv += ["--delete-models"] if args.delete_models else []
   argv += ["--remove-packages"] if args.remove_packages else []
+  argv += ["--delete-recipes"] if args.delete_recipes else []
   if DEMO:
     print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
     return
@@ -1541,6 +1590,10 @@ def demo_use(args):
       return
     if rid in models:
       raise Error(f"{rid} is already set up: start it with startdgx start {args.host} {rid}")
+    if r.get("user") and not args.yes:
+      # The engine's own refusal: a recipe of yours downloads what it names and runs it.
+      raise Error(f"{rid} is a recipe of yours, so it isn't set up without your say-so: it downloads what the recipe names and runs it. "
+                  f"Review it (omarchy agent local measure {rid} --ctx N shows the download size), then run: omarchy agent local use {rid} --yes")
     if not r["available"]:
       raise Error(r["reason"] or f"{rid} can't run on {args.host}")
     if machine.get("needs_setup"):
@@ -1621,13 +1674,15 @@ def demo_recipe_row(rid, recipe_toml):
                       "source": v.get("source", "measured")} for v in recipe_toml["variant"]), key=lambda v: -v["ctx"])
   top = next((v for v in variants if v["source"] == "measured"), None)
   shown = top or next((v for v in variants if v["source"] == "estimated"), variants[0])
+  if top is None and shown["source"] == "estimated" and recipe_toml.get("_confirmed"):
+    top = shown
   reason = "" if top else (f"{rid}'s numbers are estimated: confirm them once with recipe confirm before it counts as fitting"
                            if shown["source"] == "estimated" else f"{rid}'s variants are drafted: they never count as fitting until measured")
   return {"id": rid, "name": recipe_toml["name"], "summary": recipe_toml["summary"], "runtime": recipe_toml["runtime"], "tier": "third-party",
           "publisher": "You", "vendor": recipe_toml.get("vendor", ""), "architecture": recipe_toml.get("architecture", ""),
           "user": True, "source": shown["source"], "installed": False, "available": top is not None, "reason": reason, "best": False,
           "active": False, "memory_gib": shown["peak_ram_gib"], "context": shown["ctx"], "decode_tok_s": None, "prefill_tok_s": None,
-          "_variants": variants}
+          "_variants": variants, **({"_confirmed": True} if recipe_toml.get("_confirmed") else {})}
 
 
 def demo_recipe_in_use(machine, rid):
@@ -1665,8 +1720,53 @@ def demo_recipe_remove(args):
   print(f"Removed recipe {rid}")
 
 
+def demo_recipe_measure(args):
+  """The engine's measure on a demo recipe of yours: its dry-run text, or (--yes) the variant measured, with numbers a
+  little under what it expected. (The engine also leaves the model running; the demo doesn't set one up.)"""
+  rid = recipe(args.id)
+  with demo_state(write=args.yes) as state:
+    machine = demo_host(state, args.host)
+    row = next((r for r in machine["list"] if r["id"] == rid), None)
+    if row is not None and not row.get("user"):
+      raise Error(f"{rid} is a curated recipe: it ships its own measurements, and measure only works on your own recipes (add one with: omarchy agent local recipe add FILE)")
+    if row is None:
+      raise Error(f"No recipe of yours named '{rid}'")
+    variant = next((v for v in row["_variants"] if v["ctx"] == args.ctx), None)
+    if variant is None:
+      raise Error(f"{rid} has no [[variant]] with ctx {args.ctx} (it has: {', '.join(str(v['ctx']) for v in row['_variants'])}); "
+                  "add one with source = \"drafted\" or \"estimated\", then measure it")
+    print(f"Measure {rid} at context {args.ctx} (now a {variant['source']} variant)")
+    print(f"  download: {size_text(int(variant['peak_ram_gib'] * 2**29))} to download")
+    print(f"  load: {row['name']} on {row['runtime']}, context {args.ctx}; it expects about {variant['peak_ram_gib']:g} GiB RAM and {variant['peak_gpu_gib']:g} GiB GPU")
+    print("  then: restarts the model if it runs, runs the bench (a few minutes), leaves it running, and rewrites this variant")
+    if not args.yes:
+      print("Nothing was changed. Run again with --yes to do it.")
+      return
+    variant.update(peak_ram_gib=round(variant["peak_ram_gib"] * 0.9, 1), peak_gpu_gib=round(variant["peak_gpu_gib"] * 0.9, 1), source="measured")
+    machine["list"] = [demo_recipe_row(r["id"], {"name": r["name"], "summary": r["summary"], "runtime": r["runtime"], "vendor": r["vendor"],
+                                                 "variant": r["_variants"], "_confirmed": r.get("_confirmed")}) if r["id"] == rid else r
+                       for r in machine["list"]]
+    print(f"Measured {rid} at context {args.ctx}: {variant['peak_ram_gib']:g} GiB RAM, {variant['peak_gpu_gib']:g} GiB GPU")
+
+
+def demo_recipe_confirm(args):
+  rid = recipe(args.id)
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    row = next((r for r in machine["list"] if r["id"] == rid and r.get("user")), None)
+    if row is None:
+      raise Error(f"No recipe of yours named '{args.id}'")
+    estimated = [v for v in row["_variants"] if v["source"] == "estimated"]
+    if not estimated:
+      raise Error(f"Recipe {rid} has no estimated variant to confirm")
+    row["_confirmed"] = True
+    row.update(available=True, reason="")
+  print(f"Confirmed {len(estimated)} estimated variant(s) of {rid}")
+
+
 def demo_recipe(args):
-  return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove}[args.verb](args)
+  return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm}[args.verb](args)
 
 
 def demo_delete(args):
@@ -1727,18 +1827,20 @@ def demo_uninstall(args):
     machine = demo_host(state, args.host)
   installed = [r for r in machine["list"] if r["id"] in machine["status"]["models"]]
   weights = sum(int((r.get("memory_gib") or 30) * 2**29) for r in installed)
+  recipes = sum(1 for r in machine["list"] if r.get("user"))
   where = f"~/{ENGINE_DATA} ({size_text(weights)} of model weights"
   steps = ["stop the engine's units (omarchy-agent-local-*.service)", f"remove ~/{QUADLET_DIR}/omarchy-agent-local.network",
            f"remove the podman network {NETWORK}", f"remove the podman secret {SECRET}",
-           f"delete ~/{ENGINE_STATE} (the engine's state)", f"delete ~/{ENGINE_CONFIG} (the engine's key, overlays and shares)"]
+           uninstall_state_text(bool(recipes) and not args.delete_recipes, recipes), f"delete ~/{ENGINE_CONFIG} (the engine's key, overlays and shares)"]
   steps += [f"delete {where})"] if args.delete_models else []
   steps += [f"delete the engine ~/{ENGINE_DIR}", "as root: disable linger for demo", f"as root: remove {AGENT_LINK}"]
   steps += ["as root: remove the packages podman"] if args.remove_packages else []
   steps += [f"delete {MANIFEST} and the backups", f"forget {args.host} here"]
   kept = ([] if args.delete_models else [f"keep {where}; --delete-models deletes them)"])
   kept += [] if args.remove_packages else ["keep the packages podman (the install added them; --remove-packages removes them)"]
+  kept += [uninstall_recipes_kept()] if recipes and not args.delete_recipes else []
   print(json.dumps({"host": args.host, "steps": steps, "kept": kept, "manual": manual_steps(args.host), "models_bytes": weights,
-                    "packages": ["podman"]}))
+                    "packages": ["podman"], "recipes": recipes}))
 
 
 def demo_logs(args):
@@ -1784,7 +1886,8 @@ def build_parser():
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
-  u.add_argument("--json", action="store_true", help="with --dry-run: as {host, steps, kept, manual, models_bytes, packages}")
+  u.add_argument("--delete-recipes", action="store_true", help="also delete the recipes you added (kept by default)")
+  u.add_argument("--json", action="store_true", help="with --dry-run: as {host, steps, kept, manual, models_bytes, packages, recipes}")
   d = sub.add_parser("discover", description="List the tailnet's online Linux machines and probe each over ssh, read-only, "
                      "for a DGX Spark. Installs nothing and adds nothing; it saves the host key of a machine ssh has never seen "
                      "(StrictHostKeyChecking=accept-new).")
@@ -1805,13 +1908,14 @@ def build_parser():
   sh.add_argument("--off", action="store_true", help="stop sharing it")
   us = add("use", cmd_use, model=True, timeout=None, timeout_help="3600, or 120 with --detach")
   us.add_argument("--ctx", type=int, help="a context size the recipe has measured (startdgx variants lists them)")
+  us.add_argument("--yes", action="store_true", help="confirm setting up a recipe of your own (it downloads and runs what you wrote)")
   us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
   va = add("variants", cmd_variants, model=True, description="List the context sizes a recipe has measured on the host, with the memory each needs.")
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove")
-  for verb in ("validate", "add", "list", "remove"):
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm")
+  for verb in ("validate", "add", "list", "remove", "measure", "confirm"):
     r = rv.add_parser(verb)
     r.add_argument("host")
     if verb in ("validate", "add"):
@@ -1819,9 +1923,13 @@ def build_parser():
       r.add_argument("--json", action="store_true", help="as {ok, id, errors, message}; a rejection is an answer, so it exits 0")
     if verb == "list":
       r.add_argument("--json", action="store_true")
-    if verb == "remove":
+    if verb in ("remove", "measure", "confirm"):
       r.add_argument("id")
-    r.add_argument("--timeout", type=int, default=60, help="seconds to wait for the host (default: %(default)s)")
+    if verb == "measure":
+      r.add_argument("--ctx", type=int, required=True, help="the context of the variant to measure")
+      r.add_argument("--yes", action="store_true", help="download and load it, bench it and record the result; without this nothing changes")
+    r.add_argument("--timeout", type=int, default=None if verb == "measure" else 60,
+                   help="seconds to wait for the host (default: 60; measure --yes 3600)")
     r.set_defaults(fn=cmd_recipe)
   de = add("delete", cmd_delete, model=True)
   de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
@@ -1835,6 +1943,7 @@ def build_parser():
   la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")
   la.add_argument("--delete-models", action="store_true", help="with uninstall: also delete the model weights")
   la.add_argument("--remove-packages", action="store_true", help="with uninstall: also remove the packages the install added")
+  la.add_argument("--delete-recipes", action="store_true", help="with uninstall: also delete the recipes you added")
   la.set_defaults(fn=cmd_launch)
   return p
 

@@ -1,8 +1,8 @@
 // A machine's Add recipe card, over the manager: adds a recipe you wrote (a .toml on this computer) to the machine's
 // catalog. The path is handed to `startdgx recipe validate` and, when it passes, `recipe add`, which send the file to the
 // machine's engine; every error the engine finds is a row of its own and nothing is added until there are none. Under it,
-// the machine's own recipes with where their numbers come from, and Remove, which the engine refuses while a model uses
-// the recipe. Enter adds, Esc drops the typed path and then closes the card.
+// the machine's own recipes with where their numbers come from, their variants (Measure…, which shows the download and
+// asks first, and Confirm for an estimated one) and Remove, which the engine refuses while a model uses the recipe. Enter adds, Esc drops the typed path and then closes the card.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -26,6 +26,12 @@ FocusScope {
   readonly property bool ready: Model.recipePathProblem(pathField.text) === "" && !card.dgx.recipeBusy
   readonly property var recipes: card.mine ? card.dgx.userRecipes : null
   readonly property int shownErrors: 8
+  // The recipe whose variants are shown.
+  property string expanded: ""
+  function toggle(id) {
+    card.expanded = card.expanded === id ? "" : id
+    if (card.expanded !== "") card.dgx.planContext(card.host, id)
+  }
 
   function go(thenAdd) {
     if (card.ready) card.dgx.checkRecipe(card.host, pathField.text, thenAdd)
@@ -193,39 +199,111 @@ FocusScope {
     }
     Repeater {
       model: card.recipes || []
-      delegate: RowLayout {
+      delegate: ColumnLayout {
         id: recipeRow
         required property var modelData
+        readonly property bool open: card.expanded === recipeRow.modelData.id
+        readonly property bool loaded: card.dgx.variantsHost === card.host && card.dgx.variantsId === recipeRow.modelData.id
         Layout.fillWidth: true
-        spacing: Style.spacing.lg
-        ColumnLayout {
+        spacing: Style.spacing.xxs
+        RowLayout {
           Layout.fillWidth: true
-          spacing: 0
-          Text {
+          spacing: Style.spacing.lg
+          ColumnLayout {
             Layout.fillWidth: true
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            text: String(recipeRow.modelData.name || recipeRow.modelData.id)
-            color: Color.foreground
-            font.family: Style.font.family
-            font.pixelSize: Style.font.body
-            font.bold: true
+            spacing: 0
+            Text {
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              text: String(recipeRow.modelData.name || recipeRow.modelData.id)
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+            Text {
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              text: recipeRow.modelData.id + " · " + Model.recipeMarks(recipeRow.modelData).join(" · ")
+                + (card.dgx.recipeMeasuring === Model.modelKey(card.host, recipeRow.modelData.id) ? " · measuring…" : "")
+              color: recipeRow.modelData.source === "drafted" ? Color.muted : Color.accent
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
           }
-          Text {
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            text: recipeRow.modelData.id + " · " + Model.recipeMarks(recipeRow.modelData).join(" · ")
-            color: recipeRow.modelData.source === "drafted" ? Color.muted : Color.accent
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+          TextLink {
+            Layout.alignment: Qt.AlignVCenter
+            text: recipeRow.open ? "Hide variants" : "Variants"
+            tooltip: "Each context size of this recipe and where its numbers come from; measure a drafted or estimated one, or confirm an estimated one"
+            onClicked: card.toggle(recipeRow.modelData.id)
+          }
+          TextLink {
+            Layout.alignment: Qt.AlignVCenter
+            text: card.dgx.recipeRemoving === recipeRow.modelData.id ? "Removing…" : "Remove"
+            tooltip: "Take this recipe off " + Model.hostName(card.host) + ". The machine refuses while a model set up from it is there"
+            onClicked: card.dgx.removeRecipe(card.host, recipeRow.modelData.id)
           }
         }
-        TextLink {
-          Layout.alignment: Qt.AlignVCenter
-          text: card.dgx.recipeRemoving === recipeRow.modelData.id ? "Removing…" : "Remove"
-          tooltip: "Take this recipe off " + Model.hostName(card.host) + ". The machine refuses while a model set up from it is there"
-          onClicked: card.dgx.removeRecipe(card.host, recipeRow.modelData.id)
+        Text {
+          Layout.fillWidth: true
+          visible: recipeRow.open && recipeRow.loaded && card.dgx.variantsLoading
+          text: "Asking the machine…"
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          Layout.fillWidth: true
+          visible: recipeRow.open && recipeRow.loaded && card.dgx.variantsError !== "" && !card.dgx.variantsLoading
+          textFormat: Text.PlainText
+          wrapMode: Text.Wrap
+          text: card.dgx.variantsError
+          color: Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Repeater {
+          model: recipeRow.open && recipeRow.loaded && card.dgx.variants ? Model.contextChoices(card.dgx.variants, 0, 0) : []
+          delegate: RowLayout {
+            id: variant
+            required property var modelData
+            Layout.fillWidth: true
+            Layout.leftMargin: Style.spacing.xxl
+            spacing: Style.spacing.lg
+            Text {
+              Layout.preferredWidth: Style.space(44)
+              text: variant.modelData.label
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+            Text {
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              text: variant.modelData.source + " · " + variant.modelData.text
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+            TextLink {
+              Layout.alignment: Qt.AlignVCenter
+              visible: Model.variantActions(variant.modelData).indexOf("confirm") >= 0
+              text: "Confirm"
+              tooltip: "Accept these estimated numbers: the recipe then counts as fitting. Measuring replaces them with real ones"
+              onClicked: card.svc.dispatch({ type: "confirmRecipe", host: card.host, id: recipeRow.modelData.id })
+            }
+            TextLink {
+              Layout.alignment: Qt.AlignVCenter
+              visible: Model.variantActions(variant.modelData).indexOf("measure") >= 0
+              text: "Measure…"
+              tooltip: "Download the recipe, load it at this context and bench it, to replace these numbers with measured ones. Shows the download and asks first"
+              onClicked: card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: recipeRow.modelData, ctx: variant.modelData.ctx })
+            }
+          }
         }
       }
     }

@@ -27,7 +27,8 @@ FocusScope {
   readonly property string failure: card.mine && !card.dgx.listing ? card.dgx.recipesError : ""
 
   function act(offer) {
-    if (offer && offer.action === "use") card.svc.dispatch({ type: "use", host: card.host, recipe: offer.recipe })
+    // A recipe of yours downloads what it names and runs it: a card shows the download and asks first.
+    if (offer && offer.action === "use") card.svc.dispatch({ type: offer.confirm ? "setupYours" : "use", host: card.host, recipe: offer.recipe })
   }
 
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
@@ -225,9 +226,9 @@ FocusScope {
             Button {
               Layout.alignment: Qt.AlignVCenter
               visible: recipeRow.can
-              text: "Set up"
+              text: recipeRow.modelData.confirm ? "Set up…" : "Set up"
               bordered: true
-              tooltipText: "Download " + String(recipeRow.r.name || recipeRow.r.id) + " to " + Model.hostName(card.host) + " and set it up; it starts if there is room  (Enter)"
+              tooltipText: "Download " + String(recipeRow.r.name || recipeRow.r.id) + " to " + Model.hostName(card.host) + " and set it up; it starts if there is room" + (recipeRow.modelData.confirm ? ". A recipe of yours shows its download and asks first" : "") + "  (Enter)"
               onClicked: card.act(recipeRow.modelData)
             }
           }
