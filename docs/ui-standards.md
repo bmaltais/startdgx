@@ -54,7 +54,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 
 ## Add machine
 
-Lists `startdgx discover --json` (it installs and writes nothing): each machine of the tailnet with its target and what it can do (`DgxModel.peerOffer`). A DGX Spark with the engine has **Add**, which adds it at once and marks it Added; one without has **Install…**, which opens the install in a terminal (sudo asks there) and closes the window. A machine that isn't a Spark, or doesn't answer, says so, dimmed. **Look again** asks the tailnet again. Up/Down, Enter, `r`, Esc.
+Lists `startdgx discover --json` (it installs nothing and changes nothing on the machines; its ssh saves the host key of a machine it has never seen, in `~/.ssh/known_hosts`): each machine of the tailnet with its target and what it can do (`DgxModel.peerOffer`). A DGX Spark with the engine has **Add**, which adds it at once and marks it Added; one without has **Install…**, which opens the install in a terminal (sudo asks there) and closes the window. A machine that isn't a Spark, or doesn't answer, says so, dimmed. **Look again** asks the tailnet again. Up/Down, Enter, `r`, Esc.
 
 ## Add model
 
@@ -95,6 +95,7 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-11 | Discover's ssh takes a never-seen machine's host key (`accept-new`), and only discover's | With BatchMode alone a Spark this machine never reached was unreachable and got no Install. Its peers are the tailnet's, which the user chose to list; a changed key is still refused and says so. Add and install check against the key it saved. |
 | 2026-11-11 | Two command slots per machine: one start at a time, and a stop, set up or removal beside it; a mark shows once its command runs, "queued" before | The engine's `stop` and `use --detach` take no lock, so a Stop sent during a load really runs; its `start` and `remove` take the engine's lock, so a removal of a model that is loading sends a stop first (its start holds the lock until the load ends), and a removal of another model waits on the engine (its timeout is 1500 s). A stop or removal takes back a start of that model still queued, and supersedes one that is loading: that start's failed exit is not reported. The engine records "Didn't start" on a model stopped while it loaded (its `systemctl start` fails), so the row can read Failed after such a Stop: an engine matter, left for the fork. |
 | 2026-11-11 | Set up closes the picker and moves the cursor to the new row, which shows at once as *Waiting to download* | The download is followed on the row, not in the card; a setup that only appeared after `use` returned and the next poll would look like nothing happened. The waiting row goes when the machine lists the model, or when `use` fails. |
 | 2026-11-11 | The picker lists every recipe, not only what can be set up, sorted best first | Why a recipe can't run on a machine (and what is already there) is part of choosing; the engine's own `best` mark is kept rather than a ranking of ours. |

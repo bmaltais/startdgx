@@ -19,9 +19,9 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   machine's catalog, best first, with why one can't run there; Remove… (Cancel the setup… on a download in progress)
   asks first and says the space it frees.
 - [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS]`: lists the tailnet's online Linux peers
-  (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5`
+  (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new`
   with the install's read-only Spark probe (GB10 in `nvidia-smi`, DGX name in `/etc/dgx-release`), 8 at a time. It
-  installs and writes nothing; the UI offers Install per machine. `--user` is the ssh user (default: this
+  installs nothing and changes nothing on the peers. It does take the host key of a peer ssh has never seen (`accept-new`, discover's probes only: they go to the tailnet's own machines, which you chose to list) and saves it in `~/.ssh/known_hosts`, so a never-seen Spark can be offered Install; a key that changed is still refused, and says so. A peer that wants a password says `ssh needs a key: run ssh-copy-id USER@HOST`. The UI offers Install per machine. `--user` is the ssh user (default: this
   machine's). A peer that refuses key-based ssh, or doesn't answer, is `reachable: false` with a `reason`; a tailnet
   name that isn't a valid ssh target never reaches ssh. `--json` prints a list sorted by `name`, one object per peer:
   `name` (tailnet short name), `target` (`user@name`, what `add` and `install` take), `reachable` (bool), `reason`

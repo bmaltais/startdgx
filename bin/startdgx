@@ -31,7 +31,10 @@ RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]*$")
 HOME_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-DISCOVER_SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+# Discover's probes take the host key of a machine ssh has never seen (accept-new), and only discover's: the peers are
+# the tailnet's own, which the user chose to list, and a never-seen Spark would otherwise be unreachable and get no
+# Install. A key that changed is still refused. The key it saves is what add and install then check against.
+DISCOVER_SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new"]
 DISCOVER_WORKERS = 8
 
 # What the engine's host setup (HOST_SETUP + MACHINE_SETUP_TAIL in its agent_local.py) may create or change as root.
@@ -239,6 +242,8 @@ def ssh_raw(host, command, stdin=None, timeout=None, check=True, what="command",
     result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
   except subprocess.TimeoutExpired as error:
     raise Error(f"{host} didn't answer in time") from error
+  if check and result.returncode == 255:
+    raise Error(ssh_failure(host, result.stderr) if result.stderr.strip() else f"{what} failed on {host}")
   if check and result.returncode != 0:
     lines = (result.stderr.strip().splitlines() or [f"{what} failed on {host}"])
     raise Error(lines[-1].removeprefix("Error: "))
@@ -394,11 +399,22 @@ def discover_peer(name, user, timeout, added):
     record["reason"] = str(error)
     return record
   if result.returncode != 0:
-    record["reason"] = (result.stderr.strip().splitlines() or ["ssh failed"])[-1]
+    record["reason"] = ssh_failure(host, result.stderr)
     return record
   state = parse_probe(result.stdout)
   record.update(reachable=True, spark=is_spark(state), installed=bool(state.get("startdgx")), engine=bool(state.get("engine")))
   return record
+
+
+def ssh_failure(host, stderr):
+  """Why a BatchMode ssh failed, in words that say what to do: its last line, unless it is one ssh says vaguely."""
+  if "Permission denied" in stderr:
+    return f"ssh needs a key: run ssh-copy-id {host}"
+  if "Host key verification failed" in stderr and "host key is known" in stderr:
+    return f"ssh hasn't seen {host}'s host key yet: Add machine's tailnet list saves it, or run ssh {host} once"
+  if "Host key verification failed" in stderr:
+    return f"its host key changed since this machine last saw it: check why before you trust it (ssh {host} says more)"
+  return (stderr.strip().splitlines() or ["ssh failed"])[-1]
 
 
 def discover_peers(user, timeout):
@@ -1288,7 +1304,8 @@ def build_parser():
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
   d = sub.add_parser("discover", description="List the tailnet's online Linux machines and probe each over ssh, read-only, "
-                     "for a DGX Spark. Installs nothing and adds nothing.")
+                     "for a DGX Spark. Installs nothing and adds nothing; it saves the host key of a machine ssh has never seen "
+                     "(StrictHostKeyChecking=accept-new).")
   d.add_argument("--json", action="store_true")
   d.add_argument("--user", help="the ssh user on the peers (default: this machine's user)")
   d.add_argument("--timeout", type=int, default=20, help="seconds to wait for each peer")

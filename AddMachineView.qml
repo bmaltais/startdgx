@@ -1,5 +1,5 @@
 // The Add machine card, over the manager: the machines of your tailnet (`startdgx discover --json`, which
-// installs and writes nothing) and what each can do. A DGX Spark with the engine is added at once; one
+// installs and changes nothing on them; it saves a never-seen machine's host key) and what each can do. A DGX Spark with the engine is added at once; one
 // without is installed in a terminal, where sudo asks for its password. Keyboard: Up/Down (or j/k) move,
 // Enter adds or installs the machine under the cursor, r looks again, Esc closes the card.
 pragma ComponentBehavior: Bound
