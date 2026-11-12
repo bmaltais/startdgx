@@ -7,6 +7,8 @@ Output is JSON when --json is given, which is what the Omarchy panel reads.
 import argparse, json, os, re, shlex, subprocess, sys
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
+ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
+ENGINE_TAG = "v0.6.3-dgx.1"
 TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$")
 RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -120,13 +122,20 @@ def cmd_delete(args):
   sys.stdout.write(ssh(target(args.host), "remove", recipe(args.model), timeout=args.timeout).stdout)
 
 
+def cmd_engine(args):
+  if args.json:
+    print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
+  else:
+    print(f"{ENGINE_REPO} {ENGINE_TAG}")
+
+
 def build_parser():
   p = argparse.ArgumentParser(prog="startdgx", description=__doc__)
   sub = p.add_subparsers(dest="command", required=True)
 
   def add(name, fn, model=False, optional_model=False, timeout=60):
     s = sub.add_parser(name)
-    if name not in ("hosts",):
+    if name not in ("hosts", "engine"):
       s.add_argument("host")
     if model:
       s.add_argument("model")
@@ -136,6 +145,7 @@ def build_parser():
     s.set_defaults(fn=fn)
     return s
 
+  e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
   add("forget", cmd_remove_host)
   h = sub.add_parser("hosts"); h.add_argument("--json", action="store_true"); h.set_defaults(fn=cmd_hosts)
