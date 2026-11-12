@@ -1,0 +1,23 @@
+{
+ "id": "LiquidAI/LFM2.5-24B-A2B-MLX-4bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx"
+  ],
+  "license": "other",
+  "base_model": "LiquidAI/LFM2.5-24B-A2B"
+ },
+ "tags": [
+  "mlx",
+  "license:other"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 3000000000
+  },
+  "total": 24000000000
+ },
+ "sha": "0f74678ad5062e607c5469c35151dc6fcbd966b6"
+}

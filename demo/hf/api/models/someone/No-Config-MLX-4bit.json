@@ -1,0 +1,22 @@
+{
+ "id": "someone/No-Config-MLX-4bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx"
+  ],
+  "license": "mit"
+ },
+ "tags": [
+  "mlx",
+  "license:mit"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 125000000
+  },
+  "total": 1000000000
+ },
+ "sha": "0b43da4a4ff05f2582bdb55b3b18fd4963811298"
+}

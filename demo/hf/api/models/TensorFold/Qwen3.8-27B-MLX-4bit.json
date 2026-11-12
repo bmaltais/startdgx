@@ -1,0 +1,25 @@
+{
+ "id": "TensorFold/Qwen3.8-27B-MLX-4bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx",
+   "4-bit"
+  ],
+  "license": "apache-2.0",
+  "base_model": "Qwen/Qwen3.8-27B"
+ },
+ "tags": [
+  "mlx",
+  "4-bit",
+  "license:apache-2.0"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 3419591070
+  },
+  "total": 27356728560
+ },
+ "sha": "948c129a6ba97f159b648637d7b54f8f5eb3c61a"
+}

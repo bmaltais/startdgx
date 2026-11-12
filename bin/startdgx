@@ -25,6 +25,9 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
@@ -578,19 +581,21 @@ def print_recipe_result(result, as_json):
   return 1
 
 
+def recipe_send(host, verb, rid, text, timeout):
+  """The engine's validate or add of a recipe's text on a host (already a target), as recipe_result's dict."""
+  result = ssh_raw(host, RECIPE_SEND.format(rid=rid, engine=ENGINE, verb=verb), stdin=text, timeout=timeout, check=False, what=f"recipe {verb}")
+  if result.returncode == 255:
+    raise_ssh_failure(host, result.stderr, f"recipe {verb}")
+  if result.returncode != 0:
+    # The engine rejected it: validate prints its errors on stdout, add's on stderr; all of them are the answer.
+    return recipe_result(False, rid, engine_lines(result.stdout, result.stderr) or [f"recipe {verb} failed on {host}"])
+  return recipe_result(True, rid, message=(engine_lines(result.stdout) or [f"Recipe {rid} {'is valid' if verb == 'validate' else 'added'}"])[-1])
+
+
 def cmd_recipe_send(args):
   host = target(args.host)
   rid, text = read_recipe_file(args.file)
-  result = ssh_raw(host, RECIPE_SEND.format(rid=rid, engine=ENGINE, verb=args.verb), stdin=text, timeout=args.timeout, check=False,
-                   what=f"recipe {args.verb}")
-  if result.returncode == 255:
-    raise_ssh_failure(host, result.stderr, f"recipe {args.verb}")
-  if result.returncode != 0:
-    # The engine rejected it: validate prints its errors on stdout, add's on stderr; all of them are the answer.
-    errors = engine_lines(result.stdout, result.stderr) or [f"recipe {args.verb} failed on {host}"]
-    return print_recipe_result(recipe_result(False, rid, errors), args.json)
-  message = (engine_lines(result.stdout) or [f"Recipe {rid} {'is valid' if args.verb == 'validate' else 'added'}"])[-1]
-  return print_recipe_result(recipe_result(True, rid, message=message), args.json)
+  return print_recipe_result(recipe_send(host, args.verb, rid, text, args.timeout), args.json)
 
 
 def cmd_recipe_list(args):
@@ -622,7 +627,7 @@ def cmd_recipe_confirm(args):
 
 def cmd_recipe(args):
   return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
-          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm}[args.verb](args)
+          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def cmd_delete(args):
@@ -1338,12 +1343,12 @@ def run_steps(host, phase, script, timeout):
 
 LAUNCHER = "omarchy-launch-floating-terminal-with-presentation"
 # The commands launch may open a terminal on, and whether each takes a model.
-LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True}
+LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True, "author": True}
 
 
 def cmd_launch(args):
-  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and
-  uninstall). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
+  """Opens a floating terminal on one of the commands that need one (sudo asks for a password in install and uninstall; author
+  runs an agent). The launcher runs its argument as shell, so it is built only from checked words, each quoted."""
   if args.verb not in LAUNCH_VERBS:
     raise Error(f"launch: '{args.verb}' isn't one of {', '.join(LAUNCH_VERBS)}")
   if args.model and not LAUNCH_VERBS[args.verb]:
@@ -1352,12 +1357,22 @@ def cmd_launch(args):
     raise Error("--replace-engine goes only with launch install")
   if (args.delete_models or args.remove_packages or args.delete_recipes) and args.verb != "uninstall":
     raise Error("--delete-models, --remove-packages and --delete-recipes go only with launch uninstall")
+  if args.verb == "author":
+    # The model slot holds the Hugging Face repo; the terminal runs recipe author, so the draft's errors and the agent show there.
+    if not valid_repo(args.model):
+      raise Error("launch author takes a repo as OWNER/NAME")
+    argv = [os.path.realpath(__file__), "recipe", "author", ssh_target(args.host), "--agent", "--here", "--", args.model]
+    return open_terminal(argv)
   argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
   argv += [recipe(args.model)] if args.model else []
   argv += ["--replace-engine"] if args.replace_engine else []
   argv += ["--delete-models"] if args.delete_models else []
   argv += ["--remove-packages"] if args.remove_packages else []
   argv += ["--delete-recipes"] if args.delete_recipes else []
+  open_terminal(argv)
+
+
+def open_terminal(argv):
   if DEMO:
     print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
     return
@@ -1372,6 +1387,443 @@ def cmd_engine(args):
     print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
   else:
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
+
+
+# hf search: the anonymous Hugging Face API, read-only, on this computer (no host, no ssh). The base address is
+# STARTDGX_HF_BASE: a URL, or a folder of fixtures (api/models.json, api/models/OWNER/NAME/tree/main.json and
+# OWNER/NAME/raw/main/config.json) for tests; demo mode always uses the folder in demo/hf and never the network.
+HF_DEFAULT_BASE = "https://huggingface.co"
+HF_LIMIT = 50
+HF_WORKERS = 8
+HF_TIMEOUT = 20
+HF_CACHE_SECONDS = 3600
+KNOWN_FAMILIES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "known-families.json")
+HF_LABEL_RE = re.compile(r"abliterated|uncensored", re.I)
+
+
+def hf_get(base, path, query=None, strict=True):
+  """A JSON document from the Hugging Face API, or None when the repo has no such file. Errors: rate limited, offline,
+  and (when strict) any other HTTP error; a per-repo fetch is not strict, so one broken repo is skipped."""
+  if not hf_is_network(base):
+    local = os.path.join(base.removeprefix("file://"), *path.split("/"))
+    try:
+      with open(local if local.endswith(".json") else local + ".json") as f:
+        return json.load(f)
+    except (OSError, ValueError):
+      return None
+  url = f"{base.rstrip('/')}/{path}" + (f"?{query}" if query else "")
+  request = urllib.request.Request(url, headers={"User-Agent": "startdgx", "Accept": "application/json"})
+  try:
+    with urllib.request.urlopen(request, timeout=HF_TIMEOUT) as response:
+      return json.load(response)
+  except urllib.error.HTTPError as error:
+    if error.code == 429:
+      try:
+        wait = max(1, -(-int(error.headers.get("Retry-After") or 60) // 60))
+      except ValueError:
+        wait = 1
+      raise Error(f"Hugging Face is limiting requests, try again in {wait} minute{'s' if wait != 1 else ''}") from error
+    if error.code in (401, 403, 404) or not strict:
+      return None
+    raise Error(f"Hugging Face answered {error.code}") from error
+  except ValueError:
+    return None
+  except (urllib.error.URLError, OSError) as error:
+    raise Error("Can't reach Hugging Face: check the network") from error
+
+
+def hf_base():
+  """Where the Hugging Face API is read from: the bundled fixtures in demo mode, else STARTDGX_HF_BASE, else Hugging Face."""
+  return os.path.join(DEMO_FIXTURES, "hf") if DEMO else os.environ.get("STARTDGX_HF_BASE") or HF_DEFAULT_BASE
+
+
+def hf_is_network(base):
+  return bool(re.match(r"^https?://", base))
+
+
+def valid_repo(repo):
+  """Whether `repo` is a Hugging Face OWNER/NAME that is safe in a URL and a path (no part of only dots)."""
+  return isinstance(repo, str) and bool(DRAFT_REPO_RE.fullmatch(repo)) and not any(set(part) == {"."} for part in repo.split("/"))
+
+
+def hf_known_families():
+  with open(KNOWN_FAMILIES) as f:
+    return set(json.load(f)["families"])
+
+
+def hf_is_affine_4bit(config):
+  quantization = config.get("quantization") if isinstance(config, dict) else None
+  return isinstance(quantization, dict) and quantization.get("mode") == "affine" and quantization.get("bits") == 4
+
+
+def hf_passes_find(config, known):
+  """Whether a repo's config.json is what Find lists: MLX affine 4-bit of an architecture in `known`."""
+  archs = config.get("architectures") if isinstance(config, dict) else None
+  return hf_is_affine_4bit(config) and isinstance(archs, list) and bool(known.intersection(a for a in archs if isinstance(a, str)))
+
+
+def hf_weights_bytes(tree):
+  """The size of a repo's .safetensors files, from its file tree; 0 when it lists none."""
+  return sum(e["size"] for e in (tree if isinstance(tree, list) else []) if isinstance(e, dict) and str(e.get("path", "")).endswith(".safetensors") and isinstance(e.get("size"), int))
+
+
+def hf_base_model(card):
+  """The card's base model (the first of a list), or None."""
+  base_model = card.get("base_model")
+  return (base_model[0] if base_model else None) if isinstance(base_model, list) else base_model
+
+
+def hf_row(base, item):
+  """A listing item whose config passed, as its row; the weights' size is the repo's .safetensors files."""
+  repo = item["id"]
+  card = item.get("cardData") or {}
+  tree = hf_get(base, f"api/models/{repo}/tree/main", strict=False)
+  label = HF_LABEL_RE.search(" ".join([repo, *(item.get("tags") or [])]))
+  return {"repo": repo, "params": (item.get("safetensors") or {}).get("total"),
+          "size_bytes": hf_weights_bytes(tree) or None,
+          "license": card.get("license"), "base_model": hf_base_model(card), "label": label.group(0).lower() if label else None}
+
+
+def hf_search(base, query):
+  known = hf_known_families()
+  fields = "".join(f"&expand[]={f}" for f in ("safetensors", "gated", "cardData", "tags"))
+  listing = hf_get(base, "api/models", f"filter=mlx&search={urllib.parse.quote(query)}&limit={HF_LIMIT}&sort=downloads&direction=-1{fields}")
+  if not isinstance(listing, list):
+    raise Error("Hugging Face gave an answer startdgx can't read")
+  items = [i for i in listing if isinstance(i, dict) and valid_repo(i.get("id")) and not i.get("gated")]
+
+  def check(item):
+    config = hf_get(base, f"{item['id']}/raw/main/config.json", strict=False)
+    return hf_row(base, item) if hf_passes_find(config, known) else None
+
+  with concurrent.futures.ThreadPoolExecutor(HF_WORKERS) as pool:
+    return [row for row in pool.map(check, items) if row]
+
+
+def hf_line(row):
+  size = f"{row['size_bytes'] / 2**30:.1f} GiB" if row["size_bytes"] else "-"
+  params = f"{row['params'] / 1e9:.1f}B" if row["params"] else "-"
+  cells = [row["repo"], params, size, row["license"] or "-", row["base_model"] or "-"] + ([f"[{row['label']}]"] if row["label"] else [])
+  return "  ".join(cells)
+
+
+def hf_cache_file(base, query):
+  root = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+  return os.path.join(root, "startdgx", "hf-search", hashlib.sha256(f"{base}\n{query}".encode()).hexdigest() + ".json")
+
+
+def hf_cached_search(base, query):
+  """The rows for a query, from the last hour's answer when there is one (network bases only; STARTDGX_HF_NOW holds the
+  clock, in seconds, for tests). Only a good answer is cached, never a failure."""
+  if not hf_is_network(base):
+    return hf_search(base, query)
+  now = float(os.environ.get("STARTDGX_HF_NOW") or time.time())
+  path = hf_cache_file(base, query)
+  try:
+    with open(path) as f:
+      cached = json.load(f)
+    if isinstance(cached.get("rows"), list) and 0 <= now - cached["at"] < HF_CACHE_SECONDS:
+      return cached["rows"]
+  except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    pass
+  rows = hf_search(base, query)
+  try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as f:
+      json.dump({"at": now, "rows": rows}, f)
+    os.replace(path + ".tmp", path)
+  except OSError:
+    pass
+  return rows
+
+
+def cmd_hf_search(args):
+  rows = hf_cached_search(hf_base(), args.query)
+  if args.json:
+    print(json.dumps(rows))
+  elif rows:
+    print("\n".join(hf_line(row) for row in rows))
+  else:
+    print("No known-family MLX 4-bit repos matched", file=sys.stderr)
+
+
+# recipe draft: a complete user recipe for one repo that passes the same checks as a search row, in the shape of the curated
+# TensorFold MLX recipes. Every value comes from the Hugging Face API (the pinned commit, the license, the weights' size); the
+# variant is `drafted` with its memory placeholders equal to the weights' size, which never count as fitting (ADR 0001).
+DRAFT_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+DRAFT_CTX = 8192
+DRAFT_FILES = ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"]
+# What a card's license may be to go into a draft: a license id, never free text (it is written into a file the engine reads).
+DRAFT_LICENSE_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}")
+DRAFT_FREE_LICENSES = re.compile(r"^(apache-2\.0|mit|isc|unlicense|cc0-1\.0|cc-by-4\.0|bsd(-[0-9a-z]+)*|bsl-1\.0|mpl-2\.0)$")
+DRAFT_TEMPLATE = """# Drafted by startdgx from {repo}. The memory numbers are placeholders equal to the weights' size and the variant is
+# `drafted`, so it never counts as fitting: measure it (recipe measure) or confirm numbers of your own.
+name = {name}
+summary = {summary}
+runtime = "tensorfold"
+
+[[hardware]]
+gpu = "nvidia-gb10"
+ram_class = 128
+
+# MLX affine 4-bit export. The server loads the directory.
+[[artifacts]]
+repo = {repo_q}
+revision = "{revision}"
+license = {license}
+files = {files}
+dest = "target"
+model = "."
+
+[[variant]]
+ctx = {ctx}
+peak_ram_gib = {gib}
+peak_gpu_gib = {gib}
+source = "drafted"
+"""
+
+
+def draft_id(repo):
+  slug = re.sub(r"[^a-z0-9.]+", "-", repo.split("/", 1)[1].lower())
+  slug = re.sub(r"(-\.|\.-|\.\.)+", "-", slug).strip("-.")
+  return slug if slug.endswith("tensorfold") else f"{slug}-tensorfold"
+
+
+def draft_name(repo):
+  name = re.sub(r"[-_ ]*MLX[-_ ]*4-?bit.*$", "", repo.split("/", 1)[1], flags=re.I) or repo.split("/", 1)[1]
+  return re.sub(r"[-_]+", " ", name).strip()
+
+
+def draft_license(info):
+  card = info.get("cardData") or {}
+  value = card.get("license")
+  if not isinstance(value, str) or not value.strip():
+    value = next((t[len("license:"):] for t in info.get("tags") or [] if isinstance(t, str) and t.startswith("license:")), None)
+  return value.strip() if isinstance(value, str) and DRAFT_LICENSE_RE.fullmatch(value.strip()) else None
+
+
+def toml_str(value):
+  """A TOML basic string: JSON's escapes are TOML's, except that TOML forbids a raw DEL and rejects the surrogate pairs JSON
+  makes of characters beyond the BMP, so the text is kept as it is (the file is UTF-8)."""
+  return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def draft_marker(path):
+  return os.path.join(os.path.dirname(path), f".{os.path.basename(path)}.sha256")
+
+
+def draft_unedited(path):
+  """Whether `path` is a draft startdgx wrote and nobody has changed since (its text still has the hash it recorded)."""
+  try:
+    if os.path.islink(path):
+      return False
+    with open(draft_marker(path), encoding="ascii") as marker, open(path, "rb") as draft:
+      return marker.read().strip() == hashlib.sha256(draft.read()).hexdigest()
+  except OSError:
+    return False
+
+
+def draft_discard(path):
+  """Removes a draft startdgx wrote and nobody edited, with its hash: a try that failed afterwards leaves nothing to block a retry."""
+  if draft_unedited(path):
+    for name in (path, draft_marker(path)):
+      with contextlib.suppress(OSError):
+        os.remove(name)
+
+
+def hf_draft_source(base, repo):
+  """(commit sha, license or None, weights' bytes) of a repo that passes the checks a search row passes, else an Error."""
+  info = hf_get(base, f"api/models/{repo}")
+  if not isinstance(info, dict) or info.get("id") != repo:
+    raise Error(f"{repo} wasn't found on Hugging Face (or needs a login)")
+  if info.get("gated"):
+    raise Error(f"{repo} is gated: startdgx doesn't use Hugging Face tokens, so it can't download it")
+  config = hf_get(base, f"{repo}/raw/main/config.json")
+  if not hf_passes_find(config, hf_known_families()):
+    raise Error(f"{repo} is outside what Find on Hugging Face lists: its config.json must say MLX affine 4-bit of a known family")
+  sha = info.get("sha")
+  if not isinstance(sha, str) or not re.match(r"^[0-9a-f]{40}$", sha):
+    raise Error(f"Hugging Face gave no commit for {repo}")
+  size = hf_weights_bytes(hf_get(base, f"api/models/{repo}/tree/main"))
+  if not size:
+    raise Error(f"{repo} has no .safetensors weights")
+  return sha, draft_license(info), size, config
+
+
+DRAFT_DRAFTER_RE = re.compile(r"draft|eagle|mtp|speculat", re.I)
+
+
+def draft_judgement(repo, config):
+  """What in this repo the template can't settle, so an agent should look: ["vision", "drafter", "server"]."""
+  archs = [a for a in config.get("architectures") or [] if isinstance(a, str)]
+  why = []
+  if config.get("vision_config") or any(re.search(r"vision|VL", a) for a in archs):
+    why.append("vision")
+  nextn = config.get("num_nextn_predict_layers")
+  if DRAFT_DRAFTER_RE.search(repo.split("/", 1)[1]) or (isinstance(nextn, int) and nextn > 0):
+    why.append("drafter")
+  if config.get("rope_scaling"):
+    why.append("server")
+  return why
+
+
+JUDGEMENT_TEXT = {"vision": "it has a vision tower (the template drafts the language model only)",
+                  "drafter": "it is, or carries, a speculative drafter (the template has no field for one)",
+                  "server": "its config scales positions (rope_scaling), which may need server arguments the template cannot set"}
+
+
+def draft_host_ids(host):
+  """The ids a machine has, curated and the user's."""
+  if DEMO:
+    with demo_state() as state:
+      return {r["id"] for r in demo_host(state, host)["list"]}
+  try:
+    rows = json.loads(ssh(target(host), "recipe", "list", "--json", timeout=60).stdout)
+    return {r["id"] for r in rows}
+  except (ValueError, KeyError, TypeError) as error:
+    raise Error(f"{host} gave a recipe list startdgx can't read") from error
+
+
+def draft_validate(host, rid, text):
+  """The host's engine validates the draft (as the Add recipe path does), else an Error with its errors."""
+  result = demo_recipe_check(host, "validate", rid, text) if DEMO else recipe_send(target(host), "validate", rid, text, 60)
+  if not result["ok"]:
+    raise Error(f"{host}'s engine rejects the draft: " + "; ".join(result["errors"]))
+
+
+def draft_recipe(args, replace=False):
+  """Writes the draft and returns its result dict, for cmd_recipe_draft and cmd_recipe_author. With a host, the host's engine
+  validates it first, and a draft it rejects is removed. `replace` lets it take the place of a draft startdgx wrote and nobody
+  edited, so a try that failed afterwards can be repeated; any other file in the way is never touched."""
+  repo = args.repo
+  if not valid_repo(repo):
+    raise Error("Name the repo as OWNER/NAME, e.g. TensorFold/Qwen3.8-27B-MLX-4bit")
+  rid = args.id or draft_id(repo)
+  if not RID_RE.match(rid):
+    raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
+  sha, license_id, size, config = hf_draft_source(hf_base(), repo)
+  if args.host and rid in draft_host_ids(args.host):
+    raise Error(f"{args.host} already has a recipe '{rid}' (curated or yours): pick another id with --id")
+  out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                                                                       "startdgx"), "drafts")
+  path = os.path.join(out, f"{rid}.toml")
+  if os.path.lexists(path) and not (replace and draft_unedited(path)):
+    raise Error(f"{path} already exists: pick another id with --id, or delete the file")
+  gib = -(-size * 10 // 2**30) / 10
+  warnings = []
+  if license_id is None:
+    warnings.append("License unknown: Hugging Face reports none startdgx can use for this repo, so read its model card before you use it")
+  elif not DRAFT_FREE_LICENSES.match(license_id.lower()):
+    warnings.append(f"License '{license_id}' may restrict use: read its terms before you use it")
+  text = DRAFT_TEMPLATE.format(repo=repo, name=toml_str(draft_name(repo)), repo_q=toml_str(repo), revision=sha,
+                               summary=toml_str(f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
+                               license=toml_str(license_id or "unknown"), files=toml_str(DRAFT_FILES), ctx=DRAFT_CTX, gib=gib)
+  data = text.encode("utf-8")
+  try:
+    os.makedirs(out, exist_ok=True)
+    if os.path.lexists(path):
+      os.remove(path)
+    with open(path, "xb") as handle:
+      handle.write(data)
+    with open(draft_marker(path), "w", encoding="ascii") as marker:
+      marker.write(hashlib.sha256(data).hexdigest() + "\n")
+  except OSError as error:
+    for name in (path, draft_marker(path)):
+      with contextlib.suppress(OSError):
+        os.remove(name)
+    raise Error(f"{path} can't be written: {error.strerror}") from error
+  if args.host:
+    try:
+      draft_validate(args.host, rid, text)
+    except Error:
+      draft_discard(path)
+      raise
+  result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
+            "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config)}
+  return result
+
+
+def print_draft(result):
+  print(f"Drafted {result['id']} from {result['repo']} at {result['revision'][:12]}: {result['path']}")
+  print(f"  license {result['license']}; weights {size_text(result['weights_bytes'])}; the variant is drafted, with {result['placeholder_gib']} GiB placeholders that never count as fitting")
+  for warning in result["warnings"]:
+    print(f"  Warning: {warning}")
+
+
+def cmd_recipe_draft(args):
+  result = draft_recipe(args, replace=True)
+  if args.json:
+    print(json.dumps(result))
+    return
+  print_draft(result)
+  print(f"  next: startdgx recipe add HOST {result['path']}")
+
+
+# recipe author: the draft, then an agent for what needs judgement (or on request). The agent runs in Omarchy's floating terminal, the
+# same launcher `launch` uses, and is given the authoring brief (a plain-text file at the plugin root: the installer drops docs/ and
+# *.md) with the host, the repo and the draft's path. The command is `agent_command` in ~/.config/startdgx/config.json (default claude).
+AUTHOR_BRIEF = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "recipe-authoring-brief.txt")
+DEFAULT_AGENT_COMMAND = "claude"
+
+
+def agent_command():
+  path = os.path.join(config_dir(), "config.json")
+  try:
+    with open(path, encoding="utf-8") as handle:
+      value = json.load(handle).get("agent_command", DEFAULT_AGENT_COMMAND)
+  except FileNotFoundError:
+    return shlex.split(DEFAULT_AGENT_COMMAND)
+  except (OSError, ValueError, AttributeError) as error:
+    raise Error(f"{path} can't be read as a JSON object") from error
+  try:
+    words = shlex.split(value) if isinstance(value, str) else []
+  except ValueError:
+    words = []
+  if not words:
+    raise Error(f"agent_command in {path} must be a command line, e.g. \"claude\"")
+  return words
+
+
+def author_prompt(host, result):
+  try:
+    with open(AUTHOR_BRIEF, encoding="utf-8") as handle:
+      brief = handle.read()
+  except OSError as error:
+    raise Error(f"The authoring brief {os.path.normpath(AUTHOR_BRIEF)} can't be read: {error.strerror}") from error
+  why = "; ".join(f"{w}: {JUDGEMENT_TEXT[w]}" for w in result["judgement"]) or "none found by the template; the person asked for you"
+  return (f"{brief}\nTHIS TASK\nHost: {host}\nRepo: {result['repo']}\nDraft: {result['path']} (recipe id {result['id']})\n"
+          f"Why you were started: {why}\n")
+
+
+def cmd_recipe_author(args):
+  agent = agent_command()
+  result = draft_recipe(args)
+  run = args.agent or bool(result["judgement"])
+  if args.json:
+    print(json.dumps(dict(result, agent=run)))
+  else:
+    print_draft(result)
+    for w in result["judgement"]:
+      print(f"  Needs judgement: {JUDGEMENT_TEXT[w]}")
+  if not run:
+    if not args.json:
+      print(f"  next: startdgx recipe add {args.host} {result['path']}, or start an agent on it: startdgx recipe author {args.host} {args.repo} --id {result['id']} --agent")
+    return
+  try:
+    argv = agent + [author_prompt(args.host, result)]
+    if DEMO:
+      print(f"Demo: would run '{shlex.join(argv)}' in a terminal")
+      return
+    sys.stdout.flush()
+    try:
+      if args.here:
+        os.execvp(argv[0], argv)
+      os.execvp(LAUNCHER, [LAUNCHER, shlex.join(argv)])
+    except OSError as error:
+      raise Error(f"Can't start {argv[0] if args.here else LAUNCHER}: {error.strerror}") from error
+  except Error:
+    draft_discard(result["path"])  # no agent ever saw it, so a retry is not blocked by it
+    raise
 
 
 # Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
@@ -1719,17 +2171,20 @@ def demo_recipe_in_use(machine, rid):
   return None if row is None else f"Recipe {rid} is used by the model {rid} ({row['name']}) set up here; remove it first with: omarchy agent local remove {rid}"
 
 
-def demo_recipe_send(args):
-  rid, text = read_recipe_file(args.file)
-  adding = args.verb == "add"
+def demo_recipe_check(host, verb, rid, text):
+  """The demo engine's validate or add of a recipe's text on a demo host, as recipe_result's dict."""
+  adding = verb == "add"
   with demo_state(write=adding) as state:
-    machine = demo_host(state, args.host)
+    machine = demo_host(state, host)
     errors = demo_recipe_errors(machine, rid, text) or ([demo_recipe_in_use(machine, rid)] if adding and demo_recipe_in_use(machine, rid) else [])
     if not errors and adding:
       machine["list"] = [r for r in machine["list"] if r["id"] != rid] + [demo_recipe_row(rid, tomllib.loads(text))]
-  if errors:
-    return print_recipe_result(recipe_result(False, rid, errors), args.json)
-  return print_recipe_result(recipe_result(True, rid, message=f"Added recipe {rid}" if adding else f"Recipe {rid} is valid"), args.json)
+  return recipe_result(False, rid, errors) if errors else recipe_result(True, rid, message=f"Added recipe {rid}" if adding else f"Recipe {rid} is valid")
+
+
+def demo_recipe_send(args):
+  rid, text = read_recipe_file(args.file)
+  return print_recipe_result(demo_recipe_check(args.host, args.verb, rid, text), args.json)
 
 
 def demo_recipe_list(args):
@@ -1796,7 +2251,7 @@ def demo_recipe_confirm(args):
 
 def demo_recipe(args):
   return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
-          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm}[args.verb](args)
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def demo_delete(args):
@@ -1944,7 +2399,7 @@ def build_parser():
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm")
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|draft|author")
   for verb in ("validate", "add", "list", "remove", "measure", "confirm"):
     r = rv.add_parser(verb)
     r.add_argument("host")
@@ -1961,13 +2416,39 @@ def build_parser():
     r.add_argument("--timeout", type=int, default=None if verb == "measure" else 60,
                    help="seconds to wait for the host (default: 60; measure --yes 3600)")
     r.set_defaults(fn=cmd_recipe)
+  rd = rv.add_parser("draft", description="Write a user recipe for a Hugging Face repo that passes the Find checks (hf search), from this "
+                     "computer, with no model: its pinned commit, license and one drafted variant whose placeholder numbers equal the weights' size.")
+  rd.add_argument("repo", help="OWNER/NAME")
+  rd.add_argument("--id", help="the recipe id (default: the repo name slugified, owner dropped, plus -tensorfold)")
+  rd.add_argument("--out", help="the folder to write ID.toml in (default: ~/.local/state/startdgx/drafts)")
+  rd.add_argument("--host", help="also refuse an id this machine's recipes (curated or yours) already have")
+  rd.add_argument("--json", action="store_true", help="as {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}")
+  rd.set_defaults(fn=cmd_recipe)
+  ra = rv.add_parser("author", description="Draft a recipe for a Hugging Face repo on HOST (as recipe draft), then open a terminal running the "
+                     "agent (agent_command in ~/.config/startdgx/config.json, default claude) with the authoring brief, when the draft needs "
+                     "judgement (a vision tower, a drafter, server arguments the template cannot set) or with --agent.")
+  ra.add_argument("host")
+  ra.add_argument("repo", help="OWNER/NAME")
+  ra.add_argument("--id", help="the recipe id (default: the repo name slugified, owner dropped, plus -tensorfold)")
+  ra.add_argument("--out", help="the folder to write ID.toml in (default: ~/.local/state/startdgx/drafts)")
+  ra.add_argument("--agent", action="store_true", help="start the agent even when the draft needs no judgement")
+  ra.add_argument("--here", action="store_true", help="run the agent in this terminal instead of opening one")
+  ra.add_argument("--json", action="store_true", help="as recipe draft --json plus agent: whether an agent starts")
+  ra.set_defaults(fn=cmd_recipe)
   de = add("delete", cmd_delete, model=True)
   de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
   de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
-  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
-                      "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
-  la.add_argument("verb", metavar="install|uninstall|logs")
+  hp = sub.add_parser("hf", description="Hugging Face, read-only, from this computer: search the MLX affine 4-bit repos of known families.")
+  hv = hp.add_subparsers(dest="verb", required=True, metavar="search")
+  hs = hv.add_parser("search", description="List the top 50 mlx repos for QUERY that are affine 4-bit by their config.json, of a "
+                     "known family (known-families.json) and not gated. Memory is shown as facts only, never a fit.")
+  hs.add_argument("query")
+  hs.add_argument("--json", action="store_true", help="as [{repo, params, size_bytes, license, base_model, label}]")
+  hs.set_defaults(fn=cmd_hf_search)
+  la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST, "
+                      "logs HOST [MODEL] or author HOST REPO (recipe author --agent --here), for the panel: sudo there can ask for a password.")
+  la.add_argument("verb", metavar="install|uninstall|logs|author")
   la.add_argument("host")
   la.add_argument("model", nargs="?")
   la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")

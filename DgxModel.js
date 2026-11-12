@@ -850,6 +850,111 @@ function notifyCommand(alert) {
   return ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", String(alert.title), body]
 }
 
+// ---- Find on Hugging Face ----------------------------------------------------------------------------------
+// `startdgx hf search --json` rows: { repo, params, size_bytes, license, base_model, label }. The card states facts and
+// never says a model fits: no number in a recipe comes from a guess (docs/adr/0001).
+
+function parseHfRows(text) {
+  const parsed = parseJson(text)
+  if (!Array.isArray(parsed)) return null
+  for (let i = 0; i < parsed.length; i++) {
+    if (!isPlainObject(parsed[i]) || typeof parsed[i].repo !== "string" || parsed[i].repo === "") return null
+  }
+  return parsed
+}
+
+// The CLI's arguments for a query, after `--` so a query that starts with - is a query.
+function hfSearchCommand(query) {
+  return ["hf", "search", "--json", "--", String(query).trim()]
+}
+
+// "abliterated" or "uncensored" on a derivative, "" on the rest.
+function hfLabel(row) { return row && typeof row.label === "string" ? row.label : "" }
+
+// The rows to show: all of them, or without the labelled ones.
+function hfShown(rows, showDerivatives) {
+  return (Array.isArray(rows) ? rows : []).filter(function (r) { return showDerivatives || hfLabel(r) === "" })
+}
+
+function hfDerivativeCount(rows) {
+  return (Array.isArray(rows) ? rows : []).reduce(function (n, r) { return n + (hfLabel(r) !== "" ? 1 : 0) }, 0)
+}
+
+// The toggle's words; "" when no row is labelled, so there is nothing to toggle.
+function hfToggleText(rows, showDerivatives) {
+  const n = hfDerivativeCount(rows)
+  return n === 0 ? "" : (showDerivatives ? "Hide" : "Show") + " abliterated and uncensored (" + n + ")"
+}
+
+// Parameters, license and base model, as facts; nothing about memory.
+function hfRowText(row) {
+  const parts = []
+  const params = Number(row.params) || 0
+  if (params > 0) parts.push((params / 1e9).toFixed(1) + "B")
+  parts.push(row.license ? String(row.license) : "license unknown")
+  if (row.base_model) parts.push("from " + row.base_model)
+  return parts.join(" · ")
+}
+
+// "weights 15.4 GiB; this host has 128 GiB": the two numbers, no verdict. `ramGib` is 0 when no host is known.
+function hfMemoryLine(row, ramGib) {
+  const bytes = Number(row.size_bytes) || 0
+  const weights = bytes > 0 ? "weights " + sizeText(bytes) : "weights size unknown"
+  return (Number(ramGib) || 0) > 0 ? weights + "; this host has " + Math.round(ramGib) + " GiB" : weights
+}
+
+// ---- Draft recipe on a result -------------------------------------------------------------------------------
+// One action puts a repo on a machine: `recipe draft` writes the file (asked with --host, so an id the machine already has is
+// refused before anything is written), then the Add recipe path (`recipe add`) validates and adds it. Never a fit verdict:
+// the variant is drafted until a measuring run (docs/adr/0001).
+
+// The CLI's arguments to draft `repo` for `host`, the repo after `--`.
+function draftCommand(host, repo) {
+  return ["recipe", "draft", "--host", host, "--json", "--", String(repo)]
+}
+
+// `recipe draft --json`: { id, path, warnings }, or null when it isn't a successful draft. Failures are `Error:` on stderr.
+function parseDraftResult(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || p.ok !== true || typeof p.id !== "string" || p.id === "" || typeof p.path !== "string" || p.path === "") return null
+  if (!Array.isArray(p.warnings)) return null
+  return { id: p.id, path: p.path, warnings: p.warnings.map(String).filter(function (w) { return w !== "" }) }
+}
+
+// What the card says while a step runs: "drafting" (the CLI), "checking" and "adding" (the machine's engine).
+function draftStatus(step, host, repo) {
+  if (step === "drafting") return "Drafting " + repo + "…"
+  if (step === "checking") return "Asking " + hostName(host) + " to check the draft…"
+  if (step === "adding") return "Adding the draft to " + hostName(host) + "…"
+  return ""
+}
+
+// The CLI's failure line for the card, which has no --id to offer: an id clash ends at what the machine has; a draft file left by
+// an earlier try says to delete it.
+function draftErrorText(line) {
+  return String(line).replace(/: pick another id with --id, or delete the file$/, ": delete the file to draft it again").replace(/: pick another id with --id$/, "")
+}
+
+function draftDone(host, id) {
+  return id + " is on " + hostName(host) + ", drafted, not yet fitting. It shows in the model picker; Measure… in Add recipe… replaces its placeholder numbers."
+}
+
+// ---- With an agent… on a result -------------------------------------------------------------------------------
+// The agent runs in Omarchy's terminal through `startdgx launch author HOST REPO`, so the draft's errors and the agent show
+// there; the panel sends nothing else and never an agent command of its own (it is the CLI's config).
+var AUTHOR_TEXT = "With an agent…"
+var REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+// What launch takes for `repo`, or null when it is not an OWNER/NAME repo.
+function authorLaunch(host, repo) {
+  if (typeof repo !== "string" || !REPO_RE.test(repo) || repo.split("/").some(function (part) { return /^\.+$/.test(part) })) return null
+  return { verb: "author", host: host, id: repo }
+}
+
+function authorHint() {
+  return "Opens a terminal with an agent that finishes this recipe. It asks before any download or measuring run."
+}
+
 // ---- a query ----------------------------------------------------------------------------------------------
 // One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
 // A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come

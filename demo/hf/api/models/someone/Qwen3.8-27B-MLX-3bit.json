@@ -1,0 +1,23 @@
+{
+ "id": "someone/Qwen3.8-27B-MLX-3bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx"
+  ],
+  "license": "apache-2.0",
+  "base_model": "Qwen/Qwen3.8-27B"
+ },
+ "tags": [
+  "mlx",
+  "license:apache-2.0"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 3419591070
+  },
+  "total": 27356728560
+ },
+ "sha": "13ba92263cdd786f7b8d9a33f340d1e0ac5c26df"
+}

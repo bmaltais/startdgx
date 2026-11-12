@@ -1,0 +1,15 @@
+{
+ "architectures": [
+  "Qwen3_5ForConditionalGeneration"
+ ],
+ "model_type": "fixture",
+ "quantization": {
+  "group_size": 64,
+  "bits": 4,
+  "mode": "affine"
+ },
+ "rope_scaling": {
+  "type": "yarn",
+  "factor": 4.0
+ }
+}

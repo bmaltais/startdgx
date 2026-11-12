@@ -1052,3 +1052,115 @@ test("parseMeasurePlan keeps the engine's up-front note that other commands wait
   assert.ok(plan.includes(note))
   assert.strictEqual(plan.length, 4)
 })
+
+// ---- Find on Hugging Face (`hf search --json`) ----
+const hfRow = (over) => Object.assign({ repo: "TensorFold/Qwen3.8-27B-MLX-4bit", params: 27356728560, size_bytes: 16074529674,
+  license: "apache-2.0", base_model: "Qwen/Qwen3.8-27B", label: null }, over)
+const hfRows = [hfRow(), hfRow({ repo: "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", label: "abliterated" }),
+  hfRow({ repo: "someone/Gemma-4-31B-uncensored-MLX-4bit", label: "uncensored", license: null, base_model: null, params: null, size_bytes: null })]
+
+test("parseHfRows keeps the CLI's rows and refuses what isn't a list of them", () => {
+  assert.strictEqual(M.parseHfRows(JSON.stringify(hfRows)).length, 3)
+  assert.deepStrictEqual(M.parseHfRows("[]"), [])
+  assert.strictEqual(M.parseHfRows(""), null)
+  assert.strictEqual(M.parseHfRows("{}"), null)
+  assert.strictEqual(M.parseHfRows(JSON.stringify([{ params: 1 }])), null)
+})
+
+test("hfShown hides the labelled rows with the toggle off and keeps the order", () => {
+  assert.deepStrictEqual(M.hfShown(hfRows, true).map((r) => r.repo), hfRows.map((r) => r.repo))
+  assert.deepStrictEqual(M.hfShown(hfRows, false).map((r) => r.repo), ["TensorFold/Qwen3.8-27B-MLX-4bit"])
+  assert.deepStrictEqual(M.hfShown(null, false), [])
+})
+
+test("hfDerivativeCount counts the labelled rows, for the toggle's words", () => {
+  assert.strictEqual(M.hfDerivativeCount(hfRows), 2)
+  assert.strictEqual(M.hfDerivativeCount([hfRow()]), 0)
+  assert.strictEqual(M.hfDerivativeCount(null), 0)
+})
+
+test("hfToggleText says what the toggle does and how many rows it holds", () => {
+  assert.strictEqual(M.hfToggleText(hfRows, true), "Hide abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText(hfRows, false), "Show abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText([hfRow()], true), "")
+})
+
+test("hfMemoryLine gives plain facts and never a verdict", () => {
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 16.5 * 2 ** 30 }), 128), "weights 16.5 GiB; this host has 128 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 15.4 * 2 ** 30 }), 121.6), "weights 15.4 GiB; this host has 122 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow(), 0), "weights 15.0 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: null }), 128), "weights size unknown; this host has 128 GiB")
+  // Even a model far bigger than the host only gets the two numbers.
+  const huge = M.hfMemoryLine(hfRow({ size_bytes: 500 * 2 ** 30 }), 128)
+  assert.strictEqual(huge, "weights 500.0 GiB; this host has 128 GiB")
+  assert.ok(!/fit|enough|too|won't|will|can/i.test(huge))
+})
+
+test("hfRowText is the facts under a repo's name, in the order the CLI prints them", () => {
+  assert.strictEqual(M.hfRowText(hfRow()), "27.4B · apache-2.0 · from Qwen/Qwen3.8-27B")
+  assert.strictEqual(M.hfRowText(hfRows[2]), "license unknown")
+  assert.strictEqual(M.hfRowText(hfRow({ params: null, base_model: null })), "apache-2.0")
+})
+
+test("hfLabel is the mark on a derivative and nothing on the rest", () => {
+  assert.strictEqual(M.hfLabel(hfRows[1]), "abliterated")
+  assert.strictEqual(M.hfLabel(hfRow()), "")
+})
+
+test("hfSearchCommand hands the query after --, so a query starting with - is a query", () => {
+  assert.deepStrictEqual(M.hfSearchCommand("  qwen "), ["hf", "search", "--json", "--", "qwen"])
+  assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
+})
+
+// ---- Draft recipe on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
+const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.8-27b-mlx-4bit-tensorfold", repo: "TensorFold/Qwen3.8-27B-MLX-4bit",
+  path: "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml", revision: "948c129", license: "apache-2.0",
+  weights_bytes: 16074529674, placeholder_gib: 15, source: "drafted", warnings: [] }, over))
+
+test("draftCommand asks the host about the id, so a clash is refused before anything is written, and the repo comes after --", () => {
+  assert.deepStrictEqual(M.draftCommand("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"),
+    ["recipe", "draft", "--host", "me@dgx", "--json", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
+})
+
+test("parseDraftResult keeps the file to add and the warnings, and refuses what isn't a draft", () => {
+  const d = M.parseDraftResult(draftJson({ warnings: ["License 'llama3' may restrict use: read its terms before you use it", ""] }))
+  assert.strictEqual(d.id, "qwen3.8-27b-mlx-4bit-tensorfold")
+  assert.strictEqual(d.path, "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml")
+  assert.deepStrictEqual(d.warnings, ["License 'llama3' may restrict use: read its terms before you use it"])
+  assert.deepStrictEqual(M.parseDraftResult(draftJson()).warnings, [])
+  assert.strictEqual(M.parseDraftResult(""), null)
+  assert.strictEqual(M.parseDraftResult("[]"), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ ok: false })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ path: "" })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ id: undefined })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ warnings: "x" })), null)
+})
+
+test("draftStatus says which step runs, and the outcome in words that call the recipe drafted and not yet fitting", () => {
+  assert.strictEqual(M.draftStatus("drafting", "me@dgx", "A/B"), "Drafting A/B…")
+  assert.strictEqual(M.draftStatus("checking", "me@dgx", "A/B"), "Asking dgx to check the draft…")
+  assert.strictEqual(M.draftStatus("adding", "me@dgx", "A/B"), "Adding the draft to dgx…")
+  assert.strictEqual(M.draftStatus("", "me@dgx", "A/B"), "")
+  assert.match(M.draftDone("me@dgx", "my-id"), /my-id.*dgx.*drafted, not yet fitting.*Measure/)
+})
+
+test("draftErrorText drops the CLI's --id advice, which the card can't act on", () => {
+  assert.strictEqual(M.draftErrorText("demo@spark-a already has a recipe 'x' (curated or yours): pick another id with --id"), "demo@spark-a already has a recipe 'x' (curated or yours)")
+  assert.strictEqual(M.draftErrorText("/d/x.toml already exists: pick another id with --id, or delete the file"), "/d/x.toml already exists: delete the file to draft it again")
+  assert.strictEqual(M.draftErrorText("Hugging Face did not answer"), "Hugging Face did not answer")
+})
+
+test("authorLaunch opens a terminal on the repo through launch, so the draft's errors and the agent show there", () => {
+  assert.deepStrictEqual(M.authorLaunch("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"), { verb: "author", host: "me@dgx", id: "TensorFold/Qwen3.8-27B-MLX-4bit" })
+})
+
+test("authorLaunch refuses what is not an OWNER/NAME repo, as the CLI does", () => {
+  for (const repo of ["", "notarepo", "../x/y", "a/b/c", "-x y/z", "a/..", null, undefined]) assert.strictEqual(M.authorLaunch("me@dgx", repo), null, String(repo))
+})
+
+test("the agent pill says an agent opens in a terminal and that downloads and measuring runs wait for the person", () => {
+  assert.strictEqual(M.AUTHOR_TEXT, "With an agent…")
+  assert.match(M.authorHint(), /terminal/)
+  assert.match(M.authorHint(), /asks before any download or measuring run/)
+  assert.doesNotMatch(M.authorHint(), /fits?\b/i)
+})
