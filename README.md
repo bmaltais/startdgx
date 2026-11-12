@@ -8,7 +8,13 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 ## Status
 
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
-- [ ] Omarchy plugin: manager window and bar widget, reusing the model controls of the `agents` plugin
+- [x] Omarchy plugin `io.github.bmaltais.startdgx` (this folder; needs `/usr/bin/python3`, standard on Omarchy): a
+  manager window listing each added machine (answering, or why not and when it last did) and its models (running,
+  loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop and Logs per model, an
+  Add machine card over `discover` (Add, or Install… in a terminal), Uninstall… that shows the dry-run plan and asks
+  first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
+  `docs/ui-standards.md`; testing in the nested session, in demo mode: `docs/testing.md`.
+- [ ] Add and remove models from the manager (`use --detach`, `delete`), issue #6
 - [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS]`: lists the tailnet's online Linux peers
   (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5`
   with the install's read-only Spark probe (GB10 in `nvidia-smi`, DGX name in `/etc/dgx-release`), 8 at a time. It
