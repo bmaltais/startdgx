@@ -15,6 +15,7 @@ cat >"$tmp/bin/ssh" <<'F'
 #!/usr/bin/env bash
 cmd=${*: -1}
 printf '%s\n' "$cmd" >>"$FAKE_LOG"
+printf '%s\n' "$*" >>"$FAKE_LOG.args"
 if [ "${*: -2:1}" = me@newkey ]; then
   printf '%s\n' "No ED25519 host key is known for newkey and you have requested strict checking." "Host key verification failed." >&2; exit 255
 fi
@@ -40,6 +41,7 @@ case "$cmd" in
   *"logs ctlerr"*) printf 'Error: bad\033[2Jthing\n' >&2; exit 1;;
   *"logs ctl"*) printf 'a\033]52;c;ZXZpbA==\007b\302\233c\td\n\377e\n';;
   *"start slow-load"*) sleep 2; echo "Started slow-load";;
+  *"start hang-load"*) echo $$ >"$FAKE_HOST.ssh-pid"; exec sleep 30;;
   # The engine's detach_use: it starts one setup unit per model and says so, or that it's already running.
   *" use "*" --detach") rid=${cmd% --detach}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
     if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
@@ -190,6 +192,17 @@ same "$(wc -l <"$FAKE_LOG")" 0; ok $? "a host with a colon never reaches ssh"
 out=$(s start me@dgx slow-load --timeout 1 2>&1); ok $((!$?)) "start gives up after --timeout seconds"
 echo "$out" | grep -qx "Error: me@dgx didn't answer in time"; ok $? "and says the host didn't answer in time"
 s start --help | grep -q 'default: 600'; ok $? "start waits 600 seconds by default, for the model to load"
+tail -1 "$FAKE_LOG.args" | grep -q -- '-o ServerAliveInterval=15 -o ServerAliveCountMax=3 '; ok $? "ssh sends keepalives, so a host that went away is noticed in 45 s"
+# startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
+for sig in TERM INT HUP; do
+  # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).
+  rm -f "$FAKE_HOST.ssh-pid"; "$here/bin/startdgx" start me@dgx hang-load >/dev/null 2>&1 & cli_pid=$!
+  for _ in $(seq 50); do [ -s "$FAKE_HOST.ssh-pid" ] && break; sleep 0.1; done
+  kill -"$sig" "$cli_pid"; wait "$cli_pid"; code=$?
+  ssh_pid=$(cat "$FAKE_HOST.ssh-pid" 2>/dev/null); sleep 0.3
+  [ -n "$ssh_pid" ] && ! kill -0 "$ssh_pid" 2>/dev/null && [ "$code" -ne 0 ]; ok $? "SIG$sig to startdgx ends its ssh too"
+  [ -z "$ssh_pid" ] || kill "$ssh_pid" 2>/dev/null
+done
 out=$(s use --detach me@dgx q-detach); ok $? "use --detach succeeds"
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use q-detach --detach$'; ok $? "use --detach asks the engine to set the model up in the background"
 same "$out" "Setting up q-detach in the background; follow it with: journalctl"; ok $? "use --detach prints a single line"
@@ -588,12 +601,12 @@ case "$*" in "-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=acce
 case "$(head -1 "$peer")" in
   refuse) echo "$host: Permission denied (publickey)." >&2; exit 255;;
   rekeyed) printf '%s\n' "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@" "Host key verification failed." >&2; exit 255;;
-  hang) sleep 30;;
+  hang) echo $$ >>"$DISCO_PIDS"; exec sleep 30;;
   *) cat >/dev/null; cat "$peer";;
 esac
 F
 chmod +x "$disco/bin/"*
-export DISCO_LOG=$disco/log DISCO_STATUS=$disco/status.json DISCO_PEERS=$disco/peers
+export DISCO_LOG=$disco/log DISCO_STATUS=$disco/status.json DISCO_PEERS=$disco/peers DISCO_PIDS=$disco/pids
 python3 - "$DISCO_STATUS" <<'F'
 import json, sys
 def peer(name, os="linux", online=True):
@@ -637,6 +650,17 @@ d --timeout 2 | grep -q 'gx10-spark.*me@gx10-spark.*spark.*installed'; ok $? "di
 d --timeout 2 | grep -q 'locked-down.*unreachable.*ssh-copy-id me@locked-down'; ok $? "the human output says why a peer is unreachable"
 echo 'not json' >"$DISCO_STATUS"; d >/dev/null 2>&1; ok $((!$?)) "an unreadable tailscale status is an error"
 PATH=$tmp/empty s discover >/dev/null 2>&1; ok $((!$?)) "discover without tailscale is an error"
+python3 - "$DISCO_STATUS" <<'P'
+import json, sys
+peers = [{"HostName": f"hung-{i}", "DNSName": f"hung-{i}.tail1234.ts.net.", "OS": "linux", "Online": True} for i in range(12)]
+json.dump({"Peer": {str(i): p for i, p in enumerate(peers)}}, open(sys.argv[1], "w"))
+P
+for i in $(seq 0 11); do echo hang >"$disco/peers/me@hung-$i"; done
+: >"$DISCO_PIDS"; PATH=$disco/bin:$PATH "$here/bin/startdgx" discover --user me --json --timeout 20 >/dev/null 2>&1 & cli_pid=$!
+for _ in $(seq 50); do [ "$(wc -l <"$DISCO_PIDS")" -ge 8 ] && break; sleep 0.1; done
+kill -TERM "$cli_pid"; wait "$cli_pid"; sleep 0.5
+alive=0; while read -r p; do kill -0 "$p" 2>/dev/null && alive=$((alive+1)) && kill "$p"; done <"$DISCO_PIDS"
+same "$alive:$(wc -l <"$DISCO_PIDS")" "0:8"; ok $? "a stopped discover ends all its probes, and starts no more"
 # Demo mode: fixtures from demo/, state under $XDG_STATE_HOME/startdgx-demo, and nothing run. Every tool that could
 # reach a machine is a shim here that records its call; the last test fails if demo mode ran any of them.
 mkdir -p "$tmp/demo-bin"; export DEMO_CALLS=$tmp/demo-calls; : >"$DEMO_CALLS"

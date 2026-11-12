@@ -19,6 +19,7 @@ import os
 import pty
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,8 @@ TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
 RECIPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]*$")
 HOME_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
-SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+# Keepalives: a host that went away (asleep, off the tailnet) is noticed in 45 s, not when TCP gives up.
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
 # Discover's probes take the host key of a machine ssh has never seen (accept-new), and only discover's: the peers are
 # the tailnet's own, which the user chose to list, and a never-seen Spark would otherwise be unreachable and get no
 # Install. A key that changed is still refused. The key it saves is what add and install then check against.
@@ -212,11 +214,39 @@ def clean(text):
   return CONTROLS.sub("", text)
 
 
+# The commands running now (discover runs several at once, in threads), so a signal can end them all; and whether
+# startdgx is stopping, after which none starts.
+CHILDREN = set()
+STOPPING = False
+
+
 def run_process(cmd, stdin=None, timeout=None):
   """subprocess.run for a command whose output comes from a host: text with undecodable bytes replaced, and
-  terminal controls taken out of stdout and stderr."""
-  result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
-  return subprocess.CompletedProcess(cmd, result.returncode, clean(result.stdout), clean(result.stderr))
+  terminal controls taken out of stdout and stderr. It is ended with startdgx (stop_children)."""
+  if STOPPING:
+    raise Error("startdgx is stopping")
+  with subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin is not None else None, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True, errors="replace") as proc:
+    CHILDREN.add(proc)
+    try:
+      out, err = proc.communicate(stdin, timeout=timeout)
+    except BaseException:
+      proc.kill()
+      raise
+    finally:
+      CHILDREN.discard(proc)
+  return subprocess.CompletedProcess(cmd, proc.returncode, clean(out), clean(err))
+
+
+def stop_children(signum, _frame):
+  """On SIGTERM, SIGINT or SIGHUP (a shell restart ends the panel's processes): end every command startdgx runs, so
+  no ssh is left behind, then exit."""
+  global STOPPING
+  STOPPING = True
+  for proc in list(CHILDREN):
+    with contextlib.suppress(OSError):
+      proc.kill()
+  raise SystemExit(128 + signum)
 
 
 def run_on_tty(cmd):
@@ -1430,6 +1460,8 @@ def build_parser():
 def main(argv):
   global DEMO
   args = build_parser().parse_args(argv)
+  for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(signum, stop_children)
   try:
     if demo_enabled():
       DEMO = True

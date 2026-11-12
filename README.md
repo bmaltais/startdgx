@@ -76,6 +76,10 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   script's terminal, carriage returns stay). So a host can't write to this machine's clipboard (OSC 52) or redraw its
   terminal. Bytes that aren't UTF-8 show as `�`.
 
+- Its ssh sends keepalives (`ServerAliveInterval=15`, `ServerAliveCountMax=3`), so a host that went away is noticed
+  in 45 s. SIGTERM, SIGINT or SIGHUP (a shell restart ends the panel's processes) end every ssh it runs, discover's
+  probes included, and it starts no more: nothing is left behind.
+
 ## Credits
 
 Parts of the panel are adapted from Omarchy's `agents` plugin, MIT, Copyright (c) David Heinemeier Hansson; its images in `assets/` keep their notice in `assets/NOTICE`, and the model makers' logos there are their companies' trademarks.
