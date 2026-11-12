@@ -2,7 +2,7 @@
 // (`startdgx hf search --json`, run on this computer: it reaches no machine). Every row is a repo whose config.json was
 // read: its parameters, license and base model, a mark on an abliterated or uncensored derivative (a toggle hides those),
 // and the weights' size next to the machine's memory as two plain numbers. No row says it fits: only a measuring run does
-// (docs/adr/0001). Draft recipe… on a row writes a drafted recipe for that repo and adds it to the machine through the Add recipe
+// (docs/adr/0001). Draft recipe on a row writes a drafted recipe for that repo and adds it to the machine through the Add recipe
 // path; With an agent… opens a terminal where an agent finishes the recipe (`startdgx launch author`); its steps, warnings and any clash or validation error show under the toggle, line by line. Enter searches, Esc drops the typed query and then closes the card.
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -28,7 +28,7 @@ FocusScope {
   readonly property bool searching: card.dgx.hfSearching
   readonly property bool asked: card.dgx.hfAsked !== "" || card.dgx.hfRows !== null
 
-  // Draft recipe… on a result: the card's own account of the last one (drafting it, then the Add recipe path's check and add).
+  // Draft recipe on a result: the card's own account of the last one (drafting it, then the Add recipe path's check and add).
   readonly property bool drafting: card.dgx.recipeHost === card.host && card.dgx.draftRepo !== ""
   readonly property string draftStep: card.dgx.draftStep !== "" ? card.dgx.draftStep : card.dgx.recipeStep
   readonly property var draftResult: card.drafting && card.dgx.draftId !== "" && card.dgx.recipeResult && card.dgx.recipeResult.id === card.dgx.draftId ? card.dgx.recipeResult : null
@@ -147,7 +147,7 @@ FocusScope {
       font.pixelSize: Style.font.body
     }
 
-    // Draft recipe…: where it is, its warnings, and each error found, on its own row.
+    // Draft recipe: where it is, its warnings, and each error found, on its own row.
     Text {
       Layout.fillWidth: true
       visible: card.drafting && card.draftStep !== ""
@@ -176,34 +176,17 @@ FocusScope {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         text: "Warning: " + modelData
-        color: Color.accent
+        color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
     }
     Repeater {
       model: card.draftResult && !card.draftResult.ok ? card.draftResult.errors.slice(0, card.shownErrors) : []
-      delegate: Rectangle {
-        id: errorRow
+      delegate: ErrorRow {
         required property string modelData
         Layout.fillWidth: true
-        implicitHeight: errorText.implicitHeight + Style.spacing.md * 2
-        radius: Math.max(Style.cornerRadius, Style.space(6))
-        color: Util.alpha(Color.urgent, 0.10)
-        Text {
-          id: errorText
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.lg
-          anchors.rightMargin: Style.spacing.lg
-          textFormat: Text.PlainText
-          wrapMode: Text.Wrap
-          text: errorRow.modelData
-          color: Color.urgent
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
+        message: modelData
       }
     }
     Text {
@@ -220,7 +203,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: card.draftResult ? Model.draftDone(card.host, card.draftResult.id) : ""
-      color: Color.accent
+      color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -274,13 +257,13 @@ FocusScope {
                 font.pixelSize: Style.font.body
                 font.bold: true
               }
-              // A derivative says so, in the colour of a caution.
+              // A derivative says so, in the foreground colour: accent is for the one thing to do and the selected state.
               Text {
                 Layout.fillWidth: true
                 visible: hfRow.label !== ""
                 textFormat: Text.PlainText
                 text: hfRow.label
-                color: Color.accent
+                color: Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
@@ -310,9 +293,14 @@ FocusScope {
                 text: Model.AUTHOR_TEXT
                 opacity: Model.authorLaunch(card.host, hfRow.modelData.repo) ? 1 : 0.4
                 onClicked: card.author(hfRow.modelData.repo)
+                HoverHandler { id: authorHover }
+                PanelToolTip {
+                  visible: authorHover.hovered
+                  text: Model.authorHint()
+                }
               }
               SettingsPill {
-                text: "Draft recipe…"
+                text: "Draft recipe"
                 opacity: card.dgx.recipeBusy ? 0.4 : 1
                 onClicked: card.draft(hfRow.modelData.repo)
               }

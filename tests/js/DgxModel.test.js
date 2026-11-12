@@ -1112,7 +1112,7 @@ test("hfSearchCommand hands the query after --, so a query starting with - is a 
   assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
 })
 
-// ---- Draft recipe… on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
+// ---- Draft recipe on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
 const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.8-27b-mlx-4bit-tensorfold", repo: "TensorFold/Qwen3.8-27B-MLX-4bit",
   path: "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml", revision: "948c129", license: "apache-2.0",
   weights_bytes: 16074529674, placeholder_gib: 15, source: "drafted", warnings: [] }, over))
