@@ -1086,6 +1086,19 @@ hj 'r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["label"] == "abliterat
 ok $? "a derivative is labelled abliterated and shows its base model"
 hj 'r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["label"] == "uncensored" and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["base_model"] is None and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["license"] is None' qwen
 ok $? "an uncensored repo is labelled so, and a missing base model or license is null"
+badhf=$tmp/hf-bad; cp -r "$here/demo/hf" "$badhf"
+python3 - "$badhf" <<'F'
+import json, os, shutil, sys
+root = sys.argv[1]
+rows = json.load(open(root + "/api/models.json"))
+for bad in ("x y/z", "../x/y", "a/b/c", "x/y;z"):
+  rows.append(dict(rows[0], id=bad))
+json.dump(rows, open(root + "/api/models.json", "w"))
+os.makedirs(root + "/x y/z/raw/main")
+shutil.copy(root + "/TensorFold/Qwen3.8-27B-MLX-4bit/raw/main/config.json", root + "/x y/z/raw/main/config.json")
+F
+out=$(STARTDGX_HF_BASE=$badhf s hf search qwen --json); same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4
+ok $? "a listing id that isn't an OWNER/NAME repo name is skipped, not fetched"
 out=$(hf qwen); same "$(printf '%s\n' "$out" | wc -l)" 4 && ! printf '%s' "$out" | grep -q '^[[{]'; ok $? "the human output is one row per line"
 printf '%s\n' "$out" | grep -q '^TensorFold/Qwen3.8-27B-MLX-4bit  27.4B  15.0 GiB  apache-2.0  Qwen/Qwen3.8-27B$'; ok $? "a row reads repo, parameters, weights size, license, base model"
 printf '%s\n' "$out" | grep -q '^daguoagi/.*  Qwen/Qwen3.8-27B  \[abliterated\]$'; ok $? "and a derivative ends with its label"
@@ -1190,21 +1203,51 @@ present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
 printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
 printf '%s' "$out" | grep -qi 'warning'; ok $((!$?)) "a permissive license warns of nothing"
 printf '%s' "$out" | grep -q 'recipe add'; ok $? "and says how to add it"
-out=$(draft $tf 2>&1); ok $((!$?)) "a draft is never overwritten"
+draft $tf >/dev/null 2>&1; ok $? "a draft startdgx wrote and nobody edited is replaced by the next try"
+printf '# mine\n' >>"$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"
+out=$(draft $tf 2>&1); ok $((!$?)) "a draft the person edited is never overwritten"
 printf '%s' "$out" | grep -q -- '--id'; ok $? "and the clash asks for --id"
-eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\necho %s\n' "'[{\"id\":\"mine\",\"user\":true},{\"id\":\"qwen3.8-27b-tensorfold\"}]'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
+grep -q '^# mine$' "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "and keeps their edit"
+: >"$drafts/hand-made.toml"
+draft $tf --id hand-made >/dev/null 2>&1; ok $((!$?)) "a file startdgx never wrote is never overwritten"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\nif [ "$2" = validate ] && [ -e "$HOME/reject" ]; then echo "recipes/x: rejected by the engine"; exit 1; fi\necho %s\n' "'[{\"id\":\"mine\",\"user\":true},{\"id\":\"qwen3.8-27b-tensorfold\"}]'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
 s add me@dgx >/dev/null 2>&1
 out=$(draft $tf --host me@dgx --id mine 2>&1); ok $((!$?)) "an id the host already has fails"
 printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -q mine; ok $? "naming the id and asking for --id"
 s add me@dgx >/dev/null 2>&1; : >"$FAKE_LOG"
 draft $tf --host me@dgx --id fresh-one >/dev/null; ok $? "an id the host doesn't have passes the host check"
 grep -q 'recipe list --json' "$FAKE_LOG"; ok $? "which asks the host only for its recipe list"
+grep -q 'recipe validate' "$FAKE_LOG"; ok $? "and asks the host's engine to validate the draft before it reports success"
+touch "$FAKE_HOST/home/reject"
+out=$(draft $tf --host me@dgx --id vfail 2>&1); ok $((!$?)) "a draft the host's engine rejects fails"
+printf '%s' "$out" | grep -q 'rejected by the engine'; ok $? "with the engine's errors"
+none_of "$drafts/vfail.toml"; ok $? "and the file is removed, so a retry is not blocked"
+rm -f "$FAKE_HOST/home/reject"
+draft $tf --host me@dgx --id vfail >/dev/null; ok $? "the retry drafts it"
 out=$(draft --host me@dgx --id panel-order --json -- $tf 2>&1); ok $? "the panel's argument order (options, then -- and the repo) drafts with the host check"
 printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['source'] == 'drafted' and d['id'] == 'panel-order'))"; ok $? "and prints the JSON the panel parses"
 dd '"license" in d and d["warnings"] and "other" in d["warnings"][0]' LiquidAI/LFM2.5-24B-A2B-MLX-4bit --id lfm-a
 ok $? "a restrictive license warns and still writes the draft"
 dd 'd["license"] == "unknown" and d["warnings"] and "unknown" in d["warnings"][0]' someone/Gemma-4-31B-uncensored-MLX-4bit --id gemma-a
 ok $? "an unknown license is written as unknown and warns"
+lichf=$tmp/hf-lic; cp -r "$here/demo/hf" "$lichf"
+for lic in 'x"
+name = "evil' 'apache-2.0 plus a very long explanation that is not a license identifier at all, which a card can hold' '🙂-license' 'Apache-2.0'; do
+  python3 - "$lichf/api/models/TensorFold/Qwen3.8-27B-MLX-4bit.json" "$lic" <<'F'
+import json, sys
+d = json.load(open(sys.argv[1])); d["cardData"]["license"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+F
+  rm -f "$tmp/lic.toml"; STARTDGX_HF_BASE=$lichf s recipe draft $tf --id lic --out "$tmp/lic" --json >"$tmp/lic.json"
+  python3 - "$tmp/lic/lic.toml" "$tmp/lic.json" "$lic" <<'F'
+import json, sys, tomllib
+t = tomllib.load(open(sys.argv[1], "rb")); j = json.load(open(sys.argv[2]))
+good = sys.argv[3] == "Apache-2.0"
+sys.exit(not (len(t["artifacts"]) == 1 and t["name"] != "evil" and t["artifacts"][0]["license"] == (sys.argv[3] if good else "unknown")
+              and bool(j["warnings"]) == (not good)))
+F
+  ok $? "license text from a card ($(printf '%s' "$lic" | head -c 12 | tr '\n' ' ')...) is $([ "$lic" = Apache-2.0 ] && echo kept || echo 'written as unknown with a warning'), and the draft is valid TOML"
+  rm -rf "$tmp/lic"
+done
 grep -q '^license = "unknown"' "$drafts/gemma-a.toml"; ok $? "so the engine's non-empty license rule holds"
 out=$(draft someone/Qwen3.8-27B-gated-MLX-4bit 2>&1); ok $((!$?)) "a gated repo is refused"
 printf '%s' "$out" | grep -qi gated; ok $? "saying it is gated"
@@ -1231,7 +1274,9 @@ fi
 ddraft() { local cond=$1; shift; STARTDGX_HF_BASE=http://127.0.0.1:9 ds recipe draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
 ddraft 'd["id"] == "qwen3.8-27b-mlx-4bit-tensorfold" and d["source"] == "drafted" and d["path"].startswith("'"$tmp"'/state/startdgx-demo/")' $tf
 ok $? "demo recipe draft serves the bundled fixtures, ignores STARTDGX_HF_BASE, and writes under the demo's state folder"
-ds recipe draft $tf >/dev/null 2>&1; ok $((!$?)) "and a demo draft is not overwritten either"
+ds recipe draft $tf >/dev/null 2>&1; ok $? "and an unedited demo draft is replaced by the next try"
+ds recipe draft $tf --host $a --id demo-checked >/dev/null; ok $? "a demo draft for a machine passes the demo engine's validation"
+printf '# mine\n' >>"$tmp/state/startdgx-demo/drafts/demo-checked.toml"; ds recipe draft $tf --host $a --id demo-checked >/dev/null 2>&1; ok $((!$?)) "and an edited demo draft is not overwritten"
 ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
 ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo draft never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
@@ -1260,6 +1305,11 @@ mkdir -p "$XDG_CONFIG_HOME/startdgx"; printf '{"agent_command": "my-agent --flag
 launched_author me@dgx $tf --id author-cfg --agent >"$tmp/l2"; tail -n +2 "$tmp/l2" | grep -q "^my-agent --flag 'two words' "; ok $? "the agent command is configurable in config.json (quoted words stay whole)"
 tail -n +2 "$tmp/l2" | grep -q '^claude'; ok $((!$?)) "and replaces the default"
 printf '{"agent_command": 5}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"; author me@dgx $tf --id author-bad --agent >/dev/null 2>&1; ok $((!$?)) "an agent_command that isn't a string is refused"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+author me@dgx $tf --id author-twice >/dev/null; author me@dgx $tf --id author-twice >/dev/null 2>&1; ok $((!$?)) "recipe author never replaces a draft: an agent may have edited it"
+printf '{"agent_command": "no-such-agent-xyz"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+author me@dgx $tf --id author-lf --agent --here >/dev/null 2>&1 </dev/null; ok $((!$?)) "an agent that can't start fails"
+none_of "$authordir/author-lf.toml"; ok $? "and leaves no draft behind, so a retry is not blocked"
 rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
 for r in "TensorFold/Qwen3.8-VL-27B-MLX-4bit vision" "TensorFold/Qwen3.8-27B-Drafter-MLX-4bit drafter" "TensorFold/Qwen3.8-27B-Yarn-MLX-4bit server"; do
   read -r jrepo jwhy <<<"$r"
