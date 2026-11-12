@@ -937,6 +937,22 @@ function draftDone(host, id) {
   return id + " is on " + hostName(host) + ", drafted, not yet fitting. It shows in the model picker; Measure… in Add recipe… replaces its placeholder numbers."
 }
 
+// ---- With an agent… on a result -------------------------------------------------------------------------------
+// The agent runs in Omarchy's terminal through `startdgx launch author HOST REPO`, so the draft's errors and the agent show
+// there; the panel sends nothing else and never an agent command of its own (it is the CLI's config).
+var AUTHOR_TEXT = "With an agent…"
+var REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+// What launch takes for `repo`, or null when it is not an OWNER/NAME repo.
+function authorLaunch(host, repo) {
+  if (typeof repo !== "string" || !REPO_RE.test(repo) || repo.split("/").some(function (part) { return /^\.+$/.test(part) })) return null
+  return { verb: "author", host: host, id: repo }
+}
+
+function authorHint() {
+  return "Opens a terminal with an agent that finishes this recipe. It asks before any download or measuring run."
+}
+
 // ---- a query ----------------------------------------------------------------------------------------------
 // One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
 // A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come

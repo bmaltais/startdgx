@@ -3,7 +3,7 @@
 // read: its parameters, license and base model, a mark on an abliterated or uncensored derivative (a toggle hides those),
 // and the weights' size next to the machine's memory as two plain numbers. No row says it fits: only a measuring run does
 // (docs/adr/0001). Draft recipe… on a row writes a drafted recipe for that repo and adds it to the machine through the Add recipe
-// path; its steps, warnings and any clash or validation error show under the toggle, line by line. Enter searches, Esc drops the typed query and then closes the card.
+// path; With an agent… opens a terminal where an agent finishes the recipe (`startdgx launch author`); its steps, warnings and any clash or validation error show under the toggle, line by line. Enter searches, Esc drops the typed query and then closes the card.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -37,6 +37,12 @@ FocusScope {
 
   function draft(repo) {
     if (!card.dgx.recipeBusy) card.dgx.draftRecipe(card.host, repo)
+  }
+
+  // With an agent…: a terminal that drafts and lets an agent finish the recipe; nothing comes back to the card.
+  function author(repo) {
+    const l = Model.authorLaunch(card.host, repo)
+    if (l) card.dgx.launch(l.verb, l.host, l.id)
   }
 
   function go() {
@@ -299,6 +305,11 @@ FocusScope {
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
+              }
+              SettingsPill {
+                text: Model.AUTHOR_TEXT
+                opacity: Model.authorLaunch(card.host, hfRow.modelData.repo) ? 1 : 0.4
+                onClicked: card.author(hfRow.modelData.repo)
               }
               SettingsPill {
                 text: "Draft recipe…"

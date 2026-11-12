@@ -1184,7 +1184,7 @@ ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 
 sys.exit(not ok)
 F
 ok $? "it has the TensorFold artifact block of the curated recipes, the full commit sha, the license, and one drafted variant sized to the weights"
-dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": []}' $tf --id qwen3.8-draft
+dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": []}' $tf --id qwen3.8-draft
 ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}, and --id names the file"
 present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
 printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
@@ -1235,4 +1235,60 @@ ds recipe draft $tf >/dev/null 2>&1; ok $((!$?)) "and a demo draft is not overwr
 ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
 ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo draft never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+# recipe author: the draft, then (when it needs judgement, or --agent) a terminal running the configured agent command with the
+# authoring brief. The agent is a stub here; no real agent or machine runs.
+brief=$here/recipe-authoring-brief.txt
+present "$brief"; ok $? "the authoring brief is a plain-text file at the plugin root, which the installer copies (it drops docs/ and *.md)"
+for rule in 'RECIPE RULES' 'recipe validate' 'recipe add' 'recipe measure' 'recipe confirm' 'numbers come only from' \
+  'go-ahead before every download' 'before every measuring run' '--yes' 'stop after three draft-and-measure rounds' 'never counts as fitting'; do
+  grep -qi -- "$rule" "$brief"; ok $? "the brief says: $rule"
+done
+authordir=$tmp/authors
+author() { STARTDGX_HF_BASE=$here/demo/hf s recipe author --out "$authordir" "$@"; }
+launched_author() { : >"$FAKE_LAUNCH"; author "$@" >/dev/null 2>&1; cat "$FAKE_LAUNCH"; }
+: >"$FAKE_LAUNCH"; out=$(author me@dgx $tf --id author-simple 2>&1); ok $? "recipe author drafts"
+present "$authordir/author-simple.toml"; ok $? "and writes the draft"
+same "$(cat "$FAKE_LAUNCH")" ""; ok $? "a simple draft starts no agent"
+printf '%s' "$out" | grep -q -- '--agent'; ok $? "and says how to ask for one"
+launched_author me@dgx $tf --id author-asked --agent >"$tmp/l1"; same "$(head -1 "$tmp/l1")" 1; ok $? "--agent opens one terminal command on a simple draft"
+tail -n +2 "$tmp/l1" | grep -q '^claude '; ok $? "which runs the default agent command, claude"
+tail -n +2 "$tmp/l1" | grep -q 'RECIPE RULES'; ok $? "carrying the authoring brief"
+tail -n +2 "$tmp/l1" | grep -q "$authordir/author-asked.toml"; ok $? "and the draft's path"
+tail -n +2 "$tmp/l1" | grep -q 'TensorFold/Qwen3.8-27B-MLX-4bit'; ok $? "and the repo"
+tail -n +2 "$tmp/l1" | grep -q 'me@dgx'; ok $? "and the host"
+mkdir -p "$XDG_CONFIG_HOME/startdgx"; printf '{"agent_command": "my-agent --flag \\"two words\\""}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+launched_author me@dgx $tf --id author-cfg --agent >"$tmp/l2"; tail -n +2 "$tmp/l2" | grep -q "^my-agent --flag 'two words' "; ok $? "the agent command is configurable in config.json (quoted words stay whole)"
+tail -n +2 "$tmp/l2" | grep -q '^claude'; ok $((!$?)) "and replaces the default"
+printf '{"agent_command": 5}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"; author me@dgx $tf --id author-bad --agent >/dev/null 2>&1; ok $((!$?)) "an agent_command that isn't a string is refused"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+for r in "TensorFold/Qwen3.8-VL-27B-MLX-4bit vision" "TensorFold/Qwen3.8-27B-Drafter-MLX-4bit drafter" "TensorFold/Qwen3.8-27B-Yarn-MLX-4bit server"; do
+  read -r jrepo jwhy <<<"$r"
+  launched_author me@dgx "$jrepo" --id "author-$jwhy" >"$tmp/l3"; same "$(head -1 "$tmp/l3")" 1; ok $? "$jrepo needs judgement: an agent starts by itself"
+  tail -n +2 "$tmp/l3" | grep -qi "$jwhy"; ok $? "and the prompt says why ($jwhy)"
+done
+author me@dgx $tf --id author-json --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['judgement'] == [] and d['agent'] is False))"; ok $? "--json gives the draft, its judgement reasons and whether an agent would start"
+author me@dgx TensorFold/Qwen3.8-VL-27B-MLX-4bit --id author-j2 --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['judgement'] == ['vision'] and d['agent'] is True))"; ok $? "a vision draft says vision and agent true"
+: >"$FAKE_LAUNCH"; author me@dgx someone/Qwen3.8-27B-gated-MLX-4bit --agent >/dev/null 2>&1; ok $((!$?)) "a refused repo fails"
+same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and starts no agent"
+author me@dgx $tf --id author-here --agent --here >/dev/null 2>&1 </dev/null; same "$(cat "$FAKE_LAUNCH")" ""; ok $? "--here runs the agent in this terminal, not a new one"
+mkdir -p "$tmp/agentbin"
+cat >"$tmp/agentbin/stub-agent" <<'F'
+#!/bin/sh
+printf '%s\n' "$#" >"$FAKE_AGENT_OUT"
+F
+chmod +x "$tmp/agentbin/stub-agent"
+printf '{"agent_command": "stub-agent"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+PATH=$tmp/agentbin:$PATH FAKE_AGENT_OUT=$tmp/agent.out author me@dgx $tf --id author-here2 --agent --here >/dev/null 2>&1 </dev/null
+same "$(cat "$tmp/agent.out" 2>/dev/null)" 1; ok $? "the agent gets the brief and context as one argument"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+# launch author: the panel's way in, so the draft's errors and the agent show in the terminal.
+same "$(launched author me@dgx $tf)" "$(printf '1\n%s\n' "$cli recipe author me@dgx --agent --here -- $tf")"; ok $? "launch author opens a terminal running recipe author --agent --here"
+for refused in "author me@dgx" "author me@dgx notarepo" "author me@dgx ../x/y" "author me@dgx a/b/c" "install me@dgx $tf"; do
+  read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens nothing"
+done
+# Demo mode: says what it would run, runs nothing.
+out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | grep -q "Demo: would run 'claude "; ok $? "demo author says what it would run in a terminal"
+out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo author never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad

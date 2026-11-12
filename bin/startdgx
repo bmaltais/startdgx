@@ -625,7 +625,7 @@ def cmd_recipe_confirm(args):
 
 def cmd_recipe(args):
   return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
-          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft}[args.verb](args)
+          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def cmd_delete(args):
@@ -1341,7 +1341,7 @@ def run_steps(host, phase, script, timeout):
 
 LAUNCHER = "omarchy-launch-floating-terminal-with-presentation"
 # The commands launch may open a terminal on, and whether each takes a model.
-LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True}
+LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True, "author": True}
 
 
 def cmd_launch(args):
@@ -1355,12 +1355,22 @@ def cmd_launch(args):
     raise Error("--replace-engine goes only with launch install")
   if (args.delete_models or args.remove_packages or args.delete_recipes) and args.verb != "uninstall":
     raise Error("--delete-models, --remove-packages and --delete-recipes go only with launch uninstall")
+  if args.verb == "author":
+    # The model slot holds the Hugging Face repo; the terminal runs recipe author, so the draft's errors and the agent show there.
+    if not args.model or not DRAFT_REPO_RE.match(args.model) or any(set(part) == {"."} for part in args.model.split("/")):
+      raise Error("launch author takes a repo as OWNER/NAME")
+    argv = [os.path.realpath(__file__), "recipe", "author", ssh_target(args.host), "--agent", "--here", "--", args.model]
+    return open_terminal(argv)
   argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
   argv += [recipe(args.model)] if args.model else []
   argv += ["--replace-engine"] if args.replace_engine else []
   argv += ["--delete-models"] if args.delete_models else []
   argv += ["--remove-packages"] if args.remove_packages else []
   argv += ["--delete-recipes"] if args.delete_recipes else []
+  open_terminal(argv)
+
+
+def open_terminal(argv):
   if DEMO:
     print(f"Demo: would run '{shlex.join(argv[1:])}' in a terminal")
     return
@@ -1584,7 +1594,29 @@ def hf_draft_source(base, repo):
   sizes = [e.get("size") for e in tree if isinstance(e, dict) and str(e.get("path", "")).endswith(".safetensors") and isinstance(e.get("size"), int)]
   if not sum(sizes):
     raise Error(f"{repo} has no .safetensors weights")
-  return sha, draft_license(info), sum(sizes)
+  return sha, draft_license(info), sum(sizes), config
+
+
+DRAFT_DRAFTER_RE = re.compile(r"draft|eagle|mtp|speculat", re.I)
+
+
+def draft_judgement(repo, config):
+  """What in this repo the template can't settle, so an agent should look: ["vision", "drafter", "server"]."""
+  archs = [a for a in config.get("architectures") or [] if isinstance(a, str)]
+  why = []
+  if config.get("vision_config") or any(re.search(r"vision|VL", a) for a in archs):
+    why.append("vision")
+  nextn = config.get("num_nextn_predict_layers")
+  if DRAFT_DRAFTER_RE.search(repo.split("/", 1)[1]) or (isinstance(nextn, int) and nextn > 0):
+    why.append("drafter")
+  if config.get("rope_scaling"):
+    why.append("server")
+  return why
+
+
+JUDGEMENT_TEXT = {"vision": "it has a vision tower (the template drafts the language model only)",
+                  "drafter": "it is, or carries, a speculative drafter (the template has no field for one)",
+                  "server": "its config scales positions (rope_scaling), which may need server arguments the template cannot set"}
 
 
 def draft_host_ids(host):
@@ -1599,7 +1631,8 @@ def draft_host_ids(host):
     raise Error(f"{host} gave a recipe list startdgx can't read") from error
 
 
-def cmd_recipe_draft(args):
+def draft_recipe(args):
+  """Writes the draft; returns its result dict (and the weights' size) for cmd_recipe_draft and cmd_recipe_author."""
   repo = args.repo
   if not DRAFT_REPO_RE.match(repo) or any(set(part) == {"."} for part in repo.split("/")):
     raise Error("Name the repo as OWNER/NAME, e.g. TensorFold/Qwen3.8-27B-MLX-4bit")
@@ -1607,7 +1640,7 @@ def cmd_recipe_draft(args):
   if not RID_RE.match(rid):
     raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
   base = os.path.join(DEMO_FIXTURES, "hf") if DEMO else os.environ.get("STARTDGX_HF_BASE") or HF_DEFAULT_BASE
-  sha, license_id, size = hf_draft_source(base, repo)
+  sha, license_id, size, config = hf_draft_source(base, repo)
   if args.host and rid in draft_host_ids(args.host):
     raise Error(f"{args.host} already has a recipe '{rid}' (curated or yours): pick another id with --id")
   out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
@@ -1631,15 +1664,87 @@ def cmd_recipe_draft(args):
   except OSError as error:
     raise Error(f"{path} can't be written: {error.strerror}") from error
   result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
-            "placeholder_gib": gib, "source": "drafted", "warnings": warnings}
+            "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config)}
+  return result, size
+
+
+def print_draft(result, size):
+  print(f"Drafted {result['id']} from {result['repo']} at {result['revision'][:12]}: {result['path']}")
+  print(f"  license {result['license']}; weights {size_text(size)}; the variant is drafted, with {result['placeholder_gib']} GiB placeholders that never count as fitting")
+  for warning in result["warnings"]:
+    print(f"  Warning: {warning}")
+
+
+def cmd_recipe_draft(args):
+  result, size = draft_recipe(args)
   if args.json:
     print(json.dumps(result))
     return
-  print(f"Drafted {rid} from {repo} at {sha[:12]}: {path}")
-  print(f"  license {result['license']}; weights {size_text(size)}; the variant is drafted, with {gib} GiB placeholders that never count as fitting")
-  for warning in warnings:
-    print(f"  Warning: {warning}")
-  print(f"  next: startdgx recipe add HOST {path}")
+  print_draft(result, size)
+  print(f"  next: startdgx recipe add HOST {result['path']}")
+
+
+# recipe author: the draft, then an agent for what needs judgement (or on request). The agent runs in Omarchy's floating terminal, the
+# same launcher `launch` uses, and is given the authoring brief (a plain-text file at the plugin root: the installer drops docs/ and
+# *.md) with the host, the repo and the draft's path. The command is `agent_command` in ~/.config/startdgx/config.json (default claude).
+AUTHOR_BRIEF = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "recipe-authoring-brief.txt")
+DEFAULT_AGENT_COMMAND = "claude"
+
+
+def agent_command():
+  path = os.path.join(config_dir(), "config.json")
+  try:
+    with open(path, encoding="utf-8") as handle:
+      value = json.load(handle).get("agent_command", DEFAULT_AGENT_COMMAND)
+  except FileNotFoundError:
+    return shlex.split(DEFAULT_AGENT_COMMAND)
+  except (OSError, ValueError, AttributeError) as error:
+    raise Error(f"{path} can't be read as a JSON object") from error
+  try:
+    words = shlex.split(value) if isinstance(value, str) else []
+  except ValueError:
+    words = []
+  if not words:
+    raise Error(f"agent_command in {path} must be a command line, e.g. \"claude\"")
+  return words
+
+
+def author_prompt(host, result):
+  try:
+    with open(AUTHOR_BRIEF, encoding="utf-8") as handle:
+      brief = handle.read()
+  except OSError as error:
+    raise Error(f"The authoring brief {os.path.normpath(AUTHOR_BRIEF)} can't be read: {error.strerror}") from error
+  why = "; ".join(f"{w}: {JUDGEMENT_TEXT[w]}" for w in result["judgement"]) or "none found by the template; the person asked for you"
+  return (f"{brief}\nTHIS TASK\nHost: {host}\nRepo: {result['repo']}\nDraft: {result['path']} (recipe id {result['id']})\n"
+          f"Why you were started: {why}\n")
+
+
+def cmd_recipe_author(args):
+  agent = agent_command()
+  result, size = draft_recipe(args)
+  run = args.agent or bool(result["judgement"])
+  if args.json:
+    print(json.dumps(dict(result, agent=run)))
+  else:
+    print_draft(result, size)
+    for w in result["judgement"]:
+      print(f"  Needs judgement: {JUDGEMENT_TEXT[w]}")
+  if not run:
+    if not args.json:
+      print(f"  next: startdgx recipe add {args.host} {result['path']}, or start an agent on it: startdgx recipe author {args.host} {args.repo} --id {result['id']} --agent")
+    return
+  argv = agent + [author_prompt(args.host, result)]
+  if DEMO:
+    print(f"Demo: would run '{shlex.join(argv)}' in a terminal")
+    return
+  sys.stdout.flush()
+  try:
+    if args.here:
+      os.execvp(argv[0], argv)
+    os.execvp(LAUNCHER, [LAUNCHER, shlex.join(argv)])
+  except OSError as error:
+    raise Error(f"Can't start {argv[0] if args.here else LAUNCHER}: {error.strerror}") from error
 
 
 # Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
@@ -2064,7 +2169,7 @@ def demo_recipe_confirm(args):
 
 def demo_recipe(args):
   return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
-          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft}[args.verb](args)
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def demo_delete(args):
@@ -2212,7 +2317,7 @@ def build_parser():
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|draft")
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|draft|author")
   for verb in ("validate", "add", "list", "remove", "measure", "confirm"):
     r = rv.add_parser(verb)
     r.add_argument("host")
@@ -2237,6 +2342,17 @@ def build_parser():
   rd.add_argument("--host", help="also refuse an id this machine's recipes (curated or yours) already have")
   rd.add_argument("--json", action="store_true", help="as {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}")
   rd.set_defaults(fn=cmd_recipe)
+  ra = rv.add_parser("author", description="Draft a recipe for a Hugging Face repo on HOST (as recipe draft), then open a terminal running the "
+                     "agent (agent_command in ~/.config/startdgx/config.json, default claude) with the authoring brief, when the draft needs "
+                     "judgement (a vision tower, a drafter, server arguments the template cannot set) or with --agent.")
+  ra.add_argument("host")
+  ra.add_argument("repo", help="OWNER/NAME")
+  ra.add_argument("--id", help="the recipe id (default: the repo name slugified, owner dropped, plus -tensorfold)")
+  ra.add_argument("--out", help="the folder to write ID.toml in (default: ~/.local/state/startdgx/drafts)")
+  ra.add_argument("--agent", action="store_true", help="start the agent even when the draft needs no judgement")
+  ra.add_argument("--here", action="store_true", help="run the agent in this terminal instead of opening one")
+  ra.add_argument("--json", action="store_true", help="as recipe draft --json plus agent: whether an agent starts")
+  ra.set_defaults(fn=cmd_recipe)
   de = add("delete", cmd_delete, model=True)
   de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
   de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")
@@ -2249,8 +2365,8 @@ def build_parser():
   hs.add_argument("--json", action="store_true", help="as [{repo, params, size_bytes, license, base_model, label}]")
   hs.set_defaults(fn=cmd_hf_search)
   la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST or "
-                      "logs HOST [MODEL], for the panel: sudo there can ask for a password.")
-  la.add_argument("verb", metavar="install|uninstall|logs")
+                      "logs HOST [MODEL], or recipe author HOST REPO, for the panel: sudo there can ask for a password.")
+  la.add_argument("verb", metavar="install|uninstall|logs|author")
   la.add_argument("host")
   la.add_argument("model", nargs="?")
   la.add_argument("--replace-engine", action="store_true", help="with install: replace an engine startdgx didn't install")
