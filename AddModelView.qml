@@ -45,6 +45,7 @@ FocusScope {
       event.accepted = true
     }
     else if (event.text === "r") { card.dgx.listRecipes(card.host); event.accepted = true }
+    else if (event.text === "f") { card.svc.dispatch({ type: "findModel", host: card.host }); event.accepted = true }
     else if (event.text === "e") { card.svc.dispatch({ type: "addRecipe", host: card.host }); event.accepted = true }
   }
 
@@ -251,6 +252,12 @@ FocusScope {
         enabled: !card.dgx.listing
         tooltipText: "Read the machine's catalog again  (r)"
         onClicked: card.dgx.listRecipes(card.host)
+      }
+      Button {
+        text: "Find on Hugging Face…"
+        bordered: true
+        tooltipText: "Search Hugging Face for MLX 4-bit models of a known family, from this computer  (f)"
+        onClicked: card.svc.dispatch({ type: "findModel", host: card.host })
       }
       Button {
         text: "Add recipe…"

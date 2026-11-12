@@ -1052,3 +1052,62 @@ test("parseMeasurePlan keeps the engine's up-front note that other commands wait
   assert.ok(plan.includes(note))
   assert.strictEqual(plan.length, 4)
 })
+
+// ---- Find on Hugging Face (`hf search --json`) ----
+const hfRow = (over) => Object.assign({ repo: "TensorFold/Qwen3.8-27B-MLX-4bit", params: 27356728560, size_bytes: 16074529674,
+  license: "apache-2.0", base_model: "Qwen/Qwen3.8-27B", label: null }, over)
+const hfRows = [hfRow(), hfRow({ repo: "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", label: "abliterated" }),
+  hfRow({ repo: "someone/Gemma-4-31B-uncensored-MLX-4bit", label: "uncensored", license: null, base_model: null, params: null, size_bytes: null })]
+
+test("parseHfRows keeps the CLI's rows and refuses what isn't a list of them", () => {
+  assert.strictEqual(M.parseHfRows(JSON.stringify(hfRows)).length, 3)
+  assert.deepStrictEqual(M.parseHfRows("[]"), [])
+  assert.strictEqual(M.parseHfRows(""), null)
+  assert.strictEqual(M.parseHfRows("{}"), null)
+  assert.strictEqual(M.parseHfRows(JSON.stringify([{ params: 1 }])), null)
+})
+
+test("hfShown hides the labelled rows with the toggle off and keeps the order", () => {
+  assert.deepStrictEqual(M.hfShown(hfRows, true).map((r) => r.repo), hfRows.map((r) => r.repo))
+  assert.deepStrictEqual(M.hfShown(hfRows, false).map((r) => r.repo), ["TensorFold/Qwen3.8-27B-MLX-4bit"])
+  assert.deepStrictEqual(M.hfShown(null, false), [])
+})
+
+test("hfDerivativeCount counts the labelled rows, for the toggle's words", () => {
+  assert.strictEqual(M.hfDerivativeCount(hfRows), 2)
+  assert.strictEqual(M.hfDerivativeCount([hfRow()]), 0)
+  assert.strictEqual(M.hfDerivativeCount(null), 0)
+})
+
+test("hfToggleText says what the toggle does and how many rows it holds", () => {
+  assert.strictEqual(M.hfToggleText(hfRows, true), "Hide abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText(hfRows, false), "Show abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText([hfRow()], true), "")
+})
+
+test("hfMemoryLine gives plain facts and never a verdict", () => {
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 16.5 * 2 ** 30 }), 128), "weights 16.5 GiB; this host has 128 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 15.4 * 2 ** 30 }), 121.6), "weights 15.4 GiB; this host has 122 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow(), 0), "weights 15.0 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: null }), 128), "weights size unknown; this host has 128 GiB")
+  // Even a model far bigger than the host only gets the two numbers.
+  const huge = M.hfMemoryLine(hfRow({ size_bytes: 500 * 2 ** 30 }), 128)
+  assert.strictEqual(huge, "weights 500.0 GiB; this host has 128 GiB")
+  assert.ok(!/fit|enough|too|won't|will|can/i.test(huge))
+})
+
+test("hfRowText is the facts under a repo's name, in the order the CLI prints them", () => {
+  assert.strictEqual(M.hfRowText(hfRow()), "27.4B · apache-2.0 · from Qwen/Qwen3.8-27B")
+  assert.strictEqual(M.hfRowText(hfRows[2]), "license unknown")
+  assert.strictEqual(M.hfRowText(hfRow({ params: null, base_model: null })), "apache-2.0")
+})
+
+test("hfLabel is the mark on a derivative and nothing on the rest", () => {
+  assert.strictEqual(M.hfLabel(hfRows[1]), "abliterated")
+  assert.strictEqual(M.hfLabel(hfRow()), "")
+})
+
+test("hfSearchCommand hands the query after --, so a query starting with - is a query", () => {
+  assert.deepStrictEqual(M.hfSearchCommand("  qwen "), ["hf", "search", "--json", "--", "qwen"])
+  assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
+})
