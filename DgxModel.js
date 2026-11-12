@@ -618,6 +618,11 @@ function parseRecipeResult(text) {
   return { ok: p.ok, id: String(p.id || ""), errors: errors, message: String(p.message || "") }
 }
 
+// The CLI's arguments to validate or add the recipe file at `path`: after `--`, so a path that starts with - is a path.
+function recipeSendCommand(verb, host, path) {
+  return ["recipe", verb, host, "--json", "--timeout", "60", "--", String(path).trim()]
+}
+
 // What is wrong with the path typed, before the machine is asked; "" when nothing.
 function recipePathProblem(path) {
   const p = String(path || "").trim()
@@ -630,7 +635,7 @@ function recipePathProblem(path) {
 // what it showed), or confirm an estimated one's numbers (it then counts as fitting). A measured one needs neither.
 function variantActions(v) {
   const source = recipeSource(v)
-  return source === "measured" ? [] : source === "estimated" ? ["confirm", "measure"] : ["measure"]
+  return source === "measured" ? [] : source === "estimated" ? (v.confirmed === true ? ["measure"] : ["confirm", "measure"]) : ["measure"]
 }
 
 // `startdgx recipe measure HOST ID --ctx N` without --yes: the engine's dry run, as lines (what it would download and
@@ -743,7 +748,8 @@ function contextChoices(variants, currentCtx, ramTotalGib) {
       ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx), source: source,
       text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
         : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
-        : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" : "Needs " + need + " GiB of memory"
+        : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (v.confirmed === true ? "; you confirmed it" : "")
+        : "Needs " + need + " GiB of memory"
     }
   })
 }

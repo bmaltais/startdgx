@@ -250,7 +250,7 @@ Item {
     service.recipeStep = "checking"
     service.recipeSeq += 1
     service.recipePathAsked = path.trim()
-    recipeQuery.ask(host + "\n" + service.recipeSeq, [service.script, "recipe", "validate", host, service.recipePathAsked, "--json", "--timeout", "60"])
+    recipeQuery.ask(host + "\n" + service.recipeSeq, [service.script].concat(Model.recipeSendCommand("validate", host, service.recipePathAsked)))
   }
   property string recipePathAsked: ""
 
@@ -504,7 +504,7 @@ Item {
       const r = code === 0 ? Model.parseRecipeResult(out) : null
       if (r && r.ok && service.recipeThenAdd) {
         service.recipeStep = "adding"
-        recipeAddProc.command = [service.script, "recipe", "add", service.recipeHost, service.recipePathAsked, "--json", "--timeout", "60"]
+        recipeAddProc.command = [service.script].concat(Model.recipeSendCommand("add", service.recipeHost, service.recipePathAsked))
         recipeAddProc.running = true
       } else service.finishRecipe(code, out, err, "validate")
     }

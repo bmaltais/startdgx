@@ -1031,3 +1031,17 @@ test("uninstallChoices: your recipes are an opt-in only when there are some, and
   assert.strictEqual(M.uninstallChoices(uninstallPlan({ recipes: 0 })).some((x) => x.flag === "--delete-recipes"), false)
   assert.strictEqual(M.uninstallChoices(uninstallPlan()).some((x) => x.flag === "--delete-recipes"), false, "a plan from an older CLI has no count")
 })
+
+test("a confirmed estimated variant says so, and offers only Measure", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: true }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: false }), ["confirm", "measure"])
+  const c = M.contextChoices([{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true },
+    { ctx: 32768, peak_ram_gib: 10, peak_gpu_gib: 9, source: "estimated" }], 0, 128)
+  assert.match(c[0].text, /confirmed/)
+  assert.doesNotMatch(c[1].text, /confirmed/)
+})
+
+test("recipeSendCommand: the typed path comes after --, so one that starts with - is a path, not an option", () => {
+  assert.deepStrictEqual(M.recipeSendCommand("validate", "me@h1", "-x.toml"), ["recipe", "validate", "me@h1", "--json", "--timeout", "60", "--", "-x.toml"])
+  assert.deepStrictEqual(M.recipeSendCommand("add", "me@h1", "  ~/a b.toml "), ["recipe", "add", "me@h1", "--json", "--timeout", "60", "--", "~/a b.toml"])
+})

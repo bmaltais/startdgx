@@ -236,7 +236,7 @@ peak_ram_gib = 91.5
 peak_gpu_gib = 90
 source = "estimated"
 F
-s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90, 'source': 'estimated'}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58, 'source': 'measured'}]))"
+s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90, 'source': 'estimated', 'confirmed': False}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58, 'source': 'measured', 'confirmed': False}]))"
 ok $? "variants lists a recipe's contexts, largest first, each with its source (measured unless the recipe says otherwise)"
 s variants me@dgx vr | grep -q '262144.*91.5'; ok $? "and as text without --json"
 s variants me@dgx nope --json >/dev/null 2>&1; ok $((!$?)) "a recipe the host doesn't have is an error"
@@ -272,6 +272,11 @@ out=$(s recipe remove me@dgx mine); same "$out" "Removed recipe mine"; ok $? "re
 out=$(s recipe remove me@dgx used 2>&1); ok $((!$?)) "recipe remove of one a model uses fails"
 same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used"; ok $? "with the engine's message"
 s recipe remove me@dgx '../x' >/dev/null 2>&1; ok $((!$?)) "recipe remove refuses what is no recipe id"
+printf 'name = "Dash"\n' >"$rd/-dash.toml"
+(cd "$rd" && s recipe validate me@dgx -- -dash.toml >/dev/null 2>&1); ok $((!$?)) "a path that starts with - is a path after --, and is then refused as a name that can't be an id"
+printf 'name = "Dash"\n' >"$rd/dash.toml"; (cd "$rd" && s recipe validate me@dgx -- dash.toml >/dev/null); ok $? "recipe validate takes -- before the file"
+(cd "$rd" && s recipe add me@dgx -- dash.toml >/dev/null); ok $? "and so does recipe add"
+s recipe validate me@dgx -x >/dev/null 2>&1; ok $((!$?)) "a path that starts with - without -- is an unknown option, not a file"
 s recipe validate nobody@else "$rd/mine.toml" >/dev/null 2>&1; ok $((!$?)) "recipe commands refuse a machine that isn't added"
 # measure and confirm: the engine's own, over ssh. Without --yes measure says what it would download and changes nothing.
 rm -f "$FAKE_HOST/home/measured"
@@ -290,6 +295,9 @@ same "$out" "Error: Recipe none has no estimated variant to confirm"; ok $? "wit
 # use of a recipe of yours: the engine wants --yes, which is sent only when asked for.
 s use me@dgx mine --detach --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --yes --detach$'; ok $? "use --yes passes the confirmation to the engine"
 s use me@dgx mine --detach --ctx 65536 --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --ctx 65536 --yes --detach$'; ok $? "with a context too"
+s use me@dgx mine --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --yes$'; ok $? "use --yes without --detach passes it on too"
+s use me@dgx mine >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine$'; ok $? "use never adds --yes by itself, even for a recipe of yours: only the person's say-so sends it"
+s use me@dgx mine --detach --ctx 65536 >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'use mine --ctx 65536 --detach$'; ok $? "a context change doesn't send it either"
 s use me@dgx q-noyes --detach >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'use q-noyes --detach$'; ok $? "and is not sent when not asked for"
 # variants reads the recipes of yours, in the engine's state dir, as well as the curated ones
 mkdir -p "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes"
@@ -308,7 +316,10 @@ source = "drafted"
 F
 s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source']) for v in d] == [(65536, 'drafted'), (32768, 'estimated')]))"
 ok $? "variants reads a recipe of yours from the engine's state dir, with each variant's source"
-rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes"
+echo '{"ur": ["32768/20/18"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
+s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source'], v['confirmed']) for v in d] == [(65536, 'drafted', False), (32768, 'estimated', True)]))"
+ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers)"
+rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes" "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -667,6 +678,9 @@ replaced() {
 replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
+setrecipes
+s uninstall --dry-run --json --delete-recipes me@spark | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["recipes"] == 0 and not any("recipes" in x for x in d["steps"] + d["kept"])))'
+ok $? "where the engine was there before, the plan has no recipes of ours to keep or delete"
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
 ! echo "$out" | grep -q 'Removing what the engine set up'; ok $? "and doesn't say it removes the engine's setup"
 same "$(ls "$eng")" agent_local.py && same "$(cat "$eng/agent_local.py")" 'old engine'; ok $? "it puts the old engine back"
