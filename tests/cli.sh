@@ -1150,13 +1150,13 @@ until [ -s "$tmp/hf-srv.port" ]; do sleep 0.1; done
 hs() { XDG_CACHE_HOME=$tmp/hf-cache STARTDGX_HF_NOW=$hnow STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-srv.port") s hf search "$@"; }
 hnow=1000000; out=$(hs many --json); ok $? "a search where one repo's config fetch errors succeeds"
 same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 24; ok $? "and the other repos are all listed"
-[ "$(cat "$tmp/hf-log.max")" -gt 1 ] && [ "$(cat "$tmp/hf-log.max")" -le 8 ]; ok $? "the repos' configs are fetched in parallel, at most 8 at a time"
+peak=$(cat "$tmp/hf-log.max"); [ "$peak" -gt 1 ] && [ "$peak" -le 8 ]; ok $? "the repos' configs are fetched in parallel, at most 8 at a time"
 before=$(wc -l <"$tmp/hf-log")
 hnow=$((hnow + 3599)); out2=$(hs many --json); same "$out2" "$out"; ok $? "a repeat search within the hour gives the same rows"
 same "$(wc -l <"$tmp/hf-log")" "$before"; ok $? "and makes no network request"
-hs other --json >/dev/null; [ "$(wc -l <"$tmp/hf-log")" -gt "$before" ]; ok $? "another query is not served from the cache"
+hs other --json >/dev/null; after=$(wc -l <"$tmp/hf-log"); [ "$after" -gt "$before" ]; ok $? "another query is not served from the cache"
 before=$(wc -l <"$tmp/hf-log"); hnow=$((hnow + 3601)); hs many --json >/dev/null
-[ "$(wc -l <"$tmp/hf-log")" -gt "$before" ]; ok $? "after an hour the same query goes to the network again"
+after=$(wc -l <"$tmp/hf-log"); [ "$after" -gt "$before" ]; ok $? "after an hour the same query goes to the network again"
 kill "$hfsrv" 2>/dev/null; wait "$hfsrv" 2>/dev/null
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
 same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
