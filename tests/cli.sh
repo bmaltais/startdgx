@@ -1074,5 +1074,42 @@ wait $starter; ok $((!$?)) "the start it stopped then fails, as the engine's doe
 grep -q "^Error: $nem didn't start" "$tmp/start-out"; ok $? "and says it didn't start"
 mkdir -p "$tmp/marker/startdgx/demo"; : >"$tmp/marker/startdgx/demo/ENABLED"
 XDG_CONFIG_HOME=$tmp/marker XDG_STATE_HOME=$tmp/state PATH=$tmp/demo-bin:$PATH s hosts --json | grep -q demo@spark-a; ok $? "the demo marker file turns demo mode on too"
+# hf search: the anonymous Hugging Face API behind STARTDGX_HF_BASE (here a fixture folder, demo/hf), never the real site.
+hf() { STARTDGX_HF_BASE=$here/demo/hf s hf search "$@"; }
+hj() { local cond=$1; shift; hf "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); r={x['repo']: x for x in d}; sys.exit(not ($cond))"; }
+hj 'set(r) == {"TensorFold/Qwen3.8-27B-MLX-4bit", "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", "LiquidAI/LFM2.5-24B-A2B-MLX-4bit", "someone/Gemma-4-31B-uncensored-MLX-4bit"}' qwen
+ok $? "hf search lists the affine 4-bit repos of known families and hides 8-bit, 3-bit, mxfp4, BF16 tagged mlx, unknown architectures, gated, and missing or malformed configs"
+hj 'sorted(r["TensorFold/Qwen3.8-27B-MLX-4bit"]) == ["base_model", "label", "license", "params", "repo", "size_bytes"]' qwen
+ok $? "a row has repo, params, size_bytes, license, base_model and label"
+hj 'r["TensorFold/Qwen3.8-27B-MLX-4bit"] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "params": 27356728560, "size_bytes": 16074529674, "license": "apache-2.0", "base_model": "Qwen/Qwen3.8-27B", "label": None}' qwen
+ok $? "its parameter count, weights size (the safetensors files only), license and base model come from the repo"
+hj 'r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["label"] == "abliterated" and r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["base_model"] == "Qwen/Qwen3.8-27B"' qwen
+ok $? "a derivative is labelled abliterated and shows its base model"
+hj 'r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["label"] == "uncensored" and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["base_model"] is None and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["license"] is None' qwen
+ok $? "an uncensored repo is labelled so, and a missing base model or license is null"
+out=$(hf qwen); same "$(printf '%s\n' "$out" | wc -l)" 4 && ! printf '%s' "$out" | grep -q '^[[{]'; ok $? "the human output is one row per line"
+printf '%s\n' "$out" | grep -q '^TensorFold/Qwen3.8-27B-MLX-4bit  27.4B  15.0 GiB  apache-2.0  Qwen/Qwen3.8-27B$'; ok $? "a row reads repo, parameters, weights size, license, base model"
+printf '%s\n' "$out" | grep -q '^daguoagi/.*  Qwen/Qwen3.8-27B  \[abliterated\]$'; ok $? "and a derivative ends with its label"
+printf '%s' "$out" | grep -qi 'fit'; ok $((!$?)) "no row claims a fit (ADR 0001)"
+empty=$tmp/hf-empty; mkdir -p "$empty/api"; echo '[]' >"$empty/api/models.json"
+out=$(STARTDGX_HF_BASE=$empty s hf search nothing 2>&1); ok $? "a search with no results succeeds"
+same "$out" "No known-family MLX 4-bit repos matched"; ok $? "and says there were none"
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s hf search qwen 2>&1); ok $((!$?)) "an unreachable Hugging Face fails"
+same "$out" "Error: Can't reach Hugging Face: check the network"; ok $? "and says it is offline, not that nothing matched"
+python3 - "$tmp/hf-limit.port" <<'F' &
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+    self.send_response(429); self.send_header("Retry-After", "150"); self.end_headers()
+  def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(srv.server_port)); srv.handle_request()
+F
+limiter=$!; until [ -s "$tmp/hf-limit.port" ]; do sleep 0.1; done
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-limit.port") s hf search qwen 2>&1); ok $((!$?)) "a rate-limited search fails"
+same "$out" "Error: Hugging Face is limiting requests, try again in 3 minutes"; ok $? "and says when to try again"
+wait $limiter
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
+same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad

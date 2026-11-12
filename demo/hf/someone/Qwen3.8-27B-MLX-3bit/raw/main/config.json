@@ -1,0 +1,11 @@
+{
+ "architectures": [
+  "Qwen3_5ForConditionalGeneration"
+ ],
+ "model_type": "fixture",
+ "quantization": {
+  "group_size": 64,
+  "bits": 3,
+  "mode": "affine"
+ }
+}

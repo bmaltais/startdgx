@@ -1,0 +1,17 @@
+[
+ {
+  "type": "file",
+  "path": "config.json",
+  "size": 5000
+ },
+ {
+  "type": "file",
+  "path": "README.md",
+  "size": 8000
+ },
+ {
+  "type": "file",
+  "path": "model-00000.safetensors",
+  "size": 29000000000
+ }
+]
