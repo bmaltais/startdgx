@@ -965,6 +965,7 @@ def cmd_engine(args):
 DEMO = False
 DEMO_FIXTURES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "demo")
 DEMO_RATE = 1_200_000_000  # bytes a second that a demo setup downloads at
+DEMO_WAIT_MS = 2000  # how long a demo setup waits before it downloads, as the engine's waits for its lock and unit
 
 
 def demo_enabled():
@@ -1060,6 +1061,12 @@ def demo_model_row(status, listing, rid):
 def demo_advance(row, now):
   """The row as it is at `now`: a download grows, then loads; a load, stop or removal ends once its time is up."""
   row = json.loads(json.dumps(row))
+  if row["unit"] == "installing" and row["install"]["phase"] == "waiting":
+    begins = (row.get("since_ms") or now) + DEMO_WAIT_MS
+    if now < begins:
+      return row
+    row["install"].update(phase="downloading", rate_bytes_s=DEMO_RATE)
+    row["_progress_ms"] = begins
   if row["unit"] == "installing" and row["install"]["phase"] == "downloading":
     install, since = row["install"], row.get("_progress_ms", now)
     left = install["total_bytes"] - install["done_bytes"]
@@ -1161,8 +1168,8 @@ def demo_use(args):
                    "image": "", "ctx": None, "unit": "installing", "sub_state": "", "result": "", "port": None, "endpoint": "",
                    "observed": None, "since_ms": now, "expected_load_seconds": 6.0, "expected_stop_seconds": None,
                    "expected_remove_seconds": None,
-                   "install": {"phase": "downloading", "done_bytes": 0, "total_bytes": int((r.get("memory_gib") or 30) * 2**29),
-                               "rate_bytes_s": DEMO_RATE},
+                   "install": {"phase": "waiting", "done_bytes": 0, "total_bytes": int((r.get("memory_gib") or 30) * 2**29),
+                               "rate_bytes_s": 0},
                    "_progress_ms": now, "_then": demo_model_row(status, machine["list"], rid)}
   print(f"Setting up {rid} in the background; the agents panel shows its progress, or follow it with: journalctl --user -u {unit} -f")
 

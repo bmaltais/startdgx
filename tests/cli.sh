@@ -662,8 +662,12 @@ out=$(ds start $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: om
 
 out=$(ds use --detach $a $flash); ok $? "demo use --detach succeeds"
 same "$(echo "$out" | wc -l)" 1 && echo "$out" | grep -q "^Setting up $flash in the background"; ok $? "and prints one line"
-dj 'd["models"]["'$flash'"]["unit"] == "installing" and d["models"]["'$flash'"]["install"]["phase"] == "downloading" and d["models"]["'$flash'"]["install"]["done_bytes"] == 0' status $a
-ok $? "a demo setup starts downloading"
+dj 'd["models"]["'$flash'"]["unit"] == "installing" and d["models"]["'$flash'"]["install"]["phase"] == "waiting" and d["models"]["'$flash'"]["install"]["done_bytes"] == 0' status $a
+ok $? "a demo setup starts waiting, as the engine's does"
+now=$((t0 + 11)); dj 'd["models"]["'$flash'"]["install"]["phase"] == "waiting"' status $a; ok $? "and waits two seconds"
+now=$((t0 + 13)); dj 'd["models"]["'$flash'"]["install"]["phase"] == "downloading" and 0 < d["models"]["'$flash'"]["install"]["done_bytes"] <= 1200000000' status $a
+ok $? "then downloads, from the end of its wait"
+now=$((t0 + 10))
 out=$(ds use --detach $a $flash); ok $? "a second demo use of the same model succeeds"
 echo "$out" | grep -q "^$flash is already being set up"; ok $? "and says it is already being set up"
 now=$((t0 + 15)); dj '0 < d["models"]["'$flash'"]["install"]["done_bytes"] < d["models"]["'$flash'"]["install"]["total_bytes"]' status $a; ok $? "the demo setup's download advances"

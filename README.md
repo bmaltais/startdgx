@@ -64,7 +64,8 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
   - Demo mode (`STARTDGX_DEMO=1`, or the file `~/.config/startdgx/demo/ENABLED`) runs no process at all: every way to
     run one raises. It serves the fixtures in `demo/` (three machines, one unreachable, plus `discover` peers) and
     keeps its own state, hosts included, in `$XDG_STATE_HOME/startdgx-demo`. `start`, `stop`, `use` and `delete`
-    change that state, and what they start finishes over time as on a host (a load takes 6 s). Delete that folder
+    change that state, and what they start finishes over time as on a host (a setup waits 2 s, then downloads at
+    1.2 GB/s; a load takes 6 s). Delete that folder
     to start over. `STARTDGX_DEMO_NOW` (seconds since the epoch) holds the demo's clock still, for tests.
 
 ## Credits

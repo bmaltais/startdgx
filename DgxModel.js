@@ -94,6 +94,7 @@ function meter(entry, nowMs, pending) {
   switch (kind) {
   case "installing": {
     const install = entry.install || {}
+    if (install.phase === "waiting") return { label: "Waiting", fraction: 0, value: "" }
     const total = Number(install.total_bytes) || 0
     return { label: "Downloading", fraction: total > 0 ? (Number(install.done_bytes) || 0) / total : 0, value: downloadRate(Number(install.rate_bytes_s) || 0) }
   }

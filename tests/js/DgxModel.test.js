@@ -443,3 +443,8 @@ test("removeConfirm: when the machine can't say how much it frees, the question 
   assert.strictEqual(M.removeConfirm(row({ unit: "installing", install: { phase: "waiting" } }), "h", null, true).body,
     "This stops the download and deletes what it downloaded.")
 })
+
+test("meter: a setup still waiting has an empty bar that says so, and no speed yet", () => {
+  assert.deepStrictEqual(M.meter(row({ unit: "installing", install: { phase: "waiting", done_bytes: 0, total_bytes: 0, rate_bytes_s: 1.2e9 } }), 0),
+    { label: "Waiting", fraction: 0, value: "" })
+})
