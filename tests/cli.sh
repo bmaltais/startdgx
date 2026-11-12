@@ -1197,6 +1197,7 @@ drafts=$tmp/drafts
 draft() { STARTDGX_HF_BASE=$here/demo/hf s recipe draft --out "$drafts" "$@"; }
 dd() { local cond=$1; shift; draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
 tf=TensorFold/Qwen3.8-27B-MLX-4bit
+vl=TensorFold/Qwen3.8-VL-27B-MLX-4bit
 out=$(draft $tf); ok $? "recipe draft writes a recipe"
 present "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "named for the repo, owner dropped, slugified, with -tensorfold appended"
 python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
@@ -1213,6 +1214,19 @@ ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 
 sys.exit(not ok)
 F
 ok $? "it has the TensorFold artifact block of the curated recipes, the full commit sha, the license, and one drafted variant sized to the weights"
+draft $vl --id vision-draft >/dev/null; ok $? "a repo with a vision_config drafts"
+python3 - "$drafts/vision-draft.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+sys.exit(not (r["input"] == ["text", "image"] and r["server"] == {"args": ["--vision", "--vision-max-images", "50"]}))
+F
+ok $? "and sets the image input and the server arguments that load the vision tower, as the curated vision recipe does"
+python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+sys.exit("input" in r or "server" in r)
+F
+ok $? "a text-only draft sets neither"
 dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": []}' $tf --id qwen3.8-draft
 ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}, and --id names the file"
 present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
@@ -1334,13 +1348,13 @@ printf '{"agent_command": "no-such-agent-xyz"}\n' >"$XDG_CONFIG_HOME/startdgx/co
 author me@dgx $tf --id author-lf --agent --here >/dev/null 2>&1 </dev/null; ok $((!$?)) "an agent that can't start fails"
 none_of "$authordir/author-lf.toml"; ok $? "and leaves no draft behind, so a retry is not blocked"
 rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
-for r in "TensorFold/Qwen3.8-VL-27B-MLX-4bit vision" "TensorFold/Qwen3.8-27B-Drafter-MLX-4bit drafter" "TensorFold/Qwen3.8-27B-Yarn-MLX-4bit server"; do
+for r in "TensorFold/Qwen3.8-27B-Drafter-MLX-4bit drafter" "TensorFold/Qwen3.8-27B-Yarn-MLX-4bit server"; do
   read -r jrepo jwhy <<<"$r"
   launched_author me@dgx "$jrepo" --id "author-$jwhy" >"$tmp/l3"; same "$(head -1 "$tmp/l3")" 1; ok $? "$jrepo needs judgement: an agent starts by itself"
   tail -n +2 "$tmp/l3" | grep -qi "$jwhy"; ok $? "and the prompt says why ($jwhy)"
 done
 author me@dgx $tf --id author-json --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['judgement'] == [] and d['agent'] is False))"; ok $? "--json gives the draft, its judgement reasons and whether an agent would start"
-author me@dgx TensorFold/Qwen3.8-VL-27B-MLX-4bit --id author-j2 --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['judgement'] == ['vision'] and d['agent'] is True))"; ok $? "a vision draft says vision and agent true"
+author me@dgx $vl --id author-j2 --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['judgement'] == [] and d['agent'] is False))"; ok $? "a vision draft needs no judgement: no agent"
 : >"$FAKE_LAUNCH"; author me@dgx someone/Qwen3.8-27B-gated-MLX-4bit --agent >/dev/null 2>&1; ok $((!$?)) "a refused repo fails"
 same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and starts no agent"
 author me@dgx $tf --id author-here --agent --here >/dev/null 2>&1 </dev/null; same "$(cat "$FAKE_LAUNCH")" ""; ok $? "--here runs the agent in this terminal, not a new one"
