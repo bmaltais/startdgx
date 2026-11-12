@@ -10,11 +10,14 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
 - [x] Omarchy plugin `io.github.bmaltais.startdgx` (this folder; needs `/usr/bin/python3`, standard on Omarchy): a
   manager window listing each added machine (answering, or why not and when it last did) and its models (running,
-  loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop and Logs per model, an
-  Add machine card over `discover` (Add, or Install… in a terminal), Uninstall… that shows the dry-run plan and asks
-  first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
+  loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop, Logs and Remove… per
+  model, an Add model… picker per machine over its catalog (`list`; Set up runs `use --detach` and the row follows the
+  download), an Add machine card over `discover` (Add, or Install… in a terminal), Uninstall… that shows the dry-run
+  plan and asks first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
   `docs/ui-standards.md`; testing in the nested session, in demo mode: `docs/testing.md`.
-- [ ] Add and remove models from the manager (`use --detach`, `delete`), issue #6
+- [x] Add and remove models from the manager (`use --detach`, `delete`), issue #6: the picker lists every recipe of the
+  machine's catalog, best first, with why one can't run there; Remove… (Cancel the setup… on a download in progress)
+  asks first and says the space it frees.
 - [x] `startdgx discover [--json] [--user NAME] [--timeout SECONDS]`: lists the tailnet's online Linux peers
   (`tailscale status --json`, never a LAN scan) and probes each over `ssh -o BatchMode=yes -o ConnectTimeout=5`
   with the install's read-only Spark probe (GB10 in `nvidia-smi`, DGX name in `/etc/dgx-release`), 8 at a time. It
@@ -51,6 +54,10 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
     already being set up starts nothing and says so (exit 0). The default `--timeout` is 120 with `--detach`, 3600
     without; `start` waits 600 by default, since it returns once the model has loaded.
   - `startdgx logs <host> [model]` shows a model's last error and logs.
+  - `startdgx delete --dry-run [--json] <host> <model>` says what removing the model would free, and changes nothing:
+    a read-only probe over BatchMode ssh counts the blobs no other model links (what the engine's remove frees), and
+    for a setup in progress the half-downloaded files it lists. `--json` prints `{"recipe", "setting_up", "bytes"}`.
+    `delete` of a setup in progress cancels it (the engine stops its unit and deletes what it downloaded).
   - `startdgx launch install|uninstall|logs <host> [model] [--replace-engine]` opens a floating Omarchy terminal
     running that startdgx command, so sudo can ask for a password. The verb is allow-listed, the host and model are
     checked and shell-quoted, and `--replace-engine` goes only with `install`.

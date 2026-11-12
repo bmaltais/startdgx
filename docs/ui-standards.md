@@ -10,7 +10,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 
 - **No settings window yet**, so no first run, no Window page and no *Remember size* / *Remember position* switches.
 - **Size and position are not remembered** across a shell restart: the manager moves and resizes as the kit says, and opens centred at its default size after a restart (see the decision log).
-- **Cards, not settings windows, float over the manager**: Add machine and a machine's uninstall card. They follow the stacking rules (the manager stays behind under a 35% veil, Esc and a click outside close only the card), but they are centred on the manager, sized to their content (560 wide), and neither move nor resize.
+- **Cards, not settings windows, float over the manager**: Add machine, a machine's uninstall card and model picker, and a model's remove card. They follow the stacking rules (the manager stays behind under a 35% veil, Esc and a click outside close only the card), but they are centred on the manager, sized to their content (560 wide), and neither move nor resize.
 
 ## The manager
 
@@ -21,10 +21,11 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 │ MACHINES                                                  │
 │ ● spark-a  demo@spark-a · DGX Spark · 128 GB  Logs… Uninstall… Forget │  a machine
 │   ┌─────────────────────────────────────────────────────┐ │
-│   │ ◆ Qwen3.8 27B                              [▤] [⏸]  │ │  a model
+│   │ ◆ Qwen3.8 27B                          [▤] [🗑] [⏸]  │ │  a model
 │   │   ● Running · 128K context                          │ │
 │   │   Memory  ━━━━━━━━━━──────────────     28 of 122 GiB │ │
 │   └─────────────────────────────────────────────────────┘ │
+│   [ +  Add model…                                       ] │
 │ ● spark-c  demo@spark-c didn't answer in time · last seen 3 min ago │
 │ [+ Add machine…]                            Esc to close ◢│  footer
 └──────────────────────────────────────────────────────────┘
@@ -32,15 +33,18 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 
 - **Header.** The chip mark, the name, the count line in small capitals (red while a machine doesn't answer or a model failed), and look again (refresh). The words come from `DgxModel.subtitle`.
 - **A machine.** A dot (accent when it answers, red when it doesn't, muted before its first answer), its name, its SSH target and what it is (`DgxModel.hostLine`). Under it: "Asking the machine…", "No models set up yet", or why it doesn't answer and when it last did (`offlineText`). On the right, quiet text links: **Logs…** (the model started last), **Uninstall…** and **Forget**. A machine that doesn't answer keeps its last known models, dimmed and without buttons.
-- **A model.** Its maker's mark, its name (the endpoint on hover), a status dot and line (`DgxModel.modelState`: Running, Loading, Stopping, Removing, Downloading, Failed, Not enough memory, Stopped) with its context and the memory it took, then **Logs…** and **Start/Stop**. A model that doesn't fit has its play button greyed out with the reason as its tooltip. Under it, a meter (`DgxModel.meter`): memory while it runs; progress while it loads, stops or is removed, against how long that took last time; the download while it is set up. A failure's reason is a red link to its logs.
-- **Start and stop** show at once ("pending"), and the machine's next answer after the command replaces it.
+- **A model.** Its maker's mark, its name (the endpoint on hover), a status dot and line (`DgxModel.modelState`: Running, Loading, Stopping, Removing, Cancelling, Waiting to download, Downloading, Failed, Not enough memory, Stopped) with its context and the memory it took, then **Logs…**, **Remove…** (a muted trash; **Cancel the setup…**, an ✕, while it downloads) and **Start/Stop**. A model that doesn't fit has its play button greyed out with the reason as its tooltip. Under it, a meter (`DgxModel.meter`): memory while it runs; progress while it loads, stops or is removed, against how long that took last time; the download while it is set up. A failure's reason is a red link to its logs.
+- **Start and stop** show at once ("pending"), and the machine's next answer after the command replaces it. So does a **removal**: the row says Removing (Cancelling, for a setup) until the model is gone.
+- **Add model…** is the last row of a machine that answers (a cursor row like the others); it opens the machine's model picker.
 - **Footer.** **Add machine…** on the left, the latest message (six seconds, red for an error) or "Esc to close" on the right.
 - **Keyboard.** The keys are `DgxModel.keyAction`, so a key and a button cannot disagree (a machine that isn't answering has no Start, Stop or Logs either way); each button's tooltip names its key.
 
 | Key | Does |
 |---|---|
 | Up, Down, `k`, `j` | Move the cursor over machines and models |
-| Enter, `s` | Start or stop the model under the cursor |
+| Enter, `s` | Start or stop the model under the cursor (on Add model…: open the picker) |
+| `a` | Add a model to the machine… |
+| `d`, Delete | Remove the model… (or cancel its setup) |
 | `l` | Its logs… (a machine's row: the model started last) |
 | `u` | Uninstall the machine… |
 | `f` | Forget the machine |
@@ -51,6 +55,14 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 ## Add machine
 
 Lists `startdgx discover --json` (it installs and writes nothing): each machine of the tailnet with its target and what it can do (`DgxModel.peerOffer`). A DGX Spark with the engine has **Add**, which adds it at once and marks it Added; one without has **Install…**, which opens the install in a terminal (sudo asks there) and closes the window. A machine that isn't a Spark, or doesn't answer, says so, dimmed. **Look again** asks the tailnet again. Up/Down, Enter, `r`, Esc.
+
+## Add model
+
+A machine's model picker: every recipe of its catalog (`startdgx list HOST`), sorted by `DgxModel.recipeOffers`: the engine's recommendation first (marked *recommended*, its own `best`), then what the machine can run and doesn't have, what it has (*On this machine*) or is setting up, and what it can't run, dimmed, with the engine's reason. Each shows its maker's mark, the memory it takes, its context and speed on this machine class (`recipeFacts`) and its summary. **Set up** (Enter) runs `use --detach`, closes the card and puts the cursor on the new row, which shows at once as *Waiting to download* (`withSetups`) until the machine lists it, then follows the download through the status poll, then loads. A failure (exit code non-zero) takes the row away again and puts the CLI's last stderr line in the footer. **Look again** (`r`) reads the catalog again. Up/Down, Enter, `r`, Esc.
+
+## Remove
+
+`startdgx delete` stops the model if it runs and deletes its weights at once, so the card is the question: it first asks the machine what that frees (`delete HOST MODEL --dry-run --json`, read-only) and says so (`removeConfirm`: "freeing 47.5 GiB that no other model uses", or that the weights are shared and nothing is freed). For a download in progress it is *Cancel the setup…*, which deletes what was downloaded so far. The **Remove** pill (danger) and Enter wait for that answer; if the machine can't give it, the card says why in red and the removal can still go ahead. **Keep it**, Esc or a click outside close it and nothing happens. The removal runs with a 600 s timeout, since it returns only once the model is gone.
 
 ## Uninstall
 
@@ -83,6 +95,11 @@ Newest first. One line each: what was decided, and why.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-11 | Set up closes the picker and moves the cursor to the new row, which shows at once as *Waiting to download* | The download is followed on the row, not in the card; a setup that only appeared after `use` returned and the next poll would look like nothing happened. The waiting row goes when the machine lists the model, or when `use` fails. |
+| 2026-11-11 | The picker lists every recipe, not only what can be set up, sorted best first | Why a recipe can't run on a machine (and what is already there) is part of choosing; the engine's own `best` mark is kept rather than a ranking of ours. |
+| 2026-11-11 | Remove asks in a card that says the space freed, read with a new `delete --dry-run`; Enter confirms | Neither status nor list carries the size of a model's weights. The count follows the engine's own remove (blobs no other model links). Enter after `d` is two deliberate keys, as Remove pill after the trash is two clicks. |
+| 2026-11-11 | A download in progress has Cancel the setup… (the same `delete`) | The engine's `remove` on a setup stops its unit and deletes its partial files, at the pinned tag. |
+| 2026-11-11 | Remove is a muted trash on the row, Add model… a quiet outlined row | Quiet by default: removal is destructive and rare. |
 | 2026-11-11 | Start and stop queue per machine, one at a time, while each machine polls on its own | A real `start` returns only once the model has loaded (minutes), so one queue for all would freeze every other machine's Stop. A Stop of a model on the same machine still waits for a start there to return. |
 | 2026-11-11 | Terminal launches are detached and report nothing back; their actions end in an ellipsis (Logs…, Install…, Uninstall…) | The launcher's `uwsm-app` runs the terminal as a scope in the foreground, so a Process would live as long as the terminal and kill it on a shell restart. The terminal itself shows the result. |
 | 2026-11-11 | Uninstall shows the dry-run plan in a card and asks before it opens the terminal | `launch uninstall` runs the real uninstall at once; the plan is read with BatchMode ssh, which needs no terminal. |
