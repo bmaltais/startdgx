@@ -70,8 +70,16 @@ Item {
   }
   function ensureManager() { if (!root.shown) root.showManager() }
 
-  function close() { root.card = ""; root.shown = false }
-  function closeCard() { root.card = ""; Qt.callLater(function () { managerView.focusList() }) }
+  function close() {
+    if (root.card === "add") core.cancelDiscover()
+    root.card = ""
+    root.shown = false
+  }
+  function closeCard() {
+    if (root.card === "add") core.cancelDiscover()
+    root.card = ""
+    Qt.callLater(function () { managerView.focusList() })
+  }
 
   function showAddMachine() {
     root.ensureManager()

@@ -679,3 +679,36 @@ test("notifyCommand: an alert as notify-send's arguments, with -- before them an
   assert.deepStrictEqual(M.notifyCommand({ title: "-x <b> failed on h1", body: "CUDA <error> & co" }),
     ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", "-x <b> failed on h1", "CUDA &lt;error&gt; &amp; co"])
 })
+
+// ---- a query: one question at a time to bin/startdgx, the latest one wins ----
+
+test("a query asked something new while it runs: the old one's late exit is dropped, then the new one is asked", () => {
+  // The remove card for model a, then at once for model b: a's ask is killed, and its exit (a failure) arrives after.
+  let r = M.queryAsk(M.newQuery(), "h1/a")
+  assert.deepStrictEqual([r.launch, r.kill], ["h1/a", false])
+  r = M.queryAsk(r.query, "h1/b")
+  assert.deepStrictEqual([r.launch, r.kill], [null, true], "the old one is killed, and the new one waits for its exit")
+  let e = M.queryExited(r.query)
+  assert.deepStrictEqual([e.key, e.current, e.launch], ["h1/a", false, "h1/b"], "a's exit says nothing about b")
+  e = M.queryExited(e.query)
+  assert.deepStrictEqual([e.key, e.current, e.launch], ["h1/b", true, null], "b's own answer is read")
+  assert.strictEqual(e.query.running, null)
+})
+
+test("a query: the same question again while it runs waits for that answer; after it, it is asked again", () => {
+  let r = M.queryAsk(M.newQuery(), "h1")
+  r = M.queryAsk(r.query, "h1")
+  assert.deepStrictEqual([r.launch, r.kill], [null, false])
+  const e = M.queryExited(r.query)
+  assert.strictEqual(e.current, true)
+  assert.strictEqual(M.queryAsk(e.query, "h1").launch, "h1", "looking again asks again")
+})
+
+test("a query cancelled (its card closed) ends, and its answer is dropped", () => {
+  let r = M.queryAsk(M.newQuery(), "discover")
+  const c = M.queryCancel(r.query)
+  assert.strictEqual(c.kill, true)
+  const e = M.queryExited(c.query)
+  assert.deepStrictEqual([e.current, e.launch], [false, null])
+  assert.strictEqual(M.queryCancel(M.newQuery()).kill, false, "nothing running, nothing to end")
+})

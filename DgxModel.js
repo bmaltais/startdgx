@@ -667,3 +667,30 @@ function notifyCommand(alert) {
   const body = String(alert.body).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   return ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", String(alert.title), body]
 }
+
+// ---- a query ----------------------------------------------------------------------------------------------
+// One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
+// A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come
+// after a restart would have begun, and would then read as the new one's answer (an error on the next card).
+// { running: the key whose process runs, or null; wanted: the key whose answer is wanted, or null }.
+
+function newQuery() { return { running: null, wanted: null } }
+
+// Ask `key`: { query, launch: the key to start now or null, kill: whether to end the one that runs }.
+function queryAsk(q, key) {
+  if (q.running === null) return { query: { running: key, wanted: key }, launch: key, kill: false }
+  return { query: { running: q.running, wanted: key }, launch: null, kill: q.running !== key }
+}
+
+// The answer is no longer wanted (its card closed).
+function queryCancel(q) {
+  return { query: { running: q.running, wanted: null }, kill: q.running !== null }
+}
+
+// The process ended: { query, key: what it was asked, current: whether its answer is the one wanted, launch: the key
+// to ask next or null }.
+function queryExited(q) {
+  const current = q.running !== null && q.running === q.wanted
+  const next = !current && q.wanted !== null ? q.wanted : null
+  return { query: { running: next, wanted: current ? null : q.wanted }, key: q.running, current: current, launch: next }
+}

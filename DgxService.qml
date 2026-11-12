@@ -41,7 +41,7 @@ Item {
   // Discovery, for the Add machine card.
   property var peers: []
   property string peersError: ""
-  readonly property bool discovering: discoverProc.running
+  readonly property bool discovering: discoverQuery.busy
 
   // The uninstall plan (`uninstall HOST --dry-run --json` with the card's opt-ins), for the uninstall card:
   // planKey is the host and the flags it was asked with.
@@ -49,7 +49,7 @@ Item {
   property string planKey: ""
   property var uninstallPlan: null
   property string planError: ""
-  readonly property bool planning: planProc.running
+  readonly property bool planning: planQuery.busy
 
   // target -> true: a setup there failed because the machine needs its one-time root setup (Model.setupNeeded), so
   // its section offers Install…, until that is launched.
@@ -62,14 +62,14 @@ Item {
   property string listHost: ""
   property var recipes: null
   property string recipesError: ""
-  readonly property bool listing: listProc.running
+  readonly property bool listing: listQuery.busy
 
   // The remove card's plan (`delete HOST MODEL --dry-run --json`): what the removal frees, -1 until it is read.
   property string removeHost: ""
   property string removeId: ""
   property real removeBytes: -1
   property string removeError: ""
-  readonly property bool removePlanning: removeProc.running
+  readonly property bool removePlanning: removeQuery.busy
 
   readonly property var summary: Model.summarize(service.hostList, service.shownState)
   readonly property var rows: Model.rows(service.hostList, service.shownState)
@@ -175,24 +175,22 @@ Item {
     service.setupNeeded = next
   }
 
+  // The cards' questions each go through a Query: a new one ends the one running, whose late answer is dropped.
   function listRecipes(host) {
     if (service.listHost !== host) { service.recipes = null; service.listHost = host }
     service.recipesError = ""
-    listProc.running = false
-    listProc.command = [service.script, "list", host, "--timeout", "60"]
-    listProc.running = true
+    listQuery.ask(host, [service.script, "list", host, "--timeout", "60"])
   }
 
   function planRemove(host, id) {
-    // Already asking about this one: a second ask would kill the first, whose exit would then read as a failure.
-    if (removeProc.running && service.removeHost === host && service.removeId === id) return
+    const key = host + "/" + id
+    // Already asking about this one: its answer is the one wanted.
+    if (removeQuery.busy && removeQuery.asked.wanted === key) return
     service.removeHost = host
     service.removeId = id
     service.removeBytes = -1
     service.removeError = ""
-    removeProc.running = false
-    removeProc.command = [service.script, "delete", host, id, "--dry-run", "--json", "--timeout", "60"]
-    removeProc.running = true
+    removeQuery.ask(key, [service.script, "delete", host, id, "--dry-run", "--json", "--timeout", "60"])
   }
 
   // ---- the machine list ------------------------------------------------------------------------------
@@ -214,11 +212,11 @@ Item {
 
   // `user`: the ssh user on the machines, or "" for this machine's.
   function discover(user) {
-    if (discoverProc.running) return
     service.peersError = ""
-    discoverProc.command = [service.script, "discover", "--json"].concat(user ? ["--user", user] : [])
-    discoverProc.running = true
+    discoverQuery.ask("discover " + user, [service.script, "discover", "--json"].concat(user ? ["--user", user] : []))
   }
+  // The Add machine card closed: its probes end.
+  function cancelDiscover() { discoverQuery.cancel() }
 
   // flags: the opt-ins the plan is asked with (--delete-models, --remove-packages).
   function plan(host, flags) {
@@ -226,9 +224,7 @@ Item {
     service.planKey = [host].concat(flags).join(" ")
     service.uninstallPlan = null
     service.planError = ""
-    planProc.running = false
-    planProc.command = [service.script, "uninstall", host, "--dry-run", "--json", "--timeout", "60"].concat(flags)
-    planProc.running = true
+    planQuery.ask(service.planKey, [service.script, "uninstall", host, "--dry-run", "--json", "--timeout", "60"].concat(flags))
   }
 
   // Install, uninstall and logs need a person at a terminal (sudo asks for a password there), so they open
@@ -310,47 +306,42 @@ Item {
     }
   }
 
-  Process {
-    id: discoverProc
-    stdout: StdioCollector { id: discoverOut; waitForEnd: true }
-    stderr: StdioCollector { id: discoverErr; waitForEnd: true }
-    onExited: function (code) {
-      const peers = code === 0 ? Model.parsePeers(discoverOut.text) : null
+  Query {
+    id: discoverQuery
+    onAnswered: function (key, code, out, err) {
+      const peers = code === 0 ? Model.parsePeers(out) : null
       if (peers) service.peers = peers
-      else service.peersError = Model.errorLine(discoverErr.text, "The tailnet could not be read")
+      else service.peersError = Model.errorLine(err, "The tailnet could not be read")
     }
   }
 
-  Process {
-    id: listProc
-    stdout: StdioCollector { id: listOut; waitForEnd: true }
-    stderr: StdioCollector { id: listErr; waitForEnd: true }
-    onExited: function (code) {
-      const list = code === 0 ? Model.parseRecipes(listOut.text) : null
+  Query {
+    id: listQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.listHost) return
+      const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.recipes = list
-      else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(listErr.text, "The machine's catalog could not be read")
+      else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(err, "The machine's catalog could not be read")
     }
   }
 
-  Process {
-    id: removeProc
-    stdout: StdioCollector { id: removeOut; waitForEnd: true }
-    stderr: StdioCollector { id: removeErr; waitForEnd: true }
-    onExited: function (code) {
-      const plan = code === 0 ? Model.parseRemovePlan(removeOut.text) : null
+  Query {
+    id: removeQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.removeHost + "/" + service.removeId) return
+      const plan = code === 0 ? Model.parseRemovePlan(out) : null
       if (plan) service.removeBytes = plan.bytes
-      else service.removeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(removeErr.text, "The machine didn't say")
+      else service.removeError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }
 
-  Process {
-    id: planProc
-    stdout: StdioCollector { id: planOut; waitForEnd: true }
-    stderr: StdioCollector { id: planErr; waitForEnd: true }
-    onExited: function (code) {
-      const plan = code === 0 ? Model.parseUninstallPlan(planOut.text) : null
+  Query {
+    id: planQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.planKey) return
+      const plan = code === 0 ? Model.parseUninstallPlan(out) : null
       if (plan) service.uninstallPlan = plan
-      else service.planError = code === 0 ? "The machine's plan could not be read" : Model.errorLine(planErr.text, "The uninstall plan could not be read")
+      else service.planError = code === 0 ? "The machine's plan could not be read" : Model.errorLine(err, "The uninstall plan could not be read")
     }
   }
 }
