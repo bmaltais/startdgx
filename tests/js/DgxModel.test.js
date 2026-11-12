@@ -718,3 +718,35 @@ test("modelKey, keyHost and keyModel: a model's key, the one form pending, setup
   assert.strictEqual(M.keyHost("demo@spark-a/qwen3.8-27b-tensorfold"), "demo@spark-a")
   assert.strictEqual(M.keyModel("demo@spark-a/qwen3.8-27b-tensorfold"), "qwen3.8-27b-tensorfold")
 })
+
+test("a superseded start still loading never shows again once the stop that superseded it has finished", () => {
+  let r = click(M.newQueue(), act(1, "start"))
+  r = click(r.queue, act(2, "stop"), row({ recipe: "a", unit: "activating" }))
+  const f = M.finish(r.queue, "other")
+  assert.strictEqual(f.action.kind, "stop")
+  assert.ok(f.queue.starting, "the start's ssh hasn't returned yet")
+  assert.deepStrictEqual(M.marks(f.queue, { "h1/a": { shows: "stop", op: 2 } }), { "h1/a": "stop" })
+  assert.deepStrictEqual(M.marks(f.queue, {}), {}, "and once that has settled, the machine's own state")
+})
+
+test("a query: asking again for what was just killed waits for the killed one's exit, then asks it anew", () => {
+  let r = M.queryAsk(M.newQuery(), "A")
+  r = M.queryAsk(r.query, "B")
+  r = M.queryAsk(r.query, "A")
+  assert.deepStrictEqual([r.launch, r.kill], [null, false], "the old A is already being ended")
+  let e = M.queryExited(r.query)
+  assert.deepStrictEqual([e.current, e.launch], [false, "A"], "the killed A's exit is not A's answer")
+  e = M.queryExited(e.query)
+  assert.deepStrictEqual([e.current, e.launch], [true, null])
+})
+
+test("a query cancelled, then asked the same again (Esc, then n): the killed run's exit is dropped and it runs anew", () => {
+  let r = M.queryAsk(M.newQuery(), "discover ")
+  r = M.queryCancel(r.query)
+  r = M.queryAsk(r.query, "discover ")
+  assert.deepStrictEqual([r.launch, r.kill], [null, false])
+  let e = M.queryExited(r.query)
+  assert.deepStrictEqual([e.current, e.launch], [false, "discover "])
+  e = M.queryExited(e.query)
+  assert.strictEqual(e.current, true)
+})

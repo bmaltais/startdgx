@@ -436,15 +436,16 @@ function finish(q, slot) {
   return { queue: out, action: action }
 }
 
-// Each model's mark, "host/model" -> its pending string: what runs shows its `shows`, what waits "queued <kind>" (unless
-// it belongs to the click that runs), and `done` ("host/model" -> { shows, op }, the finished actions whose machine
-// hasn't answered since) shows until it has.
+// Each model's mark, "host/model" -> its pending string: what runs shows its `shows` (a superseded start never does:
+// the stop or removal that superseded it has its own), what waits "queued <kind>" (unless it belongs to the click that
+// runs), and `done` ("host/model" -> { shows, op }, the finished actions whose machine hasn't answered since) shows
+// until it has.
 function marks(q, done) {
   const out = {}
   const runningOp = {}
   for (const key in done) out[key] = done[key].shows
   ;[q.starting, q.other].forEach(function (a) {
-    if (a && !(a.superseded && q.other && q.other.key === a.key)) { out[a.key] = a.shows; runningOp[a.key] = a.op }
+    if (a && !a.superseded) { out[a.key] = a.shows; runningOp[a.key] = a.op }
   })
   q.starts.concat(q.others).forEach(function (a) {
     if (a.kind === "use" || runningOp[a.key] === a.op) return
@@ -676,25 +677,28 @@ function notifyCommand(alert) {
 // One question at a time to bin/startdgx (a catalog, an uninstall or removal plan, the tailnet), identified by a key.
 // A new question kills the one that runs and waits for its exit before it is asked: the killed one's exit can come
 // after a restart would have begun, and would then read as the new one's answer (an error on the next card).
-// { running: the key whose process runs, or null; wanted: the key whose answer is wanted, or null }.
+// { running: the key whose process runs, or null; wanted: the key whose answer is wanted, or null; killed: whether
+// the one that runs has been ended, whose answer is then never the one wanted, even for the same key }.
 
-function newQuery() { return { running: null, wanted: null } }
+function newQuery() { return { running: null, wanted: null, killed: false } }
 
 // Ask `key`: { query, launch: the key to start now or null, kill: whether to end the one that runs }.
 function queryAsk(q, key) {
-  if (q.running === null) return { query: { running: key, wanted: key }, launch: key, kill: false }
-  return { query: { running: q.running, wanted: key }, launch: null, kill: q.running !== key }
+  if (q.running === null) return { query: { running: key, wanted: key, killed: false }, launch: key, kill: false }
+  const kill = !q.killed && q.running !== key
+  return { query: { running: q.running, wanted: key, killed: q.killed || kill }, launch: null, kill: kill }
 }
 
 // The answer is no longer wanted (its card closed).
 function queryCancel(q) {
-  return { query: { running: q.running, wanted: null }, kill: q.running !== null }
+  const kill = q.running !== null && !q.killed
+  return { query: { running: q.running, wanted: null, killed: q.killed || kill }, kill: kill }
 }
 
 // The process ended: { query, key: what it was asked, current: whether its answer is the one wanted, launch: the key
 // to ask next or null }.
 function queryExited(q) {
-  const current = q.running !== null && q.running === q.wanted
+  const current = q.running !== null && !q.killed && q.running === q.wanted
   const next = !current && q.wanted !== null ? q.wanted : null
-  return { query: { running: next, wanted: current ? null : q.wanted }, key: q.running, current: current, launch: next }
+  return { query: { running: next, wanted: current ? null : q.wanted, killed: false }, key: q.running, current: current, launch: next }
 }
