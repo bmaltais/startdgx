@@ -66,6 +66,13 @@ Item {
   property string recipesError: ""
   readonly property bool listing: listQuery.busy
 
+  // The Find on Hugging Face card (`hf search --json`, run on this computer): the rows of the last search, why it failed, and the query
+  // it was asked ("" before the first). A search touches no machine.
+  property var hfRows: null
+  property string hfError: ""
+  property string hfAsked: ""
+  readonly property bool hfSearching: hfQuery.busy
+
   // The context card's choices (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
   property string variantsHost: ""
   property string variantsId: ""
@@ -309,6 +316,13 @@ Item {
     recipeConfirmProc.command = [service.script, "recipe", "confirm", host, id, "--timeout", "60"]
     recipeConfirmProc.running = true
   }
+
+  function searchHf(query) {
+    service.hfAsked = query.trim()
+    service.hfError = ""
+    hfQuery.ask(service.hfAsked, [service.script].concat(Model.hfSearchCommand(query)))
+  }
+  function cancelHf() { hfQuery.cancel() }
 
   function removeRecipe(host, id) {
     if (service.recipeBusy) return
@@ -582,6 +596,16 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.userRecipes = Model.userRecipes(list)
       else service.userRecipesError = code === 0 ? "The machine's recipes could not be read" : Model.errorLine(err, "The machine's recipes could not be read")
+    }
+  }
+
+  Query {
+    id: hfQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.hfAsked) return
+      const rows = code === 0 ? Model.parseHfRows(out) : null
+      if (rows) service.hfRows = rows
+      else service.hfError = code === 0 ? "Hugging Face's answer could not be read" : Model.errorLine(err, "The search did not run")
     }
   }
 
