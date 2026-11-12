@@ -14,7 +14,7 @@ ColumnLayout {
   property string host: ""
   property var profile: ({})
   property var hostState: null        // { loaded, online, error, status, lastSeenMs }, or null before the first answer
-  property var pending: ({})          // "host/model" -> "start" | "stop" | "delete"
+  property var pending: ({})          // "host/model" -> "start" | "stop" | "delete", "host/model#share" -> "share" | "unshare"
   property real nowMs: 0
   property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model" or "host#add"
   property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
@@ -164,6 +164,7 @@ ColumnLayout {
       Layout.leftMargin: Style.spacing.xxl
       entry: section.entryOf(modelData)
       pending: section.pending[Model.modelKey(section.host, modelData)] || ""
+      sharing: section.pending[Model.shareKey(section.host, modelData)] || ""
       nowMs: section.nowMs
       away: section.away
       current: section.cursorKey === Model.modelKey(section.host, modelData)
@@ -171,6 +172,11 @@ ColumnLayout {
       onSelectRequested: section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
       onToggleRequested: {
         const action = Model.keyAction("s", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending)
+        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
+        if (action) section.actionRequested(action)
+      }
+      onShareRequested: {
+        const action = Model.keyAction("t", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending, false, false, modelRow.sharing)
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         if (action) section.actionRequested(action)
       }

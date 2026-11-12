@@ -141,6 +141,9 @@ Item {
   // queued until then; the machine's next answer after the command replaces it.
   function start(host, id) { service.act(host, "start", id) }
   function stop(host, id) { service.act(host, "stop", id) }
+  // Shares a model with the host's tailnet, or stops ("share" or "unshare"): a command of its own, with its own mark
+  // (DgxModel.shareKey), so the row keeps showing what the model does.
+  function share(host, id, kind) { service.act(host, kind, id) }
   // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its weights.
   function remove(host, id) { service.act(host, "delete", id) }
   function act(host, kind, id) {

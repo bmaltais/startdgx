@@ -131,6 +131,7 @@ Item {
     switch (action.type) {
     case "start": core.start(action.host, action.id); break
     case "stop": core.stop(action.host, action.id); break
+    case "share": case "unshare": core.share(action.host, action.id, action.type); break
     case "logs": core.launch("logs", action.host, action.id); root.close(); break
     case "uninstall": root.showUninstall(action.host); break
     case "forget": root.showForget(action.host); break

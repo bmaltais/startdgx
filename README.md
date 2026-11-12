@@ -7,10 +7,10 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
 
 ## Status
 
-- [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `delete`), tests in `tests/cli.sh`
+- [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `share`, `delete`), tests in `tests/cli.sh`
 - [x] Omarchy plugin `io.github.bmaltais.startdgx` (this folder; needs `/usr/bin/python3`, standard on Omarchy): a
   manager window listing each added machine (answering, or why not and when it last did) and its models (running,
-  loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop, Logs and Remove… per
+  loading, stopped, failed, not enough memory, downloading) with context and memory, Start/Stop, Share (the Tailscale mark), Logs and Remove… per
   model, an Add model… picker per machine over its catalog (`list`; Set up runs `use --detach` and the row follows the
   download), an Add machine card over `discover` (Add, or Install… in a terminal, with `--replace-engine` where an engine startdgx didn't install is there; the ssh user can be typed in), an Install… offer on a machine whose engine says it needs its root setup, Uninstall… that shows the dry-run
   plan (with opt-ins to delete the weights and remove the packages the install added) and asks first, and Forget; plus an optional bar icon. `omarchy-shell io.github.bmaltais.startdgx open` toggles it. UI rules:
@@ -53,6 +53,9 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
     `use --detach`) and returns at once with one line. `status` shows the setup's progress. A second `use` of a model
     already being set up starts nothing and says so (exit 0). The default `--timeout` is 120 with `--detach`, 3600
     without; `start` waits 600 by default, since it returns once the model has loaded.
+  - `startdgx share <host> <model> [--off]` shares the model with the other machines on the host's tailnet (the engine's
+    `share`, which publishes it with `tailscale serve`), or stops sharing it. Its failures (not set up, Serve not enabled)
+    are the engine's own message.
   - `startdgx logs <host> [model]` shows a model's last error and logs.
   - `startdgx delete --dry-run [--json] <host> <model>` says what removing the model would free, and changes nothing:
     a read-only probe over BatchMode ssh counts the blobs no other model links (what the engine's remove frees), and
@@ -64,7 +67,7 @@ DGX), so other Omarchy machines see its models through the usual tailnet sharing
     with `uninstall`.
   - Demo mode (`STARTDGX_DEMO=1`, or the file `~/.config/startdgx/demo/ENABLED`) runs no process at all: every way to
     run one raises. It serves the fixtures in `demo/` (three machines, one unreachable, plus `discover` peers) and
-    keeps its own state, hosts included, in `$XDG_STATE_HOME/startdgx-demo`. `start`, `stop`, `use` and `delete`
+    keeps its own state, hosts included, in `$XDG_STATE_HOME/startdgx-demo`. `start`, `stop`, `share`, `use` and `delete`
     change that state, and what they start finishes over time as on a host (a setup waits 2 s, then downloads at
     1.2 GB/s; a load takes 6 s). Delete that folder
     to start over. `STARTDGX_DEMO_NOW` (seconds since the epoch) holds the demo's clock still, for tests.

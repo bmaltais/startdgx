@@ -163,6 +163,10 @@ s start me@dgx qwen3.8-27b-tensorfold >/dev/null; ok $? "start runs on the host"
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai start qwen3.8-27b-tensorfold'; ok $? "start sends the recipe to the engine"
 s stop me@dgx >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai stop$'; ok $? "stop without a model stops every one"
 s delete me@dgx qwen3.8-27b-tensorfold >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'remove qwen3.8-27b-tensorfold'; ok $? "delete maps to the engine's remove"
+s share me@dgx qwen3.8-27b-tensorfold >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai share qwen3.8-27b-tensorfold$'; ok $? "share sends the recipe to the engine's share"
+s share me@dgx qwen3.8-27b-tensorfold --off >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai share qwen3.8-27b-tensorfold --off$'; ok $? "share --off stops sharing it"
+before=$(wc -l <"$FAKE_LOG"); s share me@dgx '--off;x' >/dev/null 2>&1; ok $((!$?)) "share refuses what is no recipe id"
+same "$(wc -l <"$FAKE_LOG")" "$before"; ok $? "and sends the engine nothing"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -721,6 +725,12 @@ dj '[r for r in d if r["id"] == "'$nem'"][0]["active"]' list $a; ok $? "demo lis
 out=$(ds stop $a $nem); same "$out" "Stopped $nem"; ok $? "demo stop says what it stopped"
 row $a $nem deactivating; ok $? "a stopped demo model is stopping"
 now=$((t0 + 10)); row $a $nem inactive; ok $? "and stopped once its stop time has passed"
+dj 'd["models"]["'$nem'"]["shared"] is False' status $a; ok $? "a demo model starts private"
+out=$(ds share $a $nem); same "$out" "Sharing $nem on your tailnet (demo)"; ok $? "demo share says so"
+dj 'd["models"]["'$nem'"]["shared"] is True' status $a; ok $? "and the model is shared, stopped or not"
+out=$(ds share $a $nem --off); same "$out" "$nem is no longer shared"; ok $? "demo share --off says so"
+dj 'd["models"]["'$nem'"]["shared"] is False' status $a; ok $? "and the model is private again"
+out=$(ds share $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy agent local use $flash"; ok $? "demo share refuses a model that isn't set up"
 out=$(ds start $a $abl 2>&1); ok $((!$?)) "demo start refuses a model that doesn't fit"
 echo "$out" | grep -q '^Error: Not enough memory'; ok $? "and says why"
 out=$(ds start $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy agent local use $flash"; ok $? "demo start refuses a model that isn't set up"

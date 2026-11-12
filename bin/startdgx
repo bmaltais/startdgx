@@ -395,6 +395,11 @@ def cmd_use(args):
   print((out.strip().splitlines() or [f"Setting up {args.model} in the background"])[-1])
 
 
+def cmd_share(args):
+  argv = ["share", recipe(args.model)] + (["--off"] if args.off else [])
+  sys.stdout.write(ssh(target(args.host), *argv, timeout=args.timeout).stdout)
+
+
 def cmd_delete(args):
   if args.dry_run:
     rid, host = recipe(args.model), target(args.host)
@@ -1287,6 +1292,13 @@ def demo_stop(args):
   print(f"Stopped {', '.join(targets)}" if targets else "No local model is running")
 
 
+def demo_share(args):
+  rid = recipe(args.model)
+  with demo_state(write=True) as state:
+    demo_set_up(demo_host(state, args.host)["status"]["models"], rid)["shared"] = not args.off
+  print(f"{rid} is no longer shared" if args.off else f"Sharing {rid} on your tailnet (demo)")
+
+
 def demo_use(args):
   rid = recipe(args.model)
   unit = f"omarchy-agent-local-use-{rid}.service"
@@ -1398,7 +1410,7 @@ def demo_logs(args):
   print(f"Demo: {rid or 'no model'} on {args.host} has no logs")
 
 
-DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "use": demo_use, "delete": demo_delete,
+DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "use": demo_use, "delete": demo_delete,
                  "add": demo_add, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
 
 
@@ -1448,6 +1460,9 @@ def build_parser():
   # start returns once the model has loaded, which can take minutes.
   add("start", cmd_start, model=True, timeout=600)
   add("stop", cmd_stop, optional_model=True)
+  sh = add("share", cmd_share, model=True, timeout=120, description="Share a model with the other machines on the host's tailnet "
+           "(the engine publishes it with tailscale serve), or stop with --off.")
+  sh.add_argument("--off", action="store_true", help="stop sharing it")
   us = add("use", cmd_use, model=True, timeout=None, timeout_help="3600, or 120 with --detach")
   us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
   de = add("delete", cmd_delete, model=True)

@@ -13,6 +13,9 @@ var UNITS = ["installing", "active", "activating", "inactive", "failed", "deacti
 function modelKey(host, id) { return host + "/" + id }
 function keyHost(key) { return key.substring(0, key.lastIndexOf("/")) }
 function keyModel(key) { return key.substring(key.lastIndexOf("/") + 1) }
+// A share's own mark, apart from its model's: "host/model#share" in the service's `pending`, so a share neither hides
+// what the model is doing (a load, a stop) nor is hidden by it, and no start, stop or removal supersedes it.
+function shareKey(host, id) { return modelKey(host, id) + "#share" }
 
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -103,6 +106,15 @@ function toggleAction(entry, pending) {
   if (startBlocked(entry)) return null
   if (kind === "stopped" || (kind === "failed" && entry.unit !== "installing")) return "start"
   return null
+}
+
+// What the Tailscale button does, for any model that is set up (sharing stands whether or not it runs; the engine lists a
+// shared model on the tailnet in whatever state it is): "share" while private, "unshare" while shared, or null while its
+// own click waits, for a model being set up or removed, and once a removal is asked. `sharing` is the share's own mark.
+function shareAction(entry, pending, sharing) {
+  if (!entry || String(sharing || "") !== "") return null
+  if (entry.unit === "installing" || entry.unit === "removing" || pendingOf(pending).kind === "delete") return null
+  return entry.shared === true ? "unshare" : "share"
 }
 
 // A start or stop runs steadily to 90% at the time the last one took, then keeps creeping toward 98%, so one
@@ -353,13 +365,13 @@ function rows(hostList, hostStates) {
 }
 
 // The keys that act on a model or machine: held down, they act once, not again on each repeat.
-var ONCE_KEYS = ["enter", "s", "d", "delete", "f"]
+var ONCE_KEYS = ["enter", "s", "d", "delete", "f", "t"]
 
 // A key typed in the manager ("enter" for Return, "delete" for Delete). `row` is the one under the cursor (or null), `entry` its
 // model's status row, `pending` a start or stop already asked for, `away` whether its machine isn't answering (it
-// then has no Start, Stop or Logs), and `repeat` whether this is the key's auto-repeat. A model's row acts for its
-// machine too. Forget, like Uninstall and Remove, opens a card that asks first.
-function keyAction(key, row, entry, pending, away, repeat) {
+// then has no Start, Stop or Logs), `repeat` whether this is the key's auto-repeat, and `sharing` its share's mark. A
+// model's row acts for its machine too. Forget, like Uninstall and Remove, opens a card that asks first.
+function keyAction(key, row, entry, pending, away, repeat, sharing) {
   const k = String(key).toLowerCase()
   if (repeat && ONCE_KEYS.indexOf(k) >= 0) return null
   if (k === "r") return { type: "refresh" }
@@ -371,6 +383,10 @@ function keyAction(key, row, entry, pending, away, repeat) {
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
   if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
+  if (k === "t" && row.kind === "model" && entry) {
+    const share = shareAction(entry, pending, sharing)
+    return share ? { type: share, host: row.host, id: row.id } : null
+  }
   if ((k === "s" || k === "enter") && row.kind === "model" && entry) {
     const action = toggleAction(entry, pending)
     return action ? { type: action, host: row.host, id: row.id } : null
@@ -383,7 +399,7 @@ function keyAction(key, row, entry, pending, away, repeat) {
 // model has loaded (up to 15 minutes), and any other (stop, set up, remove). So a Stop never waits for a load to end.
 // The engine's own lock still orders what it must: its start and remove take it, its stop and `use --detach` don't.
 // An action is { op, key, kind, shows }: op numbers the click it comes from, key is "host/model", kind is the command
-// (start, stop, use, delete) and shows the mark its row gets while it runs (a removal's stop shows as the removal).
+// (start, stop, use, delete, share, unshare; a share's key is shareKey) and shows the mark its row gets while it runs (a removal's stop shows as the removal).
 
 function newQueue() { return { starting: null, other: null, starts: [], others: [] } }
 
@@ -469,12 +485,15 @@ function settle(done, answered) {
 // removal may first wait for a start ahead of it that holds the engine's lock (900 s), then removes, and a killed
 // ssh could leave it half done.
 function commandFor(host, action) {
-  const id = keyModel(action.key)
+  const id = keyModel(action.key).replace(/#share$/, "")
   switch (action.kind) {
   case "start": return ["start", host, id, "--timeout", "900"]
   case "stop": return ["stop", host, id, "--timeout", "120"]
   case "use": return ["use", "--detach", host, id, "--timeout", "120"]
   case "delete": return ["delete", host, id, "--timeout", "1500"]
+  // The engine publishes the model's route with tailscale serve, which can take a while.
+  case "share": return ["share", host, id, "--timeout", "120"]
+  case "unshare": return ["share", host, id, "--off", "--timeout", "120"]
   }
   return null
 }

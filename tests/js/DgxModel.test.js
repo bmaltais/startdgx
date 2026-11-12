@@ -543,6 +543,64 @@ test("commandFor: each action's startdgx command and how long it may take", () =
   assert.deepStrictEqual(M.commandFor("me@h1", act(1, "delete")), ["delete", "me@h1", "a", "--timeout", "1500"])
 })
 
+// ---- sharing a model with the tailnet ----
+
+test("shareAction: what the Tailscale button does, for any model that is set up", () => {
+  assert.strictEqual(M.shareAction(row({ unit: "active", shared: false })), "share")
+  assert.strictEqual(M.shareAction(row({ unit: "active", shared: true })), "unshare")
+  // Sharing is a standing property: a stopped model is shared (and unshared) as well as a running one.
+  assert.strictEqual(M.shareAction(row({ unit: "inactive", shared: true })), "unshare")
+  assert.strictEqual(M.shareAction(row({ unit: "inactive", fits: false })), "share", "even one that doesn't fit")
+  assert.strictEqual(M.shareAction(row({ unit: "failed", error: "CUDA error" })), "share")
+  assert.strictEqual(M.shareAction(null), null)
+  for (const unit of ["installing", "removing"]) assert.strictEqual(M.shareAction(row({ unit: unit })), null, unit)
+  assert.strictEqual(M.shareAction(row({ unit: "active" }), "delete"), null, "a removal under way")
+  assert.strictEqual(M.shareAction(row({ unit: "active" }), "queued delete"), null, "and one waiting its turn")
+  assert.strictEqual(M.shareAction(row({ unit: "active" }), "stop"), "share", "a stop doesn't matter to it")
+  assert.strictEqual(M.shareAction(row({ unit: "active" }), "", "share"), null, "while its own click runs")
+  assert.strictEqual(M.shareAction(row({ unit: "active" }), "", "queued unshare"), null)
+})
+
+test("a share is its own mark: it never hides what the model is doing, nor its Start and Stop", () => {
+  assert.strictEqual(M.shareKey("h1", "a"), "h1/a#share")
+  const q = M.newQueue()
+  const loading = { op: 1, key: "h1/a", kind: "start", shows: "start" }
+  const sharing = { op: 2, key: M.shareKey("h1", "a"), kind: "share", shows: "share" }
+  let s = M.submit(q, loading, null)
+  s = M.launch(s.queue)
+  s = M.submit(s.queue, sharing, null)
+  assert.deepStrictEqual(s.dropped, [])
+  s = M.launch(s.queue)
+  assert.deepStrictEqual(M.marks(s.queue, {}), { "h1/a": "start", "h1/a#share": "share" }, "the load keeps its mark")
+  // A stop while the share runs supersedes only the start, never the share.
+  s = M.submit(s.queue, { op: 3, key: "h1/a", kind: "stop", shows: "stop" }, row({ unit: "activating" }))
+  assert.strictEqual(s.queue.other.key, "h1/a#share")
+  assert.strictEqual(s.queue.starting.superseded, true)
+  // A second share click waits its turn, and is told so.
+  const again = M.submit(M.launch(M.submit(M.newQueue(), sharing, null).queue).queue, Object.assign({}, sharing, { op: 4, kind: "unshare", shows: "unshare" }), null)
+  assert.strictEqual(M.marks(again.queue, {})["h1/a#share"], "queued unshare")
+})
+
+test("commandFor: a share and an unshare run share, with --off to stop", () => {
+  const share = (kind) => ({ op: 1, key: M.shareKey("me@h1", "a"), kind: kind, shows: kind })
+  assert.deepStrictEqual(M.commandFor("me@h1", share("share")), ["share", "me@h1", "a", "--timeout", "120"])
+  assert.deepStrictEqual(M.commandFor("me@h1", share("unshare")), ["share", "me@h1", "a", "--off", "--timeout", "120"])
+})
+
+test("keyAction: t shares the model under the cursor, or stops sharing it, and a held key acts once", () => {
+  const model = { kind: "model", host: "h1", id: "a" }
+  assert.deepStrictEqual(M.keyAction("t", model, row({ unit: "active" })), { type: "share", host: "h1", id: "a" })
+  assert.deepStrictEqual(M.keyAction("T", model, row({ unit: "inactive", shared: true })), { type: "unshare", host: "h1", id: "a" })
+  assert.strictEqual(M.keyAction("t", model, row({ unit: "active" }), "", false, true), null, "held down")
+  assert.strictEqual(M.keyAction("t", model, row({ unit: "active" }), "", true), null, "a machine that isn't answering")
+  assert.strictEqual(M.keyAction("t", model, row({ unit: "active" }), "", false, false, "share"), null, "its own click runs")
+  assert.strictEqual(M.keyAction("t", { kind: "host", host: "h1" }, null), null)
+})
+
+test("actionNotice: a share says what the engine said", () => {
+  assert.strictEqual(M.actionNotice("share", "Sharing a on your tailnet at https://x/local-ai/a/v1\n"), "Sharing a on your tailnet at https://x/local-ai/a/v1")
+})
+
 // ---- the engine's real answers (tests/js/fixtures: `startdgx status` and `list` of a DGX Spark, gx10-f5f4) ----
 
 const fs = require("node:fs")
