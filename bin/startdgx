@@ -625,7 +625,7 @@ def cmd_recipe_confirm(args):
 
 def cmd_recipe(args):
   return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
-          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm}[args.verb](args)
+          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft}[args.verb](args)
 
 
 def cmd_delete(args):
@@ -1513,6 +1513,135 @@ def cmd_hf_search(args):
     print("No known-family MLX 4-bit repos matched", file=sys.stderr)
 
 
+# recipe draft: a complete user recipe for one repo that passes the same checks as a search row, in the shape of the curated
+# TensorFold MLX recipes. Every value comes from the Hugging Face API (the pinned commit, the license, the weights' size); the
+# variant is `drafted` with its memory placeholders equal to the weights' size, which never count as fitting (ADR 0001).
+DRAFT_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+DRAFT_CTX = 8192
+DRAFT_FILES = ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"]
+DRAFT_FREE_LICENSES = re.compile(r"^(apache-2\.0|mit|isc|unlicense|cc0-1\.0|cc-by-4\.0|bsd(-[0-9a-z]+)*|bsl-1\.0|mpl-2\.0)$")
+DRAFT_TEMPLATE = """# Drafted by startdgx from {repo}. The memory numbers are placeholders equal to the weights' size and the variant is
+# `drafted`, so it never counts as fitting: measure it (recipe measure) or confirm numbers of your own.
+name = {name}
+summary = {summary}
+runtime = "tensorfold"
+
+[[hardware]]
+gpu = "nvidia-gb10"
+ram_class = 128
+
+# MLX affine 4-bit export. The server loads the directory.
+[[artifacts]]
+repo = {repo_q}
+revision = "{revision}"
+license = {license}
+files = {files}
+dest = "target"
+model = "."
+
+[[variant]]
+ctx = {ctx}
+peak_ram_gib = {gib}
+peak_gpu_gib = {gib}
+source = "drafted"
+"""
+
+
+def draft_id(repo):
+  slug = re.sub(r"[^a-z0-9.]+", "-", repo.split("/", 1)[1].lower())
+  slug = re.sub(r"(-\.|\.-|\.\.)+", "-", slug).strip("-.")
+  return slug if slug.endswith("tensorfold") else f"{slug}-tensorfold"
+
+
+def draft_name(repo):
+  name = re.sub(r"[-_ ]*MLX[-_ ]*4-?bit.*$", "", repo.split("/", 1)[1], flags=re.I) or repo.split("/", 1)[1]
+  return re.sub(r"[-_]+", " ", name).strip()
+
+
+def draft_license(info):
+  card = info.get("cardData") or {}
+  value = card.get("license")
+  if not isinstance(value, str) or not value.strip():
+    value = next((t[len("license:"):] for t in info.get("tags") or [] if isinstance(t, str) and t.startswith("license:")), None)
+  return value.strip() if isinstance(value, str) and value.strip() and not re.search(r"[\x00-\x1f\x7f]", value) else None
+
+
+def hf_draft_source(base, repo):
+  """(commit sha, license or None, weights' bytes) of a repo that passes the checks a search row passes, else an Error."""
+  info = hf_get(base, f"api/models/{repo}")
+  if not isinstance(info, dict) or info.get("id") != repo:
+    raise Error(f"{repo} wasn't found on Hugging Face (or needs a login)")
+  if info.get("gated"):
+    raise Error(f"{repo} is gated: startdgx doesn't use Hugging Face tokens, so it can't download it")
+  config = hf_get(base, f"{repo}/raw/main/config.json")
+  archs = config.get("architectures") if isinstance(config, dict) else None
+  if not (hf_is_affine_4bit(config) and isinstance(archs, list) and hf_known_families().intersection(a for a in archs if isinstance(a, str))):
+    raise Error(f"{repo} is outside what Find on Hugging Face lists: its config.json must say MLX affine 4-bit of a known family")
+  sha = info.get("sha")
+  if not isinstance(sha, str) or not re.match(r"^[0-9a-f]{40}$", sha):
+    raise Error(f"Hugging Face gave no commit for {repo}")
+  tree = hf_get(base, f"api/models/{repo}/tree/main") or []
+  sizes = [e.get("size") for e in tree if isinstance(e, dict) and str(e.get("path", "")).endswith(".safetensors") and isinstance(e.get("size"), int)]
+  if not sum(sizes):
+    raise Error(f"{repo} has no .safetensors weights")
+  return sha, draft_license(info), sum(sizes)
+
+
+def draft_host_ids(host):
+  """The ids a machine has, curated and the user's."""
+  if DEMO:
+    with demo_state() as state:
+      return {r["id"] for r in demo_host(state, host)["list"]}
+  try:
+    rows = json.loads(ssh(target(host), "recipe", "list", "--json", timeout=60).stdout)
+    return {r["id"] for r in rows}
+  except (ValueError, KeyError, TypeError) as error:
+    raise Error(f"{host} gave a recipe list startdgx can't read") from error
+
+
+def cmd_recipe_draft(args):
+  repo = args.repo
+  if not DRAFT_REPO_RE.match(repo) or any(set(part) == {"."} for part in repo.split("/")):
+    raise Error("Name the repo as OWNER/NAME, e.g. TensorFold/Qwen3.8-27B-MLX-4bit")
+  rid = args.id or draft_id(repo)
+  if not RID_RE.match(rid):
+    raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
+  base = os.path.join(DEMO_FIXTURES, "hf") if DEMO else os.environ.get("STARTDGX_HF_BASE") or HF_DEFAULT_BASE
+  sha, license_id, size = hf_draft_source(base, repo)
+  if args.host and rid in draft_host_ids(args.host):
+    raise Error(f"{args.host} already has a recipe '{rid}' (curated or yours): pick another id with --id")
+  out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                                                                       "startdgx"), "drafts")
+  path = os.path.join(out, f"{rid}.toml")
+  if os.path.lexists(path):
+    raise Error(f"{path} already exists: pick another id with --id, or delete the file")
+  gib = -(-size * 10 // 2**30) / 10
+  warnings = []
+  if license_id is None:
+    warnings.append("License unknown: Hugging Face reports none for this repo, so read its model card before you use it")
+  elif not DRAFT_FREE_LICENSES.match(license_id.lower()):
+    warnings.append(f"License '{license_id}' may restrict use: read its terms before you use it")
+  text = DRAFT_TEMPLATE.format(repo=repo, name=json.dumps(draft_name(repo)), repo_q=json.dumps(repo), revision=sha,
+                               summary=json.dumps(f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
+                               license=json.dumps(license_id or "unknown"), files=json.dumps(DRAFT_FILES), ctx=DRAFT_CTX, gib=gib)
+  os.makedirs(out, exist_ok=True)
+  try:
+    with open(path, "x", encoding="utf-8") as handle:
+      handle.write(text)
+  except OSError as error:
+    raise Error(f"{path} can't be written: {error.strerror}") from error
+  result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
+            "placeholder_gib": gib, "source": "drafted", "warnings": warnings}
+  if args.json:
+    print(json.dumps(result))
+    return
+  print(f"Drafted {rid} from {repo} at {sha[:12]}: {path}")
+  print(f"  license {result['license']}; weights {size_text(size)}; the variant is drafted, with {gib} GiB placeholders that never count as fitting")
+  for warning in warnings:
+    print(f"  Warning: {warning}")
+  print(f"  next: startdgx recipe add HOST {path}")
+
+
 # Demo mode (STARTDGX_DEMO=1, or the marker file ~/.config/startdgx/demo/ENABLED): the commands serve the fixtures in
 # demo/ and change a copy of them under $XDG_STATE_HOME/startdgx-demo, so the panel can be clicked through, and no
 # process is ever run. Starts, stops, setups and removals take effect over time, as on a real host: each row is
@@ -1935,7 +2064,7 @@ def demo_recipe_confirm(args):
 
 def demo_recipe(args):
   return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
-          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm}[args.verb](args)
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft}[args.verb](args)
 
 
 def demo_delete(args):
@@ -2083,7 +2212,7 @@ def build_parser():
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm")
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|draft")
   for verb in ("validate", "add", "list", "remove", "measure", "confirm"):
     r = rv.add_parser(verb)
     r.add_argument("host")
@@ -2100,6 +2229,14 @@ def build_parser():
     r.add_argument("--timeout", type=int, default=None if verb == "measure" else 60,
                    help="seconds to wait for the host (default: 60; measure --yes 3600)")
     r.set_defaults(fn=cmd_recipe)
+  rd = rv.add_parser("draft", description="Write a user recipe for a Hugging Face repo that passes the Find checks (hf search), from this "
+                     "computer, with no model: its pinned commit, license and one drafted variant whose placeholder numbers equal the weights' size.")
+  rd.add_argument("repo", help="OWNER/NAME")
+  rd.add_argument("--id", help="the recipe id (default: the repo name slugified, owner dropped, plus -tensorfold)")
+  rd.add_argument("--out", help="the folder to write ID.toml in (default: ~/.local/state/startdgx/drafts)")
+  rd.add_argument("--host", help="also refuse an id this machine's recipes (curated or yours) already have")
+  rd.add_argument("--json", action="store_true", help="as {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}")
+  rd.set_defaults(fn=cmd_recipe)
   de = add("delete", cmd_delete, model=True)
   de.add_argument("--dry-run", action="store_true", help="print what removing it would free and change nothing")
   de.add_argument("--json", action="store_true", help="with --dry-run: as {recipe, setting_up, bytes}")

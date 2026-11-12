@@ -1,0 +1,22 @@
+{
+ "id": "someone/Mystery-70B-MLX-4bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx"
+  ],
+  "license": "mit"
+ },
+ "tags": [
+  "mlx",
+  "license:mit"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 8750000000
+  },
+  "total": 70000000000
+ },
+ "sha": "6ece34da3874cd0d813d14a9038f5e32bd1484ec"
+}

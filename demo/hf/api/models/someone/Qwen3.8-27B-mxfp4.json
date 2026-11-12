@@ -1,0 +1,23 @@
+{
+ "id": "someone/Qwen3.8-27B-mxfp4",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx"
+  ],
+  "license": "apache-2.0",
+  "base_model": "Qwen/Qwen3.8-27B"
+ },
+ "tags": [
+  "mlx",
+  "license:apache-2.0"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 3419591070
+  },
+  "total": 27356728560
+ },
+ "sha": "9c7a4389c190a87bda2761972f718b42aa58dfa4"
+}

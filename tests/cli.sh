@@ -1162,4 +1162,75 @@ kill "$hfsrv" 2>/dev/null; wait "$hfsrv" 2>/dev/null
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
 same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+# recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
+# checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).
+drafts=$tmp/drafts
+draft() { STARTDGX_HF_BASE=$here/demo/hf s recipe draft --out "$drafts" "$@"; }
+dd() { local cond=$1; shift; draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+tf=TensorFold/Qwen3.8-27B-MLX-4bit
+out=$(draft $tf); ok $? "recipe draft writes a recipe"
+present "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "named for the repo, owner dropped, slugified, with -tensorfold appended"
+python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+a = r["artifacts"]
+v = r["variant"]
+gib = -(-16074529674 * 10 // 2**30) / 10
+ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 1 and len(v) == 1
+      and r["hardware"] == [{"gpu": "nvidia-gb10", "ram_class": 128}]
+      and a[0] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0",
+                   "files": ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"], "dest": "target", "model": "."}
+      and v[0]["source"] == "drafted" and v[0]["peak_ram_gib"] == gib and v[0]["peak_gpu_gib"] == gib and v[0]["ctx"] > 0)
+sys.exit(not ok)
+F
+ok $? "it has the TensorFold artifact block of the curated recipes, the full commit sha, the license, and one drafted variant sized to the weights"
+dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": []}' $tf --id qwen3.8-draft
+ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}, and --id names the file"
+present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
+printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
+printf '%s' "$out" | grep -qi 'warning'; ok $((!$?)) "a permissive license warns of nothing"
+printf '%s' "$out" | grep -q 'recipe add'; ok $? "and says how to add it"
+out=$(draft $tf 2>&1); ok $((!$?)) "a draft is never overwritten"
+printf '%s' "$out" | grep -q -- '--id'; ok $? "and the clash asks for --id"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\necho %s\n' "'[{\"id\":\"mine\",\"user\":true},{\"id\":\"qwen3.8-27b-tensorfold\"}]'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
+s add me@dgx >/dev/null 2>&1
+out=$(draft $tf --host me@dgx --id mine 2>&1); ok $((!$?)) "an id the host already has fails"
+printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -q mine; ok $? "naming the id and asking for --id"
+s add me@dgx >/dev/null 2>&1; : >"$FAKE_LOG"
+draft $tf --host me@dgx --id fresh-one >/dev/null; ok $? "an id the host doesn't have passes the host check"
+grep -q 'recipe list --json' "$FAKE_LOG"; ok $? "which asks the host only for its recipe list"
+dd '"license" in d and d["warnings"] and "other" in d["warnings"][0]' LiquidAI/LFM2.5-24B-A2B-MLX-4bit --id lfm-a
+ok $? "a restrictive license warns and still writes the draft"
+dd 'd["license"] == "unknown" and d["warnings"] and "unknown" in d["warnings"][0]' someone/Gemma-4-31B-uncensored-MLX-4bit --id gemma-a
+ok $? "an unknown license is written as unknown and warns"
+grep -q '^license = "unknown"' "$drafts/gemma-a.toml"; ok $? "so the engine's non-empty license rule holds"
+out=$(draft someone/Qwen3.8-27B-gated-MLX-4bit 2>&1); ok $((!$?)) "a gated repo is refused"
+printf '%s' "$out" | grep -qi gated; ok $? "saying it is gated"
+for r in someone/Mystery-70B-MLX-4bit someone/Qwen3.8-27B-MLX-8bit someone/Qwen3.8-27B-bf16 someone/Broken-Config-MLX-4bit someone/No-Config-MLX-4bit nobody/Missing-MLX-4bit; do
+  draft "$r" --id refused >/dev/null 2>&1; ok $((!$?)) "$r is outside the Find checks and refused"
+done
+none_of "$drafts/refused.toml"; ok $? "a refusal writes nothing"
+for r in notarepo ../x/y a/b/c -x/y; do draft -- "$r" >/dev/null 2>&1; ok $((!$?)) "'$r' is not an OWNER/NAME repo"; done
+draft $tf --id Not_An_Id >/dev/null 2>&1; ok $((!$?)) "an --id that can't be a recipe id is refused"
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s recipe draft $tf --out "$drafts" 2>&1); ok $((!$?)) "offline fails"
+printf '%s' "$out" | grep -q "Can't reach Hugging Face"; ok $? "saying so"
+# The engine's own validation, when a checkout of the fork is there: a draft passes, as a user recipe named for its id.
+engine_checkout=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
+if [ -x "$engine_checkout/omarchy-local-ai" ] && [ -f "$engine_checkout/agent_local.py" ]; then
+  for f in qwen3.8-27b-mlx-4bit-tensorfold lfm-a gemma-a; do
+    out=$("$engine_checkout/omarchy-local-ai" recipe validate "$drafts/$f.toml" 2>&1); ok $? "the engine's own recipe validate accepts the draft $f${out:+ ($out)}"
+  done
+  d2=$tmp/drafts-clash; STARTDGX_HF_BASE=$here/demo/hf s recipe draft $tf --id qwen3.8-27b-tensorfold --out "$d2" >/dev/null
+  "$engine_checkout/omarchy-local-ai" recipe validate "$d2/qwen3.8-27b-tensorfold.toml" 2>&1 | grep -q 'clashes with the curated'; ok $? "and the engine rejects a draft whose id clashes with a curated recipe, as the contract says"
+else
+  ok 0 "skipped the engine contract test: no fork checkout (set STARTDGX_ENGINE)"
+fi
+# Demo mode: the same, on the bundled fixtures, in the demo's state folder, and never the network or a process.
+ddraft() { local cond=$1; shift; STARTDGX_HF_BASE=http://127.0.0.1:9 ds recipe draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+ddraft 'd["id"] == "qwen3.8-27b-mlx-4bit-tensorfold" and d["source"] == "drafted" and d["path"].startswith("'"$tmp"'/state/startdgx-demo/")' $tf
+ok $? "demo recipe draft serves the bundled fixtures, ignores STARTDGX_HF_BASE, and writes under the demo's state folder"
+ds recipe draft $tf >/dev/null 2>&1; ok $((!$?)) "and a demo draft is not overwritten either"
+ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
+ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo draft never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad
