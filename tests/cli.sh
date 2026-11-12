@@ -23,7 +23,7 @@ case "$cmd" in
     printf '%s\n' "$found" | grep -E '^file:.*=.'; printf '%s\n' "$found" | grep -qx link_kind=none || printf '%s\n' "$found" | grep '^link_';;
   "bash -s -- startdgx-"*) rooted | host bash -s;;
   "sudo bash -c "*" startdgx-uninstall") printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi
-    script=$(printf '%s' "${cmd#sudo }" | rooted); host eval "$script";;
+    script=$(printf '%s' "${cmd#sudo }" | rooted); FAKE_AS_ROOT=1 host eval "$script";;
   "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/engine-root" ]; then root=$root bash "$FAKE_HOST/engine-root"; fi
     if [ -f "$FAKE_HOST/probe.after" ]; then cp "$FAKE_HOST/probe.after" "$FAKE_HOST/probe"; fi
     if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi;;
@@ -54,13 +54,14 @@ for tool in systemctl loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; do
 printf '#!/usr/bin/env bash\necho me\n' >"$FAKE_HOSTBIN/id"
 # The user's systemd manager is running.
 { cat "$tmp/stub"; echo 'echo 4242'; } >"$FAKE_HOSTBIN/pgrep"
-# apt-get -s prints what apt would remove: the named packages, and those in $FAKE_HOST/apt-also.
+# apt-get -s prints what apt would remove: the named packages, those in $FAKE_HOST/apt-also, and as root those in
+# apt-also-root (what changed since a check as the user).
 cat >"$FAKE_HOSTBIN/apt-get" <<'F'
 #!/usr/bin/env bash
 printf '%s\n' "apt-get $*" >>"$FAKE_HOST/calls"
 if [ "$1" = -s ]; then
   echo "NOTE: This is only a simulation!"
-  for pkg in "${@:3}" $(cat "$FAKE_HOST/apt-also" 2>/dev/null); do [ "$pkg" = -- ] || echo "Remv $pkg [1.0-1]"; done
+  for pkg in "${@:3}" $(cat "$FAKE_HOST/apt-also" ${FAKE_AS_ROOT:+"$FAKE_HOST/apt-also-root"} 2>/dev/null); do [ "$pkg" = -- ] || echo "Remv $pkg [1.0-1]"; done
 fi
 F
 cat >"$FAKE_HOSTBIN/podman" <<'F'
@@ -225,8 +226,8 @@ earlier "$(first_line startdgx-backup)" "$(first_line '^sudo bash -c')"; ok $? "
 
 # An engine that was there before startdgx: install replaces it only when told to, keeping a copy.
 old_engine=$FAKE_HOST/home/.local/share/omarchy-local-ai
-engine_there() { fresh_host "$@"; mkdir -p "$old_engine"; echo "old engine" >"$old_engine/agent_local.py"
-  spark "$@" "engine=$(sha256sum <"$old_engine/agent_local.py" | cut -c1-64)" >"$FAKE_HOST/probe"; after "$@" "engine=$(printf '%064d' 9)"; : >"$FAKE_LOG"; }
+engine_there() { fresh_host; mkdir -p "$old_engine"; echo "old engine" >"$old_engine/agent_local.py"
+  spark "engine=$(sha256sum <"$old_engine/agent_local.py" | cut -c1-64)" >"$FAKE_HOST/probe"; after "engine=$(printf '%064d' 9)"; : >"$FAKE_LOG"; }
 engine_there
 out=$(s install me@spark --engine-path "$engine" 2>&1); ok $((!$?)) "install refuses to overwrite an engine it didn't install"
 echo "$out" | grep -q 'omarchy-local-ai' && echo "$out" | grep -q -- '--replace-engine'; ok $? "it says why, and how to replace it"
@@ -387,10 +388,22 @@ engine_root="ln -sfn /opt/someone-else \"\$root$link\""; installed; engine_root=
 printf '# mine now\n' >"$r$limits"
 s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where files it created were changed since"
 present "$r$limits" && same "$(readlink "$r$link")" /opt/someone-else; ok $? "a created file without the engine's header, and an agent link not at the engine, are left"
-changed=(podman=yes); installed podman=no; changed=()
-s uninstall --delete-models --remove-packages me@spark >/dev/null; ok $? "uninstall --delete-models --remove-packages succeeds"
+changed=(podman=yes python3=yes); installed podman=no python3=no; changed=()
+out=$(s uninstall --delete-models --remove-packages me@spark 2>&1); ok $? "uninstall --delete-models --remove-packages succeeds"
 none_of "$h/.local/share/omarchy"; ok $? "--delete-models deletes the model weights"
-grep -q 'apt-get remove -y -qq podman;' "$FAKE_HOST/root-call"; ok $? "--remove-packages removes the packages the install added"
+grep -qx 'apt-get remove -y -qq podman' "$FAKE_HOST/calls"; ok $? "--remove-packages removes the packages the install added"
+! grep -q 'apt-get remove.*python3' "$FAKE_HOST/calls" && echo "$out" | grep -q 'keep python3'; ok $? "--remove-packages never removes python3, and says so"
+! grep -q pacman "$FAKE_HOST/root-call"; ok $? "the root part only knows apt (install only supports DGX OS)"
+
+changed=(podman=yes); installed podman=no; changed=(); echo podman-docker >"$FAKE_HOST/apt-also"; before=$(tree)
+out=$(s uninstall --dry-run --remove-packages me@spark 2>&1); ok $((!$?)) "uninstall --dry-run --remove-packages refuses when apt would remove more"
+echo "$out" | grep -q podman-docker; ok $? "and names what else apt would remove"
+out=$(s uninstall --remove-packages me@spark 2>&1); ok $((!$?)) "uninstall --remove-packages refuses when apt would remove more"
+same "$(tree)" "$before" && none_of "$FAKE_HOST/root-call" && echo "$out" | grep -q podman-docker; ok $? "and changes nothing"
+changed=(podman=yes); installed podman=no; changed=(); echo podman-docker >"$FAKE_HOST/apt-also-root"
+out=$(s uninstall --remove-packages me@spark 2>&1); ok $((!$?)) "the root part also refuses a removal that would take more"
+! grep -qx 'apt-get remove -y -qq podman' "$FAKE_HOST/calls" && present "$FAKE_MANIFEST" && none_of "$r$limits" && echo "$out" | grep -q podman-docker
+ok $? "it keeps the packages and the manifest, and reverts the rest"
 
 installed; : >"$FAKE_HOST/podman/used-${img//[\/:@]/_}"
 out=$(s uninstall me@spark 2>&1); [ -e "$FAKE_HOST/podman/image-${img//[\/:@]/_}" ] && echo "$out" | grep -qF "kept $img"; ok $? "an image a container still uses is kept"

@@ -610,6 +610,24 @@ def restore(path, backup, sha, put_back):
           f'else echo "  left {path}: its backup {backup} is missing or changed" >&2; failed=1; fi')
 
 
+def removable_packages(manifest):
+  """The packages the install added that --remove-packages may remove: never python3, which the system needs."""
+  created = ours(manifest, "created_by_us")
+  return [name for name in PACKAGES if ("package", name) in created and name != "python3"]
+
+
+APT_REMOVES = re.compile(r"^Remv ([^ :]+)")
+
+
+def check_apt_removal(host, packages):
+  """Refuses, before anything changes, a removal that would take more than the named packages with them."""
+  names = " ".join(packages)
+  out = ssh_raw(host, "bash -s -- startdgx-apt-check", stdin=f"LC_ALL=C apt-get -s remove {names}\n", timeout=60, what="apt-get -s remove").stdout
+  extra = sorted({match[1] for match in map(APT_REMOVES.match, out.splitlines()) if match} - set(packages))
+  if extra:
+    raise Error(f"Removing {names} would also remove {' '.join(extra)}; run uninstall without --remove-packages, or remove them yourself")
+
+
 def root_plan(manifest, state, args):
   """The root steps, which undo only what the manifest marks created_by_us or changed_by_us, and what is kept.
   Only paths and names of our own are acted on, each checked again on the host: the manifest is the user's to edit."""
@@ -656,12 +674,15 @@ def root_plan(manifest, state, args):
       steps.append((f"restore {AGENT_LINK} from {backup}", restore(AGENT_LINK, backup, sha, put_back)))
     else:
       kept.append(f"keep {AGENT_LINK}: the manifest doesn't say what was there before")
-  items = created
-  packages = [name for name in PACKAGES if ("package", name) in items]
+  if ("package", "python3") in created:
+    kept.append("keep python3: the system needs it, so it's never removed")
+  packages = removable_packages(manifest)
   if packages and args.remove_packages:
-    names = " ".join(packages)
-    steps.append((f"remove the packages {names}", f"if command -v apt-get >/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq {names}; "
-                                                 f"elif command -v pacman >/dev/null; then pacman -R --noconfirm {names}; fi"))
+    names, others = " ".join(packages), " ".join(f"-e {name}" for name in packages)
+    steps.append((f"remove the packages {names}",
+                  f'extra=$(LC_ALL=C apt-get -s remove {names} | sed -n "s/^Remv \\([^ :]*\\).*/\\1/p" | grep -vx {others} || true); '
+                  f'if [ -n "$extra" ]; then echo "  kept {names}: apt would also remove" $extra >&2; failed=1; '
+                  f"else DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq {names}; fi"))
   elif packages:
     kept.append(f"keep the packages {' '.join(packages)} (the install added them; --remove-packages removes them)")
   return steps, kept
@@ -697,6 +718,8 @@ def cmd_uninstall(args):
     raise Error(f"The manifest on {host} is for {pre.get('user')} ({pre.get('home')}), not {state['user']} ({state['home']})")
   user_steps, user_kept = user_plan(manifest, state, args)
   root_steps, root_kept = root_plan(manifest, state, args)
+  if args.remove_packages and removable_packages(manifest):
+    check_apt_removal(host, removable_packages(manifest))
   final = [f"delete {MANIFEST} and the backups", f"forget {host} here"]
   if args.dry_run:
     print(f"Would, on {host}:")
