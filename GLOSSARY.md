@@ -43,3 +43,15 @@ _Avoid_: Compatible, supported
 **Share**:
 Making a model reachable by other Omarchy machines over the tailnet.
 _Avoid_: Publish, expose
+
+**Known family**:
+A model architecture that TensorFold is known to serve on the GB10, from its README's checked checkpoints; search lists only repos of a known family.
+_Avoid_: Supported architecture, compatible model
+
+**Draft**:
+The recipe file written for a Hugging Face repo before any measuring run; its variant numbers are placeholders marked `drafted`.
+_Avoid_: Generated recipe, auto-recipe
+
+**Authoring brief**:
+The instructions an agent works from when it helps finish a draft: the recipe rules, the CLI steps it may use, and the limits on downloads and measuring runs.
+_Avoid_: Prompt, system prompt
