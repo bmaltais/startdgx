@@ -1149,3 +1149,18 @@ test("draftErrorText drops the CLI's --id advice, which the card can't act on", 
   assert.strictEqual(M.draftErrorText("/d/x.toml already exists: pick another id with --id, or delete the file"), "/d/x.toml already exists: delete the file to draft it again")
   assert.strictEqual(M.draftErrorText("Hugging Face did not answer"), "Hugging Face did not answer")
 })
+
+test("authorLaunch opens a terminal on the repo through launch, so the draft's errors and the agent show there", () => {
+  assert.deepStrictEqual(M.authorLaunch("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"), { verb: "author", host: "me@dgx", id: "TensorFold/Qwen3.8-27B-MLX-4bit" })
+})
+
+test("authorLaunch refuses what is not an OWNER/NAME repo, as the CLI does", () => {
+  for (const repo of ["", "notarepo", "../x/y", "a/b/c", "-x y/z", "a/..", null, undefined]) assert.strictEqual(M.authorLaunch("me@dgx", repo), null, String(repo))
+})
+
+test("the agent pill says an agent opens in a terminal and that downloads and measuring runs wait for the person", () => {
+  assert.strictEqual(M.AUTHOR_TEXT, "With an agent…")
+  assert.match(M.authorHint(), /terminal/)
+  assert.match(M.authorHint(), /asks before any download or measuring run/)
+  assert.doesNotMatch(M.authorHint(), /fits?\b/i)
+})
