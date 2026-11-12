@@ -307,7 +307,7 @@ same "$(tree)" "$before" && none_of "$FAKE_HOST/root-call" && ! grep -qv -e 'sta
 echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/models.json' && ! echo "$out" | grep -q '/mine' \
   && echo "$out" | grep -q 'omarchy-agent-local-model-q2.container' && ! echo "$out" | grep -q 'mine.container' \
   && [ "$(echo "$out" | grep -c "$img")" = 1 ] && echo "$out" | grep -q 'disable linger for me' \
-  && echo "$out" | grep -q "keep .*1.0 MiB"; ok $? "uninstall --dry-run lists what it would change and keep"
+  && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds"
@@ -322,6 +322,9 @@ none_of "$q"/omarchy-agent-local* "$h/.config/omarchy/agent-local" "$h/.local/st
 ok $? "uninstall removes the engine, its quadlets, state, config, network, secret and image"
 present "$q/mine.container" "$h/.config/omarchy/other"; ok $? "uninstall keeps what isn't the engine's"
 [ -f "$h/.local/share/omarchy/agent-local/models/q1/blob" ] && echo "$out" | grep -q 'keep .*1.0 MiB'; ok $? "uninstall keeps the model weights by default and says how much"
+echo "$out" | grep -q 'omarchy agent local forget' && echo "$out" | grep -q 'authorized_keys'
+ok $? "uninstall says to forget the host on paired Omarchy machines, and that its authorized_keys entry stays"
+s uninstall --help | grep -q 'kept by default'; ok $? "uninstall --help says the models are kept by default"
 r=$FAKE_HOST/root
 grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link"; ok $? "uninstall undoes as root what the install created"
 grep -qx -- -t "$FAKE_HOST/root-call" && tail -1 "$FAKE_HOST/root-call" | grep -q " startdgx-uninstall$"; ok $? "the root part is one sudo script run with a terminal"

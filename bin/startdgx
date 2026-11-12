@@ -513,13 +513,17 @@ def size_text(n):
   return f"{n / 2**30:.1f} GiB" if n >= 2**30 else f"{n / 2**20:.1f} MiB"
 
 
+def engine_is_ours(manifest, state):
+  """Whether the install created the engine; what an engine that was there before set up isn't startdgx's."""
+  return ("engine", f"{state['home']}/{ENGINE_DIR}") in ours(manifest, "created_by_us")
+
+
 def user_plan(manifest, state, args):
   """The steps under the user's home, in order, and what is kept: each step is (what it does, its shell).
   Units stop first; the engine goes last, since the units' hooks call it."""
   q, exists = shlex.quote, set(state["exists"])
   steps, kept = [], []
-  engine_path = f"{state['home']}/{ENGINE_DIR}"
-  if (("engine", engine_path)) not in ours(manifest, "created_by_us"):
+  if not engine_is_ours(manifest, state):
     return replaced_engine_plan(manifest, state, args)
   if ENGINE_DIR in exists:
     for rid in shared_recipes(state):
@@ -728,6 +732,7 @@ def cmd_uninstall(args):
       print(f"  {what}")
     for what in user_kept + root_kept:
       print(f"  {what}")
+    print_manual_steps(host)
     return
   # The manifest and backups go only once everything else has, so a rerun after a failure finds them.
   print(f"Removing what the engine set up on {host}")
@@ -738,11 +743,20 @@ def cmd_uninstall(args):
   run_steps(host, "finish", FINISH, args.timeout)
   for what in user_kept + root_kept:
     print(f"  {what}")
-  if ENGINE_DATA in state["exists"] and not args.delete_models:
+  if ENGINE_DATA in state["exists"] and not args.delete_models and engine_is_ours(manifest, state):
     print(f"  to delete the weights later: ssh {host} rm -rf ~/{ENGINE_DATA}")
   print(f"Uninstalled from {host}")
+  print_manual_steps(host)
   if host in load_hosts():
     cmd_remove_host(args)
+
+
+def print_manual_steps(host):
+  """What uninstall can't do from here: the paired clients and the host's SSH access are someone else's."""
+  print("Left for you to do:")
+  print(f"  on each Omarchy machine paired with {host}, run: omarchy agent local forget <its tailnet name>")
+  print(f"  {host}:~/.ssh/authorized_keys still has the keys of the machines that reach it over SSH (this one, and any "
+        "Omarchy machine that paired with it); remove their lines yourself if they shouldn't any more")
 
 
 def run_steps(host, phase, script, timeout):
@@ -764,8 +778,8 @@ def build_parser():
   p = argparse.ArgumentParser(prog="startdgx", description=__doc__)
   sub = p.add_subparsers(dest="command", required=True)
 
-  def add(name, fn, model=False, optional_model=False, timeout=60):
-    s = sub.add_parser(name)
+  def add(name, fn, model=False, optional_model=False, timeout=60, description=None):
+    s = sub.add_parser(name, description=description)
     if name not in ("hosts", "engine"):
       s.add_argument("host")
     if model:
@@ -783,7 +797,10 @@ def build_parser():
   i.add_argument("--engine-path", metavar="DIR", help=f"copy this engine checkout instead of cloning {ENGINE_TAG}")
   i.add_argument("--replace-engine", action="store_true",
                  help=f"replace an engine startdgx didn't install, backing it up to ~/{ENGINE_BACKUP} for uninstall to put back")
-  u = add("uninstall", cmd_uninstall, timeout=3600)
+  u = add("uninstall", cmd_uninstall, timeout=3600,
+          description="Reverse startdgx install from its manifest on the host. The model weights are kept by default "
+                      "(--delete-models deletes them). Afterwards, run omarchy agent local forget on each Omarchy machine "
+                      "paired with the host; its ~/.ssh/authorized_keys entries are left for you to remove.")
   u.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")
   u.add_argument("--delete-models", action="store_true", help="also delete the downloaded model weights (kept by default)")
   u.add_argument("--remove-packages", action="store_true", help="also remove the packages the install added")
