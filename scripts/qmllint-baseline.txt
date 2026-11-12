@@ -1,0 +1,74 @@
+AddMachineView.qml	import	Button was not found. Did you add all imports and dependencies?
+AddMachineView.qml	import	Failed to import qs.Commons. Are your import paths set up properly?
+AddMachineView.qml	import	Failed to import qs.Ui. Are your import paths set up properly?
+AddMachineView.qml	import	Warnings occurred while importing module "qs.Commons":
+AddMachineView.qml	import	Warnings occurred while importing module "qs.Ui":
+AddMachineView.qml	missing-property	Member "accent" not found on type "QQuickColor"
+AddMachineView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+AddMachineView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+AddMachineView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+AddMachineView.qml	unqualified	Style
+AddMachineView.qml	unqualified	Util
+BarWidget.qml	import	BarIconButton was not found. Did you add all imports and dependencies?
+BarWidget.qml	inheritance-cycle	BarWidget is part of an inheritance cycle: BarWidget -> BarWidget
+BarWidget.qml	missing-property	Member "accent" not found on type "QQuickColor"
+BarWidget.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+BarWidget.qml	type-instantiated-recursively	Type "BarWidget" can't be instantiated recursively
+BarWidget.qml	unqualified	anchors
+BarWidget.qml	unqualified	parent
+BarWidget.qml	unresolved-type	Type BarWidget is used but it is not resolved
+BarWidget.qml	unresolved-type	Type anchors is used but it is not resolved
+HostSection.qml	missing-property	Member "accent" not found on type "QQuickColor"
+HostSection.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+HostSection.qml	missing-property	Member "muted" not found on type "QQuickColor"
+HostSection.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+HostSection.qml	unqualified	Style
+HostSection.qml	unqualified	Util
+ManagerView.qml	import	Button was not found. Did you add all imports and dependencies?
+ManagerView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+ManagerView.qml	missing-property	Member "menu" not found on type "QQuickColor"
+ManagerView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+ManagerView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+ManagerView.qml	unqualified	Style
+Meter.qml	missing-property	Member "accent" not found on type "QQuickColor"
+Meter.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+Meter.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+Meter.qml	unqualified	Style
+ModelRow.qml	import	Button was not found. Did you add all imports and dependencies?
+ModelRow.qml	import	PanelToolTip was not found. Did you add all imports and dependencies?
+ModelRow.qml	missing-property	Member "accent" not found on type "QQuickColor"
+ModelRow.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+ModelRow.qml	missing-property	Member "muted" not found on type "QQuickColor"
+ModelRow.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+ModelRow.qml	unqualified	Style
+ModelRow.qml	unqualified	Util
+ModelRow.qml	unqualified	le.fo
+ModelRow.qml	unqualified	le.sp
+ScrollTrack.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+ScrollTrack.qml	unqualified	Style
+ScrollTrack.qml	unqualified	Util
+Service.qml	import	Button was not found. Did you add all imports and dependencies?
+Service.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+Service.qml	missing-property	Member "menu" not found on type "QQuickColor"
+Service.qml	uncreatable-type	Type PanelWindow is not creatable.
+Service.qml	unqualified	Style
+Service.qml	unqualified	Util
+Service.qml	unqualified	anchors
+Service.qml	unqualified	parent
+Service.qml	unresolved-type	Type anchors is used but it is not resolved
+SettingsPill.qml	missing-property	Member "accent" not found on type "QQuickColor"
+SettingsPill.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+SettingsPill.qml	missing-property	Member "menu" not found on type "QQuickColor"
+SettingsPill.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+SettingsPill.qml	unqualified	Style
+SettingsPill.qml	unqualified	Util
+TextLink.qml	import	PanelToolTip was not found. Did you add all imports and dependencies?
+TextLink.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+TextLink.qml	unqualified	Style
+TextLink.qml	unqualified	Util
+UninstallView.qml	missing-property	Member "foreground" not found on type "QQuickColor"
+UninstallView.qml	missing-property	Member "muted" not found on type "QQuickColor"
+UninstallView.qml	missing-property	Member "urgent" not found on type "QQuickColor"
+UninstallView.qml	unqualified	Style
+VendorIcon.qml	missing-property	Member "menu" not found on type "QQuickColor"
+VendorIcon.qml	unqualified	Style

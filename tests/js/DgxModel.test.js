@@ -74,6 +74,8 @@ test("toggleAction: what the play/pause button does, and when it waits", () => {
   assert.strictEqual(M.startBlocked(row({ unit: "inactive", fits: false })), true)
   assert.strictEqual(M.startBlocked(row({ unit: "active", fits: false })), false)
   assert.strictEqual(M.startBlocked(row({ unit: "inactive" })), false)
+  assert.strictEqual(M.startBlocked(row({ unit: "installing", fits: false, install: { phase: "downloading" } })), false, "a setup has no play button to grey out")
+  assert.strictEqual(M.startBlocked(row({ unit: "deactivating", fits: false })), false)
 })
 
 test("phaseProgress runs to 90% at the expected time, then creeps toward 98%", () => {

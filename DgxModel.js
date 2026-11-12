@@ -52,7 +52,7 @@ function modelState(entry, pending) {
 
 // Not enough free memory to start: the play button is greyed out (not hidden, so its reason shows on hover).
 function startBlocked(entry) {
-  return !!entry && entry.unit !== "active" && entry.unit !== "activating" && entry.fits === false
+  return !!entry && (entry.unit === "inactive" || entry.unit === "failed") && entry.fits === false
 }
 
 // What the play/pause button does: "start", "stop", or null while it waits (stopping, removing, a setup, no room).
