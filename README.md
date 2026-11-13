@@ -5,6 +5,47 @@ It drives the [omarchy-local-ai](https://github.com/omacom/omarchy-local-ai) eng
 changes it. For a Spark on plain DGX OS, the host runs our fork of the engine (it emulates an Omarchy-based
 DGX), so other Omarchy machines see its models through the usual tailnet sharing.
 
+## Install on a DGX Spark
+
+You need an Omarchy desktop (the controller) and a DGX Spark on plain DGX OS (the host), both on the same Tailscale tailnet.
+startdgx never touches the Spark until you run step 5, and step 5 shows its plan first.
+
+1. **Install the plugin on the Omarchy desktop.**
+   ```
+   omarchy plugin add https://github.com/bmaltais/startdgx.git --enable
+   ```
+   Then open the panel with `omarchy-shell io.github.bmaltais.startdgx open`, or add the StartDGX widget to the bar.
+   The CLI is `~/.config/omarchy/plugins/io.github.bmaltais.startdgx/bin/startdgx`; the steps below use `startdgx` for it
+   (`alias startdgx=~/.config/omarchy/plugins/io.github.bmaltais.startdgx/bin/startdgx`). The panel does all of it too.
+2. **Put the Spark on your tailnet.** On the Spark, install Tailscale and run `sudo tailscale up`. Note its tailnet name
+   (`tailscale status`). Enable Tailscale Serve for the tailnet once at <https://login.tailscale.com/f/serve>; without it
+   a model can't be shared with your other machines.
+3. **Let this desktop ssh into the Spark with a key** (startdgx only uses key-based, non-interactive ssh):
+   ```
+   ssh-copy-id USER@SPARK
+   ssh USER@SPARK true   # must succeed without a password prompt
+   ```
+   Use the Spark's tailnet name for `SPARK` and its login for `USER`. The first connection must also have been accepted
+   once so its host key is known (the `ssh` above does that, as does `startdgx discover`).
+4. **Check what startdgx sees** (read-only, installs nothing): `startdgx discover`. Your Spark should be listed as a
+   Spark, not installed. In the panel: Add machine.
+5. **Install the engine on the Spark.** It needs `sudo` on the Spark, which asks for its password, so run it in a real
+   terminal (the panel's Install… opens one for you):
+   ```
+   startdgx install --dry-run USER@SPARK   # what it would change, nothing is done
+   startdgx install USER@SPARK
+   ```
+   It installs `podman`, `rsync` and `python3` if missing, the engine's GPU and RDMA settings, sets you as the
+   Tailscale operator, copies the pinned engine (`startdgx engine`) and adds the machine. A Spark that already has an
+   omarchy-local-ai engine needs `--replace-engine`: it is backed up first and put back by `uninstall`.
+6. **Add a model.** In the panel, Add model… on the machine, then Set up; the row follows the download. From the shell:
+   `startdgx list USER@SPARK`, then `startdgx use --detach USER@SPARK MODEL` and `startdgx start USER@SPARK MODEL`.
+7. **Share it with your other Omarchy machines** (optional): the Share button in the panel, or
+   `startdgx share USER@SPARK MODEL`. Other Omarchy desktops on the tailnet then list and pair it as usual.
+
+To undo it all: `startdgx uninstall --dry-run USER@SPARK`, then `startdgx uninstall USER@SPARK` (see Status for the opt-ins).
+Updates: when a newer engine is pinned, the panel offers Update… on the machine (it runs `startdgx install` again).
+
 ## Status
 
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `share`, `delete`), tests in `tests/cli.sh`
