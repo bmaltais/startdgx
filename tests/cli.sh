@@ -43,12 +43,15 @@ case "$cmd" in
   *"start slow-load"*) sleep 2; echo "Started slow-load";;
   *"start hang-load"*) echo $$ >"$FAKE_HOST.ssh-pid"; exec sleep 30;;
   # The engine's detach_use: it starts one setup unit per model and says so, or that it's already running.
-  *" use "*" --detach") rid=${cmd% --detach}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
+  *" use "*" --detach") rid=${cmd% --detach}; rid=${rid% --yes}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
     if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
     else : >"$FAKE_HOST.use-$rid"; echo "Setting up $rid in the background; follow it with: journalctl"; fi;;
   # status's own command runs for real, in zsh where there is one (the hosts' login shell), against a stub engine in the fake home.
   *"status --json"*"'#manifest'"*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
   *"status --json"*) echo '{"models":{}}';;
+  # recipe validate and add make a temp folder, copy stdin into it and run the engine on it: run for real.
+  *"mktemp -d"*"recipe "*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
+  *"recipe remove "*|*"recipe list"*|*"recipe confirm "*|*" measure "*) host sh -c "$cmd";;
   # The engine's share when tailscale serve refuses: it has already saved the share, and says why over several lines.
   *"share serve-off --off"*) echo "serve-off is no longer shared";;
   *"share serve-off"*) printf '%s\n' "Error: tailscale serve /local-ai/serve-off: Serve is not enabled on your tailnet." "To enable, visit:" "  https://login.tailscale.com/f/serve?node=n1" >&2; exit 1;;
@@ -167,7 +170,30 @@ s status me@dgx >/dev/null 2>&1; ok $((!$?)) "an unknown host is refused"
 s add me@dgx >/dev/null; ok $? "add records the host"
 grep -q '"ram_class": 128' "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "add keeps the host's profile"
 s hosts --json | grep -q me@dgx; ok $? "hosts lists it"
-eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; printf '#!/bin/sh\necho %s\n' "'{\"models\":{}}'" >"$eng/omarchy-local-ai"; chmod +x "$eng/omarchy-local-ai"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"; cat >"$eng/omarchy-local-ai" <<'F'
+#!/bin/sh
+# The engine's recipe commands, as the fork's: validate prints its errors on stdout and exits 1, add's rejection is an
+# Error: on stderr, and remove refuses a recipe a model uses, naming the model.
+if [ "$1" = recipe ]; then
+  case "$2" in
+    validate) if grep -q CLAIM "$3"; then printf '%s\n' "recipes/claim.variant[0].source: a recipe of yours can't claim measured numbers (only \`measure\` writes them); set source = \"estimated\" or source = \"drafted\"" "recipes/claim.variant[1].source: a recipe of yours can't claim measured numbers (only \`measure\` writes them); set source = \"estimated\" or source = \"drafted\""; exit 1; fi
+      if grep -q BAD "$3"; then printf '%s\n' "recipes/bad: no name" "recipes/bad: no runtime"; exit 1; fi; echo "Recipe $(basename "$3" .toml) is valid";;
+    add) if grep -q BAD "$3"; then printf '%s\n' "Error: recipes/bad: no name" "recipes/bad: no runtime" >&2; exit 1; fi
+      cp "$3" "$HOME/added.toml"; basename "$3" >"$HOME/added.name"; echo "Added recipe $(basename "$3" .toml)";;
+    remove) if [ "$3" = used ]; then echo "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used" >&2; exit 1; fi; echo "Removed recipe $3";;
+    list) echo '[{"id":"mine","user":true,"source":"drafted"}]';;
+    confirm) if [ "$3" = none ]; then echo "Error: Recipe none has no estimated variant to confirm" >&2; exit 1; fi; echo "Confirmed 1 estimated variant(s) of $3";;
+  esac
+  exit
+fi
+if [ "$1" = measure ]; then
+  printf '%s\n' "Measure $2 at context $4 (now a drafted variant)" "  download: 3.5 GiB to download (3.5 GiB in 2 file(s))" "  load: Mine on tensorfold, context $4"
+  if [ "$5" = --yes ]; then echo "Measured $2 at context $4: 61.2 GiB RAM"; echo "$2" >"$HOME/measured"; else echo "Nothing was changed. Run again with --yes to do it."; fi
+  exit
+fi
+echo '{"models":{}}'
+F
+chmod +x "$eng/omarchy-local-ai"
 s status me@dgx | grep -q models; ok $? "status passes the engine's JSON through"
 # status says when the host's engine is older than the pin (the manifest records its tag), and only then
 pin=$(s engine | cut -d' ' -f2)
@@ -195,6 +221,122 @@ s share me@dgx serve-off --off >/dev/null; ok $? "so that unsharing it works"
 err=$(s share me@dgx serve-hang 2>&1 >/dev/null)
 same "$err" "Error: serve-hang is not shared: tailscale serve didn't answer. Serve may not be enabled on the tailnet: enable it at https://login.tailscale.com/f/serve, then share again"
 ok $? "a share whose tailscale serve hangs says Serve may not be enabled, and where to enable it"
+# use --ctx, and variants: the context sizes a recipe has measured, read from the recipe file on the host
+s use me@dgx qwen3.8-27b-tensorfold --detach --ctx 65536 >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use qwen3.8-27b-tensorfold --ctx 65536 --detach$'; ok $? "use --ctx sends the context to the engine"
+s use me@dgx qwen3.8-27b-tensorfold --ctx abc >/dev/null 2>&1; ok $((!$?)) "use --ctx refuses what isn't a number"
+mkdir -p "$FAKE_HOST/home/.local/share/omarchy-local-ai/recipes"
+cat >"$FAKE_HOST/home/.local/share/omarchy-local-ai/recipes/vr.toml" <<'F'
+name = "VR"
+[[variant]]
+ctx = 65536
+peak_ram_gib = 60
+peak_gpu_gib = 58
+[[variant]]
+ctx = 262144
+peak_ram_gib = 91.5
+peak_gpu_gib = 90
+source = "estimated"
+F
+s variants me@dgx vr --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d == [{'ctx': 262144, 'peak_ram_gib': 91.5, 'peak_gpu_gib': 90, 'source': 'estimated', 'confirmed': False}, {'ctx': 65536, 'peak_ram_gib': 60, 'peak_gpu_gib': 58, 'source': 'measured', 'confirmed': False}]))"
+ok $? "variants lists a recipe's contexts, largest first, each with its source (measured unless the recipe says otherwise)"
+s variants me@dgx vr | grep -q '262144.*91.5'; ok $? "and as text without --json"
+s variants me@dgx nope --json >/dev/null 2>&1; ok $((!$?)) "a recipe the host doesn't have is an error"
+s variants me@dgx '../x' --json >/dev/null 2>&1; ok $((!$?)) "variants refuses what is no recipe id"
+# Recipes: a .toml on this computer goes over ssh on stdin to the engine's recipe commands, in a folder of its own, named
+# for its id (the engine takes the id from the file name).
+rd=$tmp/recipes; mkdir -p "$rd"
+printf 'name = "Mine"\n' >"$rd/mine.toml"; printf 'BAD = 1\n' >"$rd/bad.toml"
+out=$(s recipe validate me@dgx "$rd/mine.toml"); ok $? "recipe validate accepts a good file"
+same "$out" "Recipe mine is valid"; ok $? "and says what the engine said"
+grep -qF "recipe validate \"\$d\"/mine.toml" "$FAKE_LOG"; ok $? "it asks the engine to validate a copy named for the id"
+out=$(s recipe validate me@dgx "$rd/bad.toml" 2>&1 >/dev/null); ok $((!$?)) "recipe validate refuses a bad file"
+same "$out" "$(printf 'recipes/bad: no name\nrecipes/bad: no runtime')"; ok $? "and prints each of the engine's errors on its own line"
+s recipe validate me@dgx "$rd/bad.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d == {"ok": False, "id": "bad", "errors": ["recipes/bad: no name", "recipes/bad: no runtime"], "message": ""}))'
+ok $? "recipe validate --json gives the errors as a list, and exits 0, since the machine answered"
+printf 'CLAIM = 1\n' >"$rd/claim.toml"
+out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
+same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
+printf 'CLAIM = 1\n' >"$rd/claim.toml"
+out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
+same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
+rm -f "$FAKE_HOST/home/added.toml"
+s recipe validate me@dgx "$rd/mine.toml" >/dev/null; none_of "$FAKE_HOST/home/added.toml"; ok $? "validating changes nothing on the host"
+out=$(s recipe add me@dgx "$rd/mine.toml"); same "$out" "Added recipe mine"; ok $? "recipe add installs it under its id"
+cmp -s "$rd/mine.toml" "$FAKE_HOST/home/added.toml" && same "$(cat "$FAKE_HOST/home/added.name")" mine.toml; ok $? "the engine got the file's text on stdin, named mine.toml"
+s recipe add me@dgx "$rd/bad.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["ok"] is False and d["errors"] == ["recipes/bad: no name", "recipes/bad: no runtime"]))'
+ok $? "a rejected add lists the engine's errors, one each, without its Error: prefix"
+s recipe add me@dgx "$rd/mine.toml" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d == {"ok": True, "id": "mine", "errors": [], "message": "Added recipe mine"}))'
+ok $? "recipe add --json says it was added"
+before=$(wc -l <"$FAKE_LOG")
+printf 'x' >"$rd/Not_An_Id.toml"; printf 'x' >"$rd/notes.txt"
+for f in "$rd/Not_An_Id.toml" "$rd/notes.txt" "$rd/missing.toml" "$rd"; do s recipe validate me@dgx "$f" >/dev/null 2>&1; ok $((!$?)) "recipe validate refuses $(basename "$f") without asking the host"; done
+same "$(wc -l <"$FAKE_LOG")" "$before"; ok $? "and sends the host nothing"
+head -c 300000 /dev/zero | tr '\0' 'a' >"$rd/huge.toml"; s recipe validate me@dgx "$rd/huge.toml" >/dev/null 2>&1; ok $((!$?)) "a file too big to be a recipe is refused"
+tilde='~'; (cd "$rd" && HOME=$rd s recipe validate me@dgx "$tilde/mine.toml" >/dev/null); ok $? "a leading ~ is this computer's home"
+s recipe list me@dgx --json | grep -q '"user":true'; ok $? "recipe list --json passes the engine's listing through"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe list --json$'; ok $? "asking the engine for it"
+out=$(s recipe remove me@dgx mine); same "$out" "Removed recipe mine"; ok $? "recipe remove removes an unused recipe"
+out=$(s recipe remove me@dgx used 2>&1); ok $((!$?)) "recipe remove of one a model uses fails"
+same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used"; ok $? "with the engine's message"
+s recipe remove me@dgx '../x' >/dev/null 2>&1; ok $((!$?)) "recipe remove refuses what is no recipe id"
+printf 'name = "Dash"\n' >"$rd/-dash.toml"
+(cd "$rd" && s recipe validate me@dgx -- -dash.toml >/dev/null 2>&1); ok $((!$?)) "a path that starts with - is a path after --, and is then refused as a name that can't be an id"
+printf 'name = "Dash"\n' >"$rd/dash.toml"; (cd "$rd" && s recipe validate me@dgx -- dash.toml >/dev/null); ok $? "recipe validate takes -- before the file"
+(cd "$rd" && s recipe add me@dgx -- dash.toml >/dev/null); ok $? "and so does recipe add"
+s recipe validate me@dgx -x >/dev/null 2>&1; ok $((!$?)) "a path that starts with - without -- is an unknown option, not a file"
+s recipe validate nobody@else "$rd/mine.toml" >/dev/null 2>&1; ok $((!$?)) "recipe commands refuse a machine that isn't added"
+# measure and confirm: the engine's own, over ssh. Without --yes measure says what it would download and changes nothing.
+rm -f "$FAKE_HOST/home/measured"
+out=$(s recipe measure me@dgx mine --ctx 65536); ok $? "recipe measure without --yes succeeds"
+echo "$out" | grep -q '3.5 GiB to download' && echo "$out" | grep -q 'Nothing was changed'; ok $? "and shows the engine's dry-run text: the download, what it loads"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai measure mine --ctx 65536$' && none_of "$FAKE_HOST/home/measured"; ok $? "asking the engine without --yes, which changes nothing"
+out=$(s recipe measure me@dgx mine --ctx 65536 --yes); ok $? "recipe measure --yes runs it"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai measure mine --ctx 65536 --yes$' && present "$FAKE_HOST/home/measured"; ok $? "with the engine's --yes"
+s recipe measure me@dgx mine >/dev/null 2>&1; ok $((!$?)) "recipe measure needs --ctx"
+s recipe measure me@dgx mine --ctx abc >/dev/null 2>&1; ok $((!$?)) "and a number for it"
+s recipe measure me@dgx '../x' --ctx 1 >/dev/null 2>&1; ok $((!$?)) "recipe measure refuses what is no recipe id"
+out=$(s recipe confirm me@dgx mine); same "$out" "Confirmed 1 estimated variant(s) of mine"; ok $? "recipe confirm accepts a recipe's estimated numbers"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe confirm mine$'; ok $? "through the engine's recipe confirm"
+out=$(s recipe confirm me@dgx none 2>&1); ok $((!$?)) "recipe confirm of a recipe with nothing to confirm fails"
+same "$out" "Error: Recipe none has no estimated variant to confirm"; ok $? "with the engine's message"
+# use of a recipe of yours: the engine wants --yes, which is sent only when asked for.
+s use me@dgx mine --detach --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --yes --detach$'; ok $? "use --yes passes the confirmation to the engine"
+s use me@dgx mine --detach --ctx 65536 --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --ctx 65536 --yes --detach$'; ok $? "with a context too"
+s use me@dgx mine --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --yes$'; ok $? "use --yes without --detach passes it on too"
+s use me@dgx mine >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine$'; ok $? "use never adds --yes by itself, even for a recipe of yours: only the person's say-so sends it"
+s use me@dgx mine --detach --ctx 65536 >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'use mine --ctx 65536 --detach$'; ok $? "a context change doesn't send it either"
+s use me@dgx q-noyes --detach >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'use q-noyes --detach$'; ok $? "and is not sent when not asked for"
+# variants reads the recipes of yours, in the engine's state dir, as well as the curated ones
+mkdir -p "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes"
+cat >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes/ur.toml" <<'F'
+name = "UR"
+[[variant]]
+ctx = 32768
+peak_ram_gib = 12.3456781
+peak_gpu_gib = 18
+source = "estimated"
+[[variant]]
+ctx = 65536
+peak_ram_gib = 30
+peak_gpu_gib = 28
+source = "drafted"
+F
+s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source']) for v in d] == [(65536, 'drafted'), (32768, 'estimated')]))"
+ok $? "variants reads a recipe of yours from the engine's state dir, with each variant's source"
+echo '{"ur": ["32768/12.3456781/18.0"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
+s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source'], v['confirmed']) for v in d] == [(65536, 'drafted', False), (32768, 'estimated', True)]))"
+ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers, written as the float's repr: 12.3456781 and 18.0)"
+# Contract with the engine: when a fork checkout is there (STARTDGX_ENGINE, else ~/StartFS/github/omarchy-local-ai), its own variant_key
+# must give the key the fixture above holds, so a change to the engine's key format fails here and not on a host.
+fork_engine=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
+if [ -f "$fork_engine/agent_local.py" ]; then
+  engine_key=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import agent_local as a; print(a.variant_key({"ctx": 32768, "peak_ram_gib": 12.3456781, "peak_gpu_gib": 18}))' "$fork_engine" 2>/dev/null)
+  matches=1; if [ "$engine_key" = "32768/12.3456781/18.0" ]; then matches=0; fi
+  ok $matches "the engine's variant_key gives the key variants reads (a fork checkout is present)"
+else
+  ok 0 "the engine's variant_key contract is skipped: no fork checkout at $fork_engine"
+fi
+rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes" "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
 # blob and one it shares with m2; m3 is a setup in progress with a half-downloaded file in staging.
 ed=$FAKE_HOST/home/.local/share/omarchy/agent-local es=$FAKE_HOST/home/.local/state/omarchy/agent-local
@@ -257,11 +399,12 @@ launched() { : >"$FAKE_LAUNCH"; s launch "$@" >/dev/null 2>&1 && cat "$FAKE_LAUN
 same "$(launched install me@spark)" "$(printf '1\n%s\n' "$cli install me@spark")"; ok $? "launch install opens a terminal running startdgx install"
 same "$(launched install me@spark --replace-engine)" "$(printf '1\n%s\n' "$cli install me@spark --replace-engine")"; ok $? "launch install --replace-engine passes it on"
 same "$(launched uninstall me@spark)" "$(printf '1\n%s\n' "$cli uninstall me@spark")"; ok $? "launch uninstall opens a terminal running startdgx uninstall"
+same "$(launched uninstall me@spark --delete-recipes)" "$(printf '1\n%s\n' "$cli uninstall me@spark --delete-recipes")"; ok $? "launch uninstall passes on --delete-recipes"
 same "$(launched uninstall me@spark --delete-models --remove-packages)" "$(printf '1\n%s\n' "$cli uninstall me@spark --delete-models --remove-packages")"; ok $? "launch uninstall passes on --delete-models and --remove-packages"
 same "$(launched logs me@dgx q1)" "$(printf '1\n%s\n' "$cli logs me@dgx q1")"; ok $? "launch logs opens a terminal on a model's logs"
 same "$(launched logs me@dgx)" "$(printf '1\n%s\n' "$cli logs me@dgx")"; ok $? "launch logs without a model shows the last one started"
 for refused in "delete me@dgx q1" "start me@dgx q1" "install me@spark q1" "uninstall me@spark q1" "uninstall me@spark --replace-engine" \
-               "logs me@dgx q1 --replace-engine" "install me@spark --delete-models" "logs me@dgx --remove-packages"; do
+               "logs me@dgx q1 --replace-engine" "install me@spark --delete-models" "logs me@dgx --remove-packages" "install me@spark --delete-recipes"; do
   read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
   same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens no terminal: $refused"
 done
@@ -469,7 +612,7 @@ echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/model
   && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
 uj() { s uninstall --dry-run --json "$@" me@spark | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
-cond='sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "steps"] and d["host"] == "me@spark" and d["models_bytes"] == 1048576 and d["packages"] == []'
+cond='sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "recipes", "steps"] and d["host"] == "me@spark" and d["recipes"] == 0 and d["models_bytes"] == 1048576 and d["packages"] == []'
 uj; ok $? "uninstall --dry-run --json says the plan, the weights' size and the packages it could remove"
 cond='any("share q1 --off" in step for step in d["steps"]) and any("1.0 MiB" in k for k in d["kept"]) and any("forget" in m for m in d["manual"])'
 uj; ok $? "with the same steps, what it keeps and what is left for you, as the text plan"
@@ -549,9 +692,12 @@ replaced() {
   installed "engine=$(echo 'old engine' | sha256sum | cut -c1-64)"; before_root='' install_flags=()
   echo 'new engine' >"$eng/agent_local.py"
 }
-replaced; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
+setrecipes() { local d=$h/.local/state/omarchy/agent-local; mkdir -p "$d/recipes"; echo 'name = "m"' >"$d/recipes/mine.toml"; echo '{}' >"$d/recipes-confirmed.json"; }
+replaced; setrecipes; before=$(cd "$h" && find . -path ./.local/share/startdgx -prune -o -path ./.local/share/omarchy-local-ai -prune -o -print | sort)
 out=$(s uninstall --dry-run me@spark); echo "$out" | grep -q "put back the engine" && echo "$out" | grep -q "was there before" && ! echo "$out" | grep -q 'share q1 --off'
 ok $? "uninstall --dry-run of a replaced engine says it puts it back and leaves the engine's setup"
+s uninstall --dry-run --json --delete-recipes me@spark | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["recipes"] == 0 and not any("recipes" in x for x in d["steps"] + d["kept"])))'
+ok $? "where the engine was there before, the plan has no recipes of ours to keep or delete"
 out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where the install replaced an engine"
 ! echo "$out" | grep -q 'Removing what the engine set up'; ok $? "and doesn't say it removes the engine's setup"
 same "$(ls "$eng")" agent_local.py && same "$(cat "$eng/agent_local.py")" 'old engine'; ok $? "it puts the old engine back"
@@ -566,6 +712,22 @@ replaced; rm -rf "$h/.local/share/startdgx/backup/engine"
 s uninstall me@spark >/dev/null 2>&1; ok $((!$?)) "uninstall fails when the replaced engine's backup is gone"
 present "$FAKE_MANIFEST" && same "$(cat "$eng/agent_local.py")" 'new engine'; ok $? "and keeps the manifest and the engine there"
 
+# Recipes of yours live in the engine's state dir, which uninstall deletes: they are kept unless --delete-recipes says
+# otherwise, and the install manifest records nothing for them (they are never created by startdgx).
+installed; setrecipes
+m 'not any("recipes" in str(i) for i in d["items"])'; ok $? "the install manifest records nothing for the recipe folder"
+cond='d["recipes"] == 1 and any("keep" in k and "your recipes" in k and "--delete-recipes" in k for k in d["kept"]) and any("except your recipes" in st for st in d["steps"])'
+uj; ok $? "uninstall --dry-run --json counts the recipes of yours and says it keeps them"
+cond='any("with your recipes" in st for st in d["steps"]) and not any("keep" in k and "your recipes" in k for k in d["kept"])'
+uj --delete-recipes; ok $? "and with --delete-recipes, they go in the steps"
+before=$(tree); s uninstall --dry-run me@spark >/dev/null; same "$(tree)" "$before"; ok $? "the dry run changes nothing"
+out=$(s uninstall me@spark 2>&1); ok $? "uninstall succeeds where there are recipes of yours"
+present "$h/.local/state/omarchy/agent-local/recipes/mine.toml" "$h/.local/state/omarchy/agent-local/recipes-confirmed.json"; ok $? "your recipes (and what you confirmed) are kept"
+none_of "$h/.local/state/omarchy/agent-local/status.json" "$h/.config/omarchy/agent-local"; ok $? "the rest of the engine's state still goes"
+echo "$out" | grep -q 'keep your recipes'; ok $? "and it says it kept them"
+installed; setrecipes
+s uninstall --delete-recipes me@spark >/dev/null 2>&1; ok $? "uninstall --delete-recipes succeeds"
+none_of "$h/.local/state/omarchy"; ok $? "and deletes them"
 before_root="put $link '#!/bin/sh old agent'"; installed; before_root=''
 m 'item("symlink", "'$link'")["changed_by_us"] and item("symlink", "'$link'")["previous"]["type"] == "file"'; ok $? "a plain file where the agent link goes is recorded as changed"
 s uninstall me@spark >/dev/null 2>&1; ok $? "uninstall succeeds where the agent link replaced a plain file"
@@ -635,7 +797,7 @@ g() { git -C "$fork" -c user.name=t -c user.email=t@t "$@"; }
 git init -q --bare -b master "$tmp/origin.git"; git init -q --bare "$tmp/fork-remote.git"
 git clone -q "$tmp/origin.git" "$fork" 2>/dev/null
 mkdir "$fork/tests"; printf '#!/usr/bin/env bash\nexit 0\n' >"$fork/tests/engine-test.sh"; chmod +x "$fork/tests/engine-test.sh"
-g add -A; g commit -qm base; g push -q origin HEAD:master; g fetch -q origin
+g add -A; g commit -qm base; g push -q origin HEAD:master; g tag v0.6.3; g push -q origin v0.6.3; g fetch -q origin
 g remote add fork "$tmp/fork-remote.git"
 "$rel" v1.0 "$fork" >/dev/null 2>&1; ok $((!$?)) "release-engine refuses a malformed tag"
 echo x >"$fork/dirty"; "$rel" v0.6.3-dgx.2 "$fork" >/dev/null 2>&1; ok $((!$?)) "release-engine refuses a dirty checkout"
@@ -652,7 +814,13 @@ g rev-parse -q --verify refs/tags/v0.6.3-dgx.2 >/dev/null; ok $? "release-engine
 echo "$out" | grep -q 'git push fork v0.6.3-dgx.2'; ok $? "release-engine prints the push command"
 echo "$out" | grep -q "$(g rev-parse 'v0.6.3-dgx.2^{commit}')"; ok $? "release-engine prints the tag's commit"
 git -C "$tmp/fork-remote.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to fork"
-git -C "$tmp/origin.git" tag | grep -q .; ok $((!$?)) "release-engine never pushes to origin"
+git -C "$tmp/origin.git" tag | grep -q -- '-dgx'; ok $((!$?)) "release-engine never pushes to origin"
+# The tag names the upstream release it contains (v0.6.3-dgx.3 once held v0.6.4 and was cut anyway)
+git -C "$other" -c user.name=t -c user.email=t@t tag v0.6.4 && git -C "$other" push -q origin v0.6.4
+out=$("$rel" v0.6.3-dgx.3 "$fork" 2>&1); ok $((!$?)) "release-engine refuses a tag that names an older upstream release than HEAD contains"
+echo "$out" | grep -q 'tag it v0.6.4-dgx.N'; ok $? "release-engine says which release to name the tag for"
+g rev-parse -q --verify refs/tags/v0.6.3-dgx.3 >/dev/null; ok $((!$?)) "release-engine creates no tag when it refuses"
+"$rel" v0.6.4-dgx.1 "$fork" >/dev/null 2>&1; ok $? "release-engine accepts the tag named for the upstream release HEAD contains"
 
 # discover, against a fake tailscale and a fake ssh that answers per peer from $tmp/disco/peers
 disco=$tmp/disco; mkdir -p "$disco/bin" "$disco/peers"
@@ -810,6 +978,12 @@ now=$((t0 + 15)); dj '0 < d["models"]["'$flash'"]["install"]["done_bytes"] < d["
 dj 'not [r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "a model being set up isn't installed yet"
 now=$((t0 + 3600)); row $a $flash active; ok $? "a finished demo setup loads and runs the model"
 dj '[r for r in d if r["id"] == "'$flash'"][0]["installed"]' list $a; ok $? "and the list shows it installed"
+dj '[v["ctx"] for v in d] == [262144, 131072, 65536] and d[0]["peak_ram_gib"] > d[2]["peak_ram_gib"]' variants $a $qwen --json; ok $? "demo variants lists a model's contexts, each needing less memory"
+out=$(ds use --detach $a $qwen --ctx 12345 2>&1); ok $((!$?)) "demo use --ctx refuses a context that isn't measured"
+now=$((t0 + 3700)); out=$(ds use --detach $a $qwen --ctx 131072); ok $? "demo use --ctx restarts a model set up with another context"
+dj 'd["models"]["'$qwen'"]["ctx"] == 131072 and d["models"]["'$qwen'"]["unit"] == "activating"' status $a; ok $? "and it reloads at once with it"
+now=$((t0 + 7200)); row $a $qwen active; ok $? "then runs again"
+now=$((t0 + 3600))
 dj 'd == {"recipe": "'$flash'", "setting_up": False, "bytes": 95 * 2**29}' delete --dry-run --json $a $flash; ok $? "demo delete --dry-run frees what its setup downloaded"
 row $a $flash active; ok $? "and changes nothing"
 out=$(ds delete $a $flash); ok $? "demo delete succeeds"
@@ -821,6 +995,68 @@ ds delete --dry-run $c $flash >/dev/null 2>&1; ok $((!$?)) "demo delete --dry-ru
 now=$((t0 + 20)) out=$(ds delete $b $flash); same "$out" "Cancelled the setup of $flash"; ok $? "deleting a demo setup in progress cancels it"
 dj '"'$flash'" not in d["models"]' status $b; ok $? "and drops its row at once"
 
+# User recipes in demo mode: the engine's recipe commands on fixture files (demo/recipes), kept in the demo's state.
+rdir=$here/demo/recipes; llama=my-llama-8b draft=my-draft-70b
+was=$now; now=$((t0 + 4000))
+out=$(ds recipe validate $a "$rdir/$llama.toml"); same "$out" "Recipe $llama is valid"; ok $? "demo recipe validate accepts a good recipe"
+dj '"'$llama'" not in [r["id"] for r in d]' recipe list $a --json; ok $? "and adds nothing"
+out=$(ds recipe validate $a "$rdir/broken-recipe.toml" 2>&1 >/dev/null); ok $((!$?)) "demo recipe validate refuses a broken one"
+[ "$(echo "$out" | wc -l)" -ge 3 ] && echo "$out" | grep -q 'name' && echo "$out" | grep -q 'no-such-runtime' && echo "$out" | grep -q 'ctx'; ok $? "with each error on its own line"
+dj 'd["ok"] is False and len(d["errors"]) >= 3 and d["id"] == "broken-recipe"' recipe validate $a "$rdir/broken-recipe.toml" --json; ok $? "and as a list with --json"
+mkdir -p "$tmp/clash"; cp "$rdir/$llama.toml" "$tmp/clash/$nem.toml"
+out=$(ds recipe validate $a "$tmp/clash/$nem.toml" --json); echo "$out" | grep -q "clashes with the curated recipe '$nem'"; ok $? "an id equal to a curated recipe's is rejected, naming it"
+out=$(ds recipe add $a "$rdir/$llama.toml"); same "$out" "Added recipe $llama"; ok $? "demo recipe add adds it"
+dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True and {r["id"]: r for r in d}["'$llama'"]["source"] == "estimated" and not {r["id"]: r for r in d}["'$llama'"]["available"] and not {r["id"]: r for r in d}["'$nem'"]["user"]' recipe list $a --json
+ok $? "recipe list --json marks it user and estimated, not yet fitting, and a curated recipe not user"
+ds recipe confirm $a $llama >/dev/null; dj '{r["id"]: r for r in d}["'$llama'"]["available"]' recipe list $a --json; ok $? "and available once confirmed"
+dj '{r["id"]: r for r in d}["'$llama'"]["user"] is True' list $a; ok $? "so does the machine's list, which the model picker reads"
+ds recipe add $a "$rdir/$draft.toml" >/dev/null; ok $? "demo recipe add adds a drafted recipe"
+dj '{r["id"]: r for r in d}["'$draft'"]["source"] == "drafted" and not {r["id"]: r for r in d}["'$draft'"]["available"] and {r["id"]: r for r in d}["'$draft'"]["reason"]' list $a
+ok $? "which is not available, and says why"
+ds recipe add $a "$rdir/broken-recipe.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe add refuses a broken one"
+printf 'name = "Claim"\nsummary = "s"\nruntime = "tensorfold"\n[[variant]]\nctx = 1024\npeak_ram_gib = 1\npeak_gpu_gib = 1\nsource = "measured"\n[[variant]]\nctx = 2048\npeak_ram_gib = 2\npeak_gpu_gib = 2\n' >"$tmp/claim.toml"
+out=$(ds recipe validate $a "$tmp/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "the demo engine rejects a variant of yours that claims measured numbers, or has no source"
+same "$(echo "$out" | grep -c "can't claim measured numbers")" 2; ok $? "one line for each such variant"
+echo "$out" | grep -q 'variant\[1\].source.*estimated.*drafted'; ok $? "saying to set estimated or drafted"
+dj '[(v["ctx"], v["source"]) for v in d] == [(131072, "estimated"), (32768, "estimated")]' variants $a $llama --json; ok $? "demo variants reads a user recipe's own variants, with their sources"
+dj '[v["source"] for v in d] == ["drafted"]' variants $a $draft --json; ok $? "and a drafted one's"
+dj 'all(v["source"] == "measured" for v in d)' variants $a $qwen --json; ok $? "a curated recipe's are measured"
+ds recipe validate $c "$rdir/$llama.toml" >/dev/null 2>&1; ok $((!$?)) "demo recipe validate on a machine that doesn't answer fails"
+out=$(ds use --detach $a $llama 2>&1); ok $((!$?)) "a user recipe isn't set up without --yes, as the engine's use says"
+echo "$out" | grep -q "is a recipe of yours, so it isn't set up without your say-so"; ok $? "and the engine's message says to review it first"
+ds use --detach $a $llama --yes >/dev/null; ok $? "with --yes a user recipe is set up like any other"
+out=$(ds recipe remove $a $llama 2>&1); ok $((!$?)) "demo recipe remove of a recipe a model uses fails"
+echo "$out" | grep -q "Error: Recipe $llama is used by the model $llama (My Llama 8B)"; ok $? "naming the model"
+ds recipe add $a "$rdir/$llama.toml" >/dev/null 2>&1; ok $((!$?)) "and so does replacing it"
+ds delete $a $llama >/dev/null; out=$(ds recipe remove $a $llama); same "$out" "Removed recipe $llama"; ok $? "once the model is gone, demo recipe remove succeeds"
+dj '"'$llama'" not in [r["id"] for r in d]' list $a; ok $? "and the recipe is gone from the list"
+out=$(ds recipe remove $a $nem 2>&1); ok $((!$?)) "demo recipe remove refuses a curated recipe"
+echo "$out" | grep -q "curated recipe"; ok $? "and says it is one"
+ds recipe remove $a nothing-here >/dev/null 2>&1; ok $((!$?)) "and one that isn't there"
+# measure and confirm
+out=$(ds recipe measure $a $draft --ctx 65536); ok $? "demo recipe measure without --yes shows what it would do"
+echo "$out" | grep -q 'download' && echo "$out" | grep -q 'Nothing was changed'; ok $? "the download and that nothing was changed"
+dj '[v["source"] for v in d] == ["drafted"]' variants $a $draft --json; ok $? "and changes nothing"
+ds recipe measure $a $draft --ctx 12345 --yes >/dev/null 2>&1; ok $((!$?)) "demo recipe measure refuses a context the recipe has no variant for"
+ds recipe measure $a $qwen --ctx 262144 --yes >/dev/null 2>&1; ok $((!$?)) "and a curated recipe"
+out=$(ds recipe measure $a $draft --ctx 65536 --yes); ok $? "demo recipe measure --yes measures it"
+dj '[v["source"] for v in d] == ["measured"] and d[0]["peak_ram_gib"] != 90' variants $a $draft --json; ok $? "its variant is now measured, with the numbers it showed"
+dj '{r["id"]: r for r in d}["'$draft'"]["source"] == "measured" and {r["id"]: r for r in d}["'$draft'"]["available"]' recipe list $a --json; ok $? "and the recipe fits"
+est=my-estimate-14b
+ds recipe add $a "$rdir/$est.toml" >/dev/null; ok $? "demo recipe add adds an estimated recipe"
+dj '{r["id"]: r for r in d}["'$est'"]["source"] == "estimated" and not {r["id"]: r for r in d}["'$est'"]["available"]' list $a; ok $? "which does not fit until it is confirmed"
+out=$(ds recipe confirm $a $est); same "$out" "Confirmed 1 estimated variant(s) of $est"; ok $? "demo recipe confirm accepts it"
+dj '{r["id"]: r for r in d}["'$est'"]["available"] and {r["id"]: r for r in d}["'$est'"]["source"] == "estimated"' list $a; ok $? "and it then fits, its numbers still estimated"
+ds recipe confirm $a $draft >/dev/null 2>&1; ok $((!$?)) "a recipe with no estimated variant has nothing to confirm"
+ds recipe confirm $a $nem >/dev/null 2>&1; ok $((!$?)) "nor a curated one"
+ds recipe remove $a $est >/dev/null; ds recipe remove $a $draft >/dev/null; ok $? "unused user recipes are removed"
+# uninstall keeps the recipes of yours unless asked
+ds recipe add $a "$rdir/$llama.toml" >/dev/null
+dj 'd["recipes"] == 1 and any("--delete-recipes" in k for k in d["kept"]) and any("except your recipes" in s for s in d["steps"])' uninstall --dry-run --json $a; ok $? "demo uninstall --dry-run --json counts the recipes of yours and keeps them"
+dj 'any("with your recipes" in s for s in d["steps"]) and not any("your recipes" in k for k in d["kept"])' uninstall --dry-run --json --delete-recipes $a; ok $? "and --delete-recipes deletes them"
+ds recipe remove $a $llama >/dev/null
+dj 'd["recipes"] == 0 and not any("your recipes" in k for k in d["kept"])' uninstall --dry-run --json $a; ok $? "with none, there is nothing to keep"
+now=$was
 ds add demo@spark-d >/dev/null && dj '"demo@spark-d" in d' hosts --json; ok $? "demo add adds a discovered machine"
 dj 'd["models"] == {}' status demo@spark-d; ok $? "and its status works"
 ds add demo@spark-e >/dev/null 2>&1; ok $((!$?)) "demo add refuses a machine without the engine"
@@ -832,7 +1068,7 @@ ds forget demo@spark-f >/dev/null
 ds forget demo@spark-d >/dev/null && dj '"demo@spark-d" not in d' hosts --json; ok $? "demo forget drops it"
 out=$(ds launch install demo@spark-e); same "$out" "Demo: would run 'install demo@spark-e' in a terminal"; ok $? "demo launch says what it would run"
 ds logs $a $nem >/dev/null; ok $? "demo logs succeeds"
-dj 'sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "steps"] and d["models_bytes"] > 0 and d["packages"] == ["podman"] and any("--delete-models" in k for k in d["kept"])' uninstall --dry-run --json $a
+dj 'sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "recipes", "steps"] and d["models_bytes"] > 0 and d["packages"] == ["podman"] and any("--delete-models" in k for k in d["kept"])' uninstall --dry-run --json $a
 ok $? "demo uninstall --dry-run --json gives a plan the uninstall card can show"
 dj 'any("model weights" in s for s in d["steps"]) and any("podman" in s for s in d["steps"]) and d["kept"] == []' uninstall --dry-run --json --delete-models --remove-packages $a
 ok $? "and its opt-ins move into the steps"
@@ -853,5 +1089,293 @@ wait $starter; ok $((!$?)) "the start it stopped then fails, as the engine's doe
 grep -q "^Error: $nem didn't start" "$tmp/start-out"; ok $? "and says it didn't start"
 mkdir -p "$tmp/marker/startdgx/demo"; : >"$tmp/marker/startdgx/demo/ENABLED"
 XDG_CONFIG_HOME=$tmp/marker XDG_STATE_HOME=$tmp/state PATH=$tmp/demo-bin:$PATH s hosts --json | grep -q demo@spark-a; ok $? "the demo marker file turns demo mode on too"
+# hf search: the anonymous Hugging Face API behind STARTDGX_HF_BASE (here a fixture folder, demo/hf), never the real site.
+hf() { STARTDGX_HF_BASE=$here/demo/hf s hf search "$@"; }
+hj() { local cond=$1; shift; hf "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); r={x['repo']: x for x in d}; sys.exit(not ($cond))"; }
+hj 'set(r) == {"TensorFold/Qwen3.8-27B-MLX-4bit", "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", "LiquidAI/LFM2.5-24B-A2B-MLX-4bit", "someone/Gemma-4-31B-uncensored-MLX-4bit"}' qwen
+ok $? "hf search lists the affine 4-bit repos of known families and hides 8-bit, 3-bit, mxfp4, BF16 tagged mlx, unknown architectures, gated, and missing or malformed configs"
+hj 'sorted(r["TensorFold/Qwen3.8-27B-MLX-4bit"]) == ["base_model", "label", "license", "params", "repo", "size_bytes"]' qwen
+ok $? "a row has repo, params, size_bytes, license, base_model and label"
+hj 'r["TensorFold/Qwen3.8-27B-MLX-4bit"] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "params": 27356728560, "size_bytes": 16074529674, "license": "apache-2.0", "base_model": "Qwen/Qwen3.8-27B", "label": None}' qwen
+ok $? "its parameter count, weights size (the safetensors files only), license and base model come from the repo"
+hj 'r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["label"] == "abliterated" and r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["base_model"] == "Qwen/Qwen3.8-27B"' qwen
+ok $? "a derivative is labelled abliterated and shows its base model"
+hj 'r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["label"] == "uncensored" and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["base_model"] is None and r["someone/Gemma-4-31B-uncensored-MLX-4bit"]["license"] is None' qwen
+ok $? "an uncensored repo is labelled so, and a missing base model or license is null"
+badhf=$tmp/hf-bad; cp -r "$here/demo/hf" "$badhf"
+python3 - "$badhf" <<'F'
+import json, os, shutil, sys
+root = sys.argv[1]
+rows = json.load(open(root + "/api/models.json"))
+for bad in ("x y/z", "../x/y", "a/b/c", "x/y;z"):
+  rows.append(dict(rows[0], id=bad))
+json.dump(rows, open(root + "/api/models.json", "w"))
+os.makedirs(root + "/x y/z/raw/main")
+shutil.copy(root + "/TensorFold/Qwen3.8-27B-MLX-4bit/raw/main/config.json", root + "/x y/z/raw/main/config.json")
+F
+out=$(STARTDGX_HF_BASE=$badhf s hf search qwen --json); same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4
+ok $? "a listing id that isn't an OWNER/NAME repo name is skipped, not fetched"
+out=$(hf qwen); same "$(printf '%s\n' "$out" | wc -l)" 4 && ! printf '%s' "$out" | grep -q '^[[{]'; ok $? "the human output is one row per line"
+printf '%s\n' "$out" | grep -q '^TensorFold/Qwen3.8-27B-MLX-4bit  27.4B  15.0 GiB  apache-2.0  Qwen/Qwen3.8-27B$'; ok $? "a row reads repo, parameters, weights size, license, base model"
+printf '%s\n' "$out" | grep -q '^daguoagi/.*  Qwen/Qwen3.8-27B  \[abliterated\]$'; ok $? "and a derivative ends with its label"
+printf '%s' "$out" | grep -qi 'fit'; ok $((!$?)) "no row claims a fit (ADR 0001)"
+empty=$tmp/hf-empty; mkdir -p "$empty/api"; echo '[]' >"$empty/api/models.json"
+out=$(STARTDGX_HF_BASE=$empty s hf search nothing 2>&1); ok $? "a search with no results succeeds"
+same "$out" "No known-family MLX 4-bit repos matched"; ok $? "and says there were none"
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s hf search qwen 2>&1); ok $((!$?)) "an unreachable Hugging Face fails"
+same "$out" "Error: Can't reach Hugging Face: check the network"; ok $? "and says it is offline, not that nothing matched"
+same "$(STARTDGX_HF_BASE=http://127.0.0.1:9 s hf search qwen --json 2>/dev/null)" ""; ok $? "and prints no list, not even an empty one"
+python3 - "$tmp/hf-limit.port" <<'F' &
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+    self.send_response(429); self.send_header("Retry-After", "150"); self.end_headers()
+  def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(srv.server_port)); srv.handle_request()
+F
+limiter=$!; until [ -s "$tmp/hf-limit.port" ]; do sleep 0.1; done
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-limit.port") s hf search qwen 2>&1); ok $((!$?)) "a rate-limited search fails"
+same "$out" "Error: Hugging Face is limiting requests, try again in 3 minutes"; ok $? "and says when to try again"
+wait $limiter
+gt() { [ "$1" -gt "$2" ]; }
+# cache, parallelism cap, and a broken repo, against a counting local server (hf-srv.py logs each request path)
+cat >"$tmp/hf-srv.py" <<'F'
+import http.server, os, sys, threading, time
+root, log = sys.argv[1], sys.argv[2]
+lock, state = threading.Lock(), {"now": 0, "max": 0}
+class H(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+    path = self.path.split("?")[0].strip("/")
+    with lock:
+      state["now"] += 1; state["max"] = max(state["max"], state["now"])
+      open(log, "a").write(path + "\n"); open(log + ".max", "w").write(str(state["max"]))
+    time.sleep(0.15 if path.endswith("config.json") else 0)
+    with lock: state["now"] -= 1
+    if path.endswith("BROKEN/m/raw/main/config.json"):
+      self.send_response(500); self.end_headers(); return
+    f = os.path.join(root, path + ("" if path.endswith(".json") else ".json"))
+    if not os.path.exists(f):
+      self.send_response(404); self.end_headers(); return
+    body = open(f, "rb").read()
+    self.send_response(200); self.end_headers(); self.wfile.write(body)
+  def log_message(self, *a): pass
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[3], "w").write(str(srv.server_port))
+threading.Timer(120, lambda: os._exit(0)).start()
+srv.serve_forever()
+F
+many=$tmp/hf-many; mkdir -p "$many/api"
+python3 - "$many" <<'F'
+import json, sys, os
+root = sys.argv[1]
+ids = ["BROKEN/m"] + [f"o{i}/m" for i in range(24)]
+json.dump([{"id": i} for i in ids], open(f"{root}/api/models.json", "w"))
+for i in ids:
+  os.makedirs(f"{root}/{i}/raw/main", exist_ok=True)
+  json.dump({"architectures": ["Qwen3_5ForConditionalGeneration"], "quantization": {"mode": "affine", "bits": 4}}, open(f"{root}/{i}/raw/main/config.json", "w"))
+F
+python3 "$tmp/hf-srv.py" "$many" "$tmp/hf-log" "$tmp/hf-srv.port" & hfsrv=$!
+until [ -s "$tmp/hf-srv.port" ]; do sleep 0.1; done
+hs() { XDG_CACHE_HOME=$tmp/hf-cache STARTDGX_HF_NOW=$hnow STARTDGX_HF_BASE=http://127.0.0.1:$(cat "$tmp/hf-srv.port") s hf search "$@"; }
+hnow=1000000; out=$(hs many --json); ok $? "a search where one repo's config fetch errors succeeds"
+same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 24; ok $? "and the other repos are all listed"
+peak=$(cat "$tmp/hf-log.max"); gt "$peak" 1 && gt 9 "$peak"; ok $? "the repos' configs are fetched in parallel, at most 8 at a time"
+before=$(wc -l <"$tmp/hf-log")
+hnow=$((hnow + 3599)); out2=$(hs many --json); same "$out2" "$out"; ok $? "a repeat search within the hour gives the same rows"
+same "$(wc -l <"$tmp/hf-log")" "$before"; ok $? "and makes no network request"
+hs other --json >/dev/null; after=$(wc -l <"$tmp/hf-log"); gt "$after" "$before"; ok $? "another query is not served from the cache"
+before=$(wc -l <"$tmp/hf-log"); hnow=$((hnow + 3601)); hs many --json >/dev/null
+after=$(wc -l <"$tmp/hf-log"); gt "$after" "$before"; ok $? "after an hour the same query goes to the network again"
+kill "$hfsrv" 2>/dev/null; wait "$hfsrv" 2>/dev/null
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
+same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+# recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
+# checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).
+drafts=$tmp/drafts
+draft() { STARTDGX_HF_BASE=$here/demo/hf s recipe draft --out "$drafts" "$@"; }
+dd() { local cond=$1; shift; draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+tf=TensorFold/Qwen3.8-27B-MLX-4bit
+vl=TensorFold/Qwen3.8-VL-27B-MLX-4bit
+out=$(draft $tf); ok $? "recipe draft writes a recipe"
+present "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "named for the repo, owner dropped, slugified, with -tensorfold appended"
+python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+a = r["artifacts"]
+v = r["variant"]
+gib = -(-16074529674 * 10 // 2**30) / 10
+ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 1 and len(v) == 1
+      and r["hardware"] == [{"gpu": "nvidia-gb10", "ram_class": 128}]
+      and a[0] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0",
+                   "files": ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"], "dest": "target", "model": "."}
+      and v[0]["source"] == "drafted" and v[0]["peak_ram_gib"] == gib and v[0]["peak_gpu_gib"] == gib and v[0]["ctx"] > 0)
+sys.exit(not ok)
+F
+ok $? "it has the TensorFold artifact block of the curated recipes, the full commit sha, the license, and one drafted variant sized to the weights"
+draft $vl --id vision-draft >/dev/null; ok $? "a repo with a vision_config drafts"
+python3 - "$drafts/vision-draft.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+sys.exit(not (r["input"] == ["text", "image"] and r["server"] == {"args": ["--vision", "--vision-max-images", "50"]}))
+F
+ok $? "and sets the image input and the server arguments that load the vision tower, as the curated vision recipe does"
+python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], "rb"))
+sys.exit("input" in r or "server" in r)
+F
+ok $? "a text-only draft sets neither"
+dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": []}' $tf --id qwen3.8-draft
+ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}, and --id names the file"
+present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
+printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
+printf '%s' "$out" | grep -qi 'warning'; ok $((!$?)) "a permissive license warns of nothing"
+printf '%s' "$out" | grep -q 'recipe add'; ok $? "and says how to add it"
+draft $tf >/dev/null 2>&1; ok $? "a draft startdgx wrote and nobody edited is replaced by the next try"
+printf '# mine\n' >>"$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"
+out=$(draft $tf 2>&1); ok $((!$?)) "a draft the person edited is never overwritten"
+printf '%s' "$out" | grep -q -- '--id'; ok $? "and the clash asks for --id"
+grep -q '^# mine$' "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "and keeps their edit"
+: >"$drafts/hand-made.toml"
+draft $tf --id hand-made >/dev/null 2>&1; ok $((!$?)) "a file startdgx never wrote is never overwritten"
+eng=$FAKE_HOST/home/.local/share/omarchy-local-ai; mkdir -p "$eng"
+# A host engine that lists two recipes and, while $HOME/reject exists, rejects every validate.
+cat >"$eng/omarchy-local-ai" <<'F'
+#!/bin/sh
+if [ "$2" = validate ] && [ -e "$HOME/reject" ]; then echo "recipes/x: rejected by the engine"; exit 1; fi
+echo '[{"id":"mine","user":true},{"id":"qwen3.8-27b-tensorfold"}]'
+F
+chmod +x "$eng/omarchy-local-ai"
+s add me@dgx >/dev/null 2>&1
+out=$(draft $tf --host me@dgx --id mine 2>&1); ok $((!$?)) "an id the host already has fails"
+printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -q mine; ok $? "naming the id and asking for --id"
+s add me@dgx >/dev/null 2>&1; : >"$FAKE_LOG"
+draft $tf --host me@dgx --id fresh-one >/dev/null; ok $? "an id the host doesn't have passes the host check"
+grep -q 'recipe list --json' "$FAKE_LOG"; ok $? "which asks the host only for its recipe list"
+grep -q 'recipe validate' "$FAKE_LOG"; ok $? "and asks the host's engine to validate the draft before it reports success"
+touch "$FAKE_HOST/home/reject"
+out=$(draft $tf --host me@dgx --id vfail 2>&1); ok $((!$?)) "a draft the host's engine rejects fails"
+printf '%s' "$out" | grep -q 'rejected by the engine'; ok $? "with the engine's errors"
+none_of "$drafts/vfail.toml"; ok $? "and the file is removed, so a retry is not blocked"
+rm -f "$FAKE_HOST/home/reject"
+draft $tf --host me@dgx --id vfail >/dev/null; ok $? "the retry drafts it"
+out=$(draft --host me@dgx --id panel-order --json -- $tf 2>&1); ok $? "the panel's argument order (options, then -- and the repo) drafts with the host check"
+printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['source'] == 'drafted' and d['id'] == 'panel-order'))"; ok $? "and prints the JSON the panel parses"
+dd '"license" in d and d["warnings"] and "other" in d["warnings"][0]' LiquidAI/LFM2.5-24B-A2B-MLX-4bit --id lfm-a
+ok $? "a restrictive license warns and still writes the draft"
+dd 'd["license"] == "unknown" and d["warnings"] and "unknown" in d["warnings"][0]' someone/Gemma-4-31B-uncensored-MLX-4bit --id gemma-a
+ok $? "an unknown license is written as unknown and warns"
+lichf=$tmp/hf-lic; cp -r "$here/demo/hf" "$lichf"
+for lic in 'x"
+name = "evil' 'apache-2.0 plus a very long explanation that is not a license identifier at all, which a card can hold' '🙂-license' 'Apache-2.0'; do
+  python3 - "$lichf/api/models/TensorFold/Qwen3.8-27B-MLX-4bit.json" "$lic" <<'F'
+import json, sys
+d = json.load(open(sys.argv[1])); d["cardData"]["license"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+F
+  rm -f "$tmp/lic.toml"; STARTDGX_HF_BASE=$lichf s recipe draft $tf --id lic --out "$tmp/lic" --json >"$tmp/lic.json"
+  python3 - "$tmp/lic/lic.toml" "$tmp/lic.json" "$lic" <<'F'
+import json, sys, tomllib
+t = tomllib.load(open(sys.argv[1], "rb")); j = json.load(open(sys.argv[2]))
+good = sys.argv[3] == "Apache-2.0"
+sys.exit(not (len(t["artifacts"]) == 1 and t["name"] != "evil" and t["artifacts"][0]["license"] == (sys.argv[3] if good else "unknown")
+              and bool(j["warnings"]) == (not good)))
+F
+  ok $? "license text from a card ($(printf '%s' "$lic" | head -c 12 | tr '\n' ' ')...) is $([ "$lic" = Apache-2.0 ] && echo kept || echo 'written as unknown with a warning'), and the draft is valid TOML"
+  rm -rf "$tmp/lic"
+done
+grep -q '^license = "unknown"' "$drafts/gemma-a.toml"; ok $? "so the engine's non-empty license rule holds"
+out=$(draft someone/Qwen3.8-27B-gated-MLX-4bit 2>&1); ok $((!$?)) "a gated repo is refused"
+printf '%s' "$out" | grep -qi gated; ok $? "saying it is gated"
+for r in someone/Mystery-70B-MLX-4bit someone/Qwen3.8-27B-MLX-8bit someone/Qwen3.8-27B-bf16 someone/Broken-Config-MLX-4bit someone/No-Config-MLX-4bit nobody/Missing-MLX-4bit; do
+  draft "$r" --id refused >/dev/null 2>&1; ok $((!$?)) "$r is outside the Find checks and refused"
+done
+none_of "$drafts/refused.toml"; ok $? "a refusal writes nothing"
+for r in notarepo ../x/y a/b/c -x/y; do draft -- "$r" >/dev/null 2>&1; ok $((!$?)) "'$r' is not an OWNER/NAME repo"; done
+draft $tf --id Not_An_Id >/dev/null 2>&1; ok $((!$?)) "an --id that can't be a recipe id is refused"
+out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s recipe draft $tf --out "$drafts" 2>&1); ok $((!$?)) "offline fails"
+printf '%s' "$out" | grep -q "Can't reach Hugging Face"; ok $? "saying so"
+# The engine's own validation, when a checkout of the fork is there: a draft passes, as a user recipe named for its id.
+engine_checkout=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
+if [ -x "$engine_checkout/omarchy-local-ai" ] && [ -f "$engine_checkout/agent_local.py" ]; then
+  for f in qwen3.8-27b-mlx-4bit-tensorfold lfm-a gemma-a; do
+    out=$("$engine_checkout/omarchy-local-ai" recipe validate "$drafts/$f.toml" 2>&1); ok $? "the engine's own recipe validate accepts the draft $f${out:+ ($out)}"
+  done
+  d2=$tmp/drafts-clash; STARTDGX_HF_BASE=$here/demo/hf s recipe draft $tf --id qwen3.8-27b-tensorfold --out "$d2" >/dev/null
+  "$engine_checkout/omarchy-local-ai" recipe validate "$d2/qwen3.8-27b-tensorfold.toml" 2>&1 | grep -q 'clashes with the curated'; ok $? "and the engine rejects a draft whose id clashes with a curated recipe, as the contract says"
+else
+  ok 0 "skipped the engine contract test: no fork checkout (set STARTDGX_ENGINE)"
+fi
+# Demo mode: the same, on the bundled fixtures, in the demo's state folder, and never the network or a process.
+ddraft() { local cond=$1; shift; STARTDGX_HF_BASE=http://127.0.0.1:9 ds recipe draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+ddraft 'd["id"] == "qwen3.8-27b-mlx-4bit-tensorfold" and d["source"] == "drafted" and d["path"].startswith("'"$tmp"'/state/startdgx-demo/")' $tf
+ok $? "demo recipe draft serves the bundled fixtures, ignores STARTDGX_HF_BASE, and writes under the demo's state folder"
+ds recipe draft $tf >/dev/null 2>&1; ok $? "and an unedited demo draft is replaced by the next try"
+ds recipe draft $tf --host $a --id demo-checked >/dev/null; ok $? "a demo draft for a machine passes the demo engine's validation"
+printf '# mine\n' >>"$tmp/state/startdgx-demo/drafts/demo-checked.toml"; ds recipe draft $tf --host $a --id demo-checked >/dev/null 2>&1; ok $((!$?)) "and an edited demo draft is not overwritten"
+ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
+ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo draft never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+# recipe author: the draft, then (when it needs judgement, or --agent) a terminal running the configured agent command with the
+# authoring brief. The agent is a stub here; no real agent or machine runs.
+brief=$here/recipe-authoring-brief.txt
+present "$brief"; ok $? "the authoring brief is a plain-text file at the plugin root, which the installer copies (it drops docs/ and *.md)"
+for rule in 'RECIPE RULES' 'recipe validate' 'recipe add' 'recipe measure' 'recipe confirm' 'numbers come only from' \
+  'go-ahead before every download' 'before every measuring run' '--yes' 'stop after three draft-and-measure rounds' 'never counts as fitting'; do
+  grep -qi -- "$rule" "$brief"; ok $? "the brief says: $rule"
+done
+authordir=$tmp/authors
+author() { STARTDGX_HF_BASE=$here/demo/hf s recipe author --out "$authordir" "$@"; }
+launched_author() { : >"$FAKE_LAUNCH"; author "$@" >/dev/null 2>&1; cat "$FAKE_LAUNCH"; }
+: >"$FAKE_LAUNCH"; out=$(author me@dgx $tf --id author-simple 2>&1); ok $? "recipe author drafts"
+present "$authordir/author-simple.toml"; ok $? "and writes the draft"
+same "$(cat "$FAKE_LAUNCH")" ""; ok $? "a simple draft starts no agent"
+printf '%s' "$out" | grep -q -- '--agent'; ok $? "and says how to ask for one"
+launched_author me@dgx $tf --id author-asked --agent >"$tmp/l1"; same "$(head -1 "$tmp/l1")" 1; ok $? "--agent opens one terminal command on a simple draft"
+tail -n +2 "$tmp/l1" | grep -q '^claude '; ok $? "which runs the default agent command, claude"
+tail -n +2 "$tmp/l1" | grep -q 'RECIPE RULES'; ok $? "carrying the authoring brief"
+tail -n +2 "$tmp/l1" | grep -q "$authordir/author-asked.toml"; ok $? "and the draft's path"
+tail -n +2 "$tmp/l1" | grep -q 'TensorFold/Qwen3.8-27B-MLX-4bit'; ok $? "and the repo"
+tail -n +2 "$tmp/l1" | grep -q 'me@dgx'; ok $? "and the host"
+mkdir -p "$XDG_CONFIG_HOME/startdgx"; printf '{"agent_command": "my-agent --flag \\"two words\\""}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+launched_author me@dgx $tf --id author-cfg --agent >"$tmp/l2"; tail -n +2 "$tmp/l2" | grep -q "^my-agent --flag 'two words' "; ok $? "the agent command is configurable in config.json (quoted words stay whole)"
+tail -n +2 "$tmp/l2" | grep -q '^claude'; ok $((!$?)) "and replaces the default"
+printf '{"agent_command": 5}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"; author me@dgx $tf --id author-bad --agent >/dev/null 2>&1; ok $((!$?)) "an agent_command that isn't a string is refused"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+author me@dgx $tf --id author-twice >/dev/null; author me@dgx $tf --id author-twice >/dev/null 2>&1; ok $((!$?)) "recipe author never replaces a draft: an agent may have edited it"
+printf '{"agent_command": "no-such-agent-xyz"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+author me@dgx $tf --id author-lf --agent --here >/dev/null 2>&1 </dev/null; ok $((!$?)) "an agent that can't start fails"
+none_of "$authordir/author-lf.toml"; ok $? "and leaves no draft behind, so a retry is not blocked"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+for r in "TensorFold/Qwen3.8-27B-Drafter-MLX-4bit drafter" "TensorFold/Qwen3.8-27B-Yarn-MLX-4bit server"; do
+  read -r jrepo jwhy <<<"$r"
+  launched_author me@dgx "$jrepo" --id "author-$jwhy" >"$tmp/l3"; same "$(head -1 "$tmp/l3")" 1; ok $? "$jrepo needs judgement: an agent starts by itself"
+  tail -n +2 "$tmp/l3" | grep -qi "$jwhy"; ok $? "and the prompt says why ($jwhy)"
+done
+author me@dgx $tf --id author-json --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['judgement'] == [] and d['agent'] is False))"; ok $? "--json gives the draft, its judgement reasons and whether an agent would start"
+author me@dgx $vl --id author-j2 --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['judgement'] == [] and d['agent'] is False))"; ok $? "a vision draft needs no judgement: no agent"
+: >"$FAKE_LAUNCH"; author me@dgx someone/Qwen3.8-27B-gated-MLX-4bit --agent >/dev/null 2>&1; ok $((!$?)) "a refused repo fails"
+same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and starts no agent"
+author me@dgx $tf --id author-here --agent --here >/dev/null 2>&1 </dev/null; same "$(cat "$FAKE_LAUNCH")" ""; ok $? "--here runs the agent in this terminal, not a new one"
+mkdir -p "$tmp/agentbin"
+cat >"$tmp/agentbin/stub-agent" <<'F'
+#!/bin/sh
+printf '%s\n' "$#" >"$FAKE_AGENT_OUT"
+F
+chmod +x "$tmp/agentbin/stub-agent"
+printf '{"agent_command": "stub-agent"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+PATH=$tmp/agentbin:$PATH FAKE_AGENT_OUT=$tmp/agent.out author me@dgx $tf --id author-here2 --agent --here >/dev/null 2>&1 </dev/null
+same "$(cat "$tmp/agent.out" 2>/dev/null)" 1; ok $? "the agent gets the brief and context as one argument"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+# launch author: the panel's way in, so the draft's errors and the agent show in the terminal.
+same "$(launched author me@dgx $tf)" "$(printf '1\n%s\n' "$cli recipe author me@dgx --agent --here -- $tf")"; ok $? "launch author opens a terminal running recipe author --agent --here"
+for refused in "author me@dgx" "author me@dgx notarepo" "author me@dgx ../x/y" "author me@dgx a/b/c" "install me@dgx $tf"; do
+  read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens nothing"
+done
+# Demo mode: says what it would run, runs nothing.
+out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | grep -q "Demo: would run 'claude "; ok $? "demo author says what it would run in a terminal"
+out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo author never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad

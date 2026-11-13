@@ -1,0 +1,22 @@
+{
+ "id": "someone/Gemma-4-31B-uncensored-MLX-4bit",
+ "gated": false,
+ "cardData": {
+  "library_name": "mlx",
+  "tags": [
+   "mlx",
+   "uncensored"
+  ]
+ },
+ "tags": [
+  "mlx",
+  "uncensored"
+ ],
+ "safetensors": {
+  "parameters": {
+   "U32": 3875000000
+  },
+  "total": 31000000000
+ },
+ "sha": "5902a4880861bafbf15f811c54131aeb71ee33cf"
+}

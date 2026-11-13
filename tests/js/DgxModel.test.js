@@ -849,3 +849,318 @@ test("engineUpdate reads the update the CLI found for a machine's engine", () =>
   assert.strictEqual(M.engineUpdate(status({ from: "v1", to: 2 })), null)
   assert.strictEqual(M.engineUpdate(status("v0.6.3-dgx.2")), null)
 })
+
+test("parseVariants reads the measured contexts, largest first, and refuses the rest", () => {
+  const v = M.parseVariants(JSON.stringify([{ ctx: 65536, peak_ram_gib: 60, peak_gpu_gib: 58 }, { ctx: 262144, peak_ram_gib: 91.5, peak_gpu_gib: 90 }]))
+  assert.deepStrictEqual(v.map((x) => x.ctx), [262144, 65536])
+  assert.strictEqual(M.parseVariants(""), null)
+  assert.strictEqual(M.parseVariants("{}"), null)
+  assert.strictEqual(M.parseVariants("[]"), null)
+  assert.strictEqual(M.parseVariants(JSON.stringify([{ ctx: "x", peak_ram_gib: 1 }])), null)
+})
+
+test("contextChoices: what each measured context needs, whether it fits and which one runs", () => {
+  const v = [{ ctx: 262144, peak_ram_gib: 91.5, peak_gpu_gib: 90 }, { ctx: 131072, peak_ram_gib: 70, peak_gpu_gib: 68 }, { ctx: 65536, peak_ram_gib: 40, peak_gpu_gib: 38 }]
+  const c = M.contextChoices(v, 131072, 96)
+  assert.deepStrictEqual(c.map((x) => x.label), ["256K", "128K", "64K"])
+  assert.deepStrictEqual(c.map((x) => x.fits), [false, true, true])
+  assert.deepStrictEqual(c.map((x) => x.current), [false, true, false])
+  assert.strictEqual(c[0].text, "Needs 91.5 GiB of memory and 8 GiB for the desktop; this machine has 96")
+  assert.strictEqual(c[1].text, "Needs 70 GiB of memory")
+  // A machine whose memory isn't known leaves every choice to the engine, which refuses what doesn't fit.
+  assert.deepStrictEqual(M.contextChoices(v, 0, 0).map((x) => x.fits), [true, true, true])
+})
+
+test("contextAction: a model that is set up can change its context, unless it is being set up, removed or changed", () => {
+  assert.strictEqual(M.contextAction(row({ unit: "active" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "inactive" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "failed" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "installing" }), ""), null)
+  assert.strictEqual(M.contextAction(row({ unit: "removing" }), ""), null)
+  assert.strictEqual(M.contextAction(row({ unit: "active" }), "stop"), null)
+  assert.strictEqual(M.contextAction(null, ""), null)
+})
+
+test("the c key opens a model's context card, and the command it sends carries the context", () => {
+  const model = { host: "h1", kind: "model", id: "a" }
+  assert.deepStrictEqual(M.keyAction("c", model, row({ unit: "active" }), "", false, false, ""), { type: "context", host: "h1", id: "a" })
+  assert.strictEqual(M.keyAction("c", model, row({ unit: "installing" }), "", false, false, ""), null)
+  assert.strictEqual(M.keyAction("c", { host: "h1", kind: "host" }, null, "", false, false, ""), null)
+  assert.deepStrictEqual(M.commandFor("h1", { key: "h1/a", kind: "context", ctx: 65536 }), ["use", "--detach", "h1", "a", "--ctx", "65536", "--timeout", "120"])
+})
+
+// ---- user recipes ----------------------------------------------------------------------------------------
+
+test("recipeSource: a row without one is measured, a drafted or unknown one never counts as fitting", () => {
+  assert.strictEqual(M.recipeSource({ id: "a" }), "measured")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "estimated" }), "estimated")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "drafted" }), "drafted")
+  assert.strictEqual(M.recipeSource({ id: "a", source: "guessed" }), "drafted", "an unrecognised word is the cautious one")
+})
+
+test("the real host's catalog (no user, no source) reads as curated and measured", () => {
+  const list = M.parseRecipes(require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "gx10-list.json"), "utf8"))
+  assert.ok(list.length > 0)
+  for (const r of list) {
+    assert.strictEqual(M.isUserRecipe(r), false)
+    assert.strictEqual(M.recipeSource(r), "measured")
+  }
+})
+
+test("recipeOffers: a drafted recipe is not yet fitting even if the engine says it is available", () => {
+  const r = { id: "mine", name: "Mine", user: true, source: "drafted", available: true, installed: false, best: false }
+  const o = M.recipeOffers([r], { models: {} })[0]
+  assert.strictEqual(o.action, null)
+  assert.match(o.text, /not yet fitting/)
+})
+
+test("recipeOffers: an estimated or measured user recipe that is available can be set up", () => {
+  const r = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
+  assert.strictEqual(M.recipeOffers([r], { models: {} })[0].action, "use")
+})
+
+test("recipeMarks: yours, and the source of a user recipe's numbers", () => {
+  assert.deepStrictEqual(M.recipeMarks({ id: "a" }), [])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "measured" }), ["yours"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "estimated" }), ["yours", "estimated"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "drafted" }), ["yours", "drafted, not yet fitting"])
+})
+
+test("userRecipes keeps only the user's", () => {
+  const list = [{ id: "a", user: false }, { id: "b", user: true }, { id: "c" }]
+  assert.deepStrictEqual(M.userRecipes(list).map((r) => r.id), ["b"])
+  assert.deepStrictEqual(M.userRecipes(null), [])
+})
+
+test("parseRecipeResult reads the CLI's validate and add answers", () => {
+  assert.deepStrictEqual(M.parseRecipeResult(JSON.stringify({ ok: true, id: "mine", errors: [], message: "Recipe mine is valid" })),
+    { ok: true, id: "mine", errors: [], message: "Recipe mine is valid" })
+  const bad = M.parseRecipeResult(JSON.stringify({ ok: false, id: "mine", errors: ["recipes/mine: no name", "recipes/mine: no runtime"], message: "" }))
+  assert.strictEqual(bad.ok, false)
+  assert.strictEqual(bad.errors.length, 2)
+  assert.strictEqual(M.parseRecipeResult("nope"), null)
+  assert.strictEqual(M.parseRecipeResult(JSON.stringify({ ok: false, errors: [] })), null, "a rejection with no reason is not an answer")
+  assert.strictEqual(M.parseRecipeResult(JSON.stringify({ ok: "yes", errors: [] })), null)
+})
+
+test("recipePathProblem: says what is wrong with a path before asking the machine", () => {
+  assert.match(M.recipePathProblem(""), /path/i)
+  assert.match(M.recipePathProblem("notes.txt"), /\.toml/)
+  assert.strictEqual(M.recipePathProblem("~/recipes/mine.toml"), "")
+  assert.strictEqual(M.recipePathProblem("  /x/mine.toml  "), "")
+})
+
+test("variantsText names each context with its source", () => {
+  assert.strictEqual(M.variantsText([{ ctx: 131072, source: "measured" }, { ctx: 65536, source: "drafted" }, { ctx: 32768 }]),
+    "128K measured · 64K drafted · 32K measured")
+  assert.strictEqual(M.variantsText([]), "")
+})
+
+test("parseVariants keeps a variant's source; contextChoices marks drafted as not fitting and estimated as such", () => {
+  const v = M.parseVariants(JSON.stringify([
+    { ctx: 131072, peak_ram_gib: 40, peak_gpu_gib: 38, source: "measured" },
+    { ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 28, source: "drafted" },
+    { ctx: 32768, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated" },
+    { ctx: 16384, peak_ram_gib: 10, peak_gpu_gib: 8 }]))
+  const c = M.contextChoices(v, 0, 128)
+  assert.deepStrictEqual(c.map((x) => x.source), ["measured", "drafted", "estimated", "measured"])
+  assert.deepStrictEqual(c.map((x) => x.fits), [true, false, true, true])
+  assert.match(c[1].text, /not yet fitting/)
+  assert.match(c[2].text, /Estimated/)
+})
+
+test("keyAction: e adds a recipe to the machine", () => {
+  assert.deepStrictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", false, false), { type: "addRecipe", host: "u@h" })
+  assert.strictEqual(M.keyAction("e", { kind: "host", host: "u@h" }, null, "", true, false), null, "not on a machine that doesn't answer")
+})
+
+// ---- measuring, confirming and setting up a user recipe -------------------------------------------------------
+
+test("variantActions: a drafted variant can be measured, an estimated one confirmed or measured, a measured one neither", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "drafted" }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated" }), ["confirm", "measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "measured" }), [])
+  assert.deepStrictEqual(M.variantActions({}), [])
+  assert.deepStrictEqual(M.variantActions({ source: "guessed" }), ["measure"], "an unrecognised source is drafted")
+})
+
+test("recipeOffers: setting up a user recipe asks first, a curated one doesn't", () => {
+  const mine = { id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false, context: 65536 }
+  const theirs = { id: "theirs", name: "Theirs", available: true, installed: false, best: false, context: 65536 }
+  const [a, b] = M.recipeOffers([mine, theirs], { models: {} })
+  assert.deepStrictEqual([a.recipe.id, a.action, a.confirm], ["mine", "use", true])
+  assert.deepStrictEqual([b.recipe.id, b.action, b.confirm], ["theirs", "use", false])
+})
+
+test("recipeOffers: a user recipe whose context is unknown can't show its download, so it isn't offered", () => {
+  const o = M.recipeOffers([{ id: "mine", name: "Mine", user: true, source: "measured", available: true, installed: false, best: false }], { models: {} })[0]
+  assert.strictEqual(o.action, null)
+  assert.match(o.text, /download/)
+})
+
+test("parseMeasurePlan: the engine's dry-run lines, without its closing 'nothing was changed'", () => {
+  const text = "Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download (3.5 GiB in 2 file(s))\n  load: Mine on tensorfold\nNothing was changed. Run again with --yes to do it.\n"
+  assert.deepStrictEqual(M.parseMeasurePlan(text), ["Measure mine at context 65536 (now a drafted variant)", "download: 3.5 GiB to download (3.5 GiB in 2 file(s))", "load: Mine on tensorfold"])
+  assert.strictEqual(M.parseMeasurePlan(""), null)
+  assert.strictEqual(M.parseMeasurePlan("Nothing was changed. Run again with --yes to do it."), null)
+})
+
+test("recipeRunWords: what the confirmation card says for a measure and for a setup", () => {
+  const measure = M.recipeRunWords("measure", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(measure.title, /Measure Mine/)
+  assert.match(measure.title, /64K/)
+  assert.strictEqual(measure.button, "Download and measure")
+  assert.match(measure.body, /runs it/i)
+  const setup = M.recipeRunWords("setup", { id: "mine", name: "Mine" }, 65536, "spark-a")
+  assert.match(setup.title, /Set up Mine/)
+  assert.strictEqual(setup.button, "Download and set up")
+})
+
+test("commandFor: a setup the person confirmed passes --yes to use, and one that wasn't doesn't", () => {
+  const act = (extra) => Object.assign({ op: 1, key: "me@h1/a", kind: "use", shows: "use" }, extra)
+  assert.deepStrictEqual(M.commandFor("me@h1", act({ yes: true })), ["use", "--detach", "me@h1", "a", "--yes", "--timeout", "120"])
+  assert.deepStrictEqual(M.commandFor("me@h1", act({})), ["use", "--detach", "me@h1", "a", "--timeout", "120"])
+})
+
+test("uninstallChoices: your recipes are an opt-in only when there are some, and say they go with it", () => {
+  const withRecipes = M.uninstallChoices(uninstallPlan({ recipes: 2 }))
+  const c = withRecipes.find((x) => x.flag === "--delete-recipes")
+  assert.ok(c)
+  assert.match(c.label, /recipes/)
+  assert.match(c.description, /2/)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan({ recipes: 0 })).some((x) => x.flag === "--delete-recipes"), false)
+  assert.strictEqual(M.uninstallChoices(uninstallPlan()).some((x) => x.flag === "--delete-recipes"), false, "a plan from an older CLI has no count")
+})
+
+test("a confirmed estimated variant says so, and offers only Measure", () => {
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: true }), ["measure"])
+  assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: false }), ["confirm", "measure"])
+  const c = M.contextChoices([{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true },
+    { ctx: 32768, peak_ram_gib: 10, peak_gpu_gib: 9, source: "estimated" }], 0, 128)
+  assert.match(c[0].text, /confirmed/)
+  assert.doesNotMatch(c[1].text, /confirmed/)
+})
+
+test("recipeSendCommand: the typed path comes after --, so one that starts with - is a path, not an option", () => {
+  assert.deepStrictEqual(M.recipeSendCommand("validate", "me@h1", "-x.toml"), ["recipe", "validate", "me@h1", "--json", "--timeout", "60", "--", "-x.toml"])
+  assert.deepStrictEqual(M.recipeSendCommand("add", "me@h1", "  ~/a b.toml "), ["recipe", "add", "me@h1", "--json", "--timeout", "60", "--", "~/a b.toml"])
+})
+
+test("parseMeasurePlan keeps the engine's up-front note that other commands wait for the measure", () => {
+  const note = "while it runs, every other omarchy agent local command waits for it (the agents panel's start and stop too): typically 10 minutes"
+  const plan = M.parseMeasurePlan("Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download\n  " + note + "\n  then: restarts the model\nNothing was changed. Run again with --yes to do it.\n")
+  assert.ok(plan.includes(note))
+  assert.strictEqual(plan.length, 4)
+})
+
+// ---- Find on Hugging Face (`hf search --json`) ----
+const hfRow = (over) => Object.assign({ repo: "TensorFold/Qwen3.8-27B-MLX-4bit", params: 27356728560, size_bytes: 16074529674,
+  license: "apache-2.0", base_model: "Qwen/Qwen3.8-27B", label: null }, over)
+const hfRows = [hfRow(), hfRow({ repo: "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", label: "abliterated" }),
+  hfRow({ repo: "someone/Gemma-4-31B-uncensored-MLX-4bit", label: "uncensored", license: null, base_model: null, params: null, size_bytes: null })]
+
+test("parseHfRows keeps the CLI's rows and refuses what isn't a list of them", () => {
+  assert.strictEqual(M.parseHfRows(JSON.stringify(hfRows)).length, 3)
+  assert.deepStrictEqual(M.parseHfRows("[]"), [])
+  assert.strictEqual(M.parseHfRows(""), null)
+  assert.strictEqual(M.parseHfRows("{}"), null)
+  assert.strictEqual(M.parseHfRows(JSON.stringify([{ params: 1 }])), null)
+})
+
+test("hfShown hides the labelled rows with the toggle off and keeps the order", () => {
+  assert.deepStrictEqual(M.hfShown(hfRows, true).map((r) => r.repo), hfRows.map((r) => r.repo))
+  assert.deepStrictEqual(M.hfShown(hfRows, false).map((r) => r.repo), ["TensorFold/Qwen3.8-27B-MLX-4bit"])
+  assert.deepStrictEqual(M.hfShown(null, false), [])
+})
+
+test("hfDerivativeCount counts the labelled rows, for the toggle's words", () => {
+  assert.strictEqual(M.hfDerivativeCount(hfRows), 2)
+  assert.strictEqual(M.hfDerivativeCount([hfRow()]), 0)
+  assert.strictEqual(M.hfDerivativeCount(null), 0)
+})
+
+test("hfToggleText says what the toggle does and how many rows it holds", () => {
+  assert.strictEqual(M.hfToggleText(hfRows, true), "Hide abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText(hfRows, false), "Show abliterated and uncensored (2)")
+  assert.strictEqual(M.hfToggleText([hfRow()], true), "")
+})
+
+test("hfMemoryLine gives plain facts and never a verdict", () => {
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 16.5 * 2 ** 30 }), 128), "weights 16.5 GiB; this host has 128 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 15.4 * 2 ** 30 }), 121.6), "weights 15.4 GiB; this host has 122 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow(), 0), "weights 15.0 GiB")
+  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: null }), 128), "weights size unknown; this host has 128 GiB")
+  // Even a model far bigger than the host only gets the two numbers.
+  const huge = M.hfMemoryLine(hfRow({ size_bytes: 500 * 2 ** 30 }), 128)
+  assert.strictEqual(huge, "weights 500.0 GiB; this host has 128 GiB")
+  assert.ok(!/fit|enough|too|won't|will|can/i.test(huge))
+})
+
+test("hfRowText is the facts under a repo's name, in the order the CLI prints them", () => {
+  assert.strictEqual(M.hfRowText(hfRow()), "27.4B · apache-2.0 · from Qwen/Qwen3.8-27B")
+  assert.strictEqual(M.hfRowText(hfRows[2]), "license unknown")
+  assert.strictEqual(M.hfRowText(hfRow({ params: null, base_model: null })), "apache-2.0")
+})
+
+test("hfLabel is the mark on a derivative and nothing on the rest", () => {
+  assert.strictEqual(M.hfLabel(hfRows[1]), "abliterated")
+  assert.strictEqual(M.hfLabel(hfRow()), "")
+})
+
+test("hfSearchCommand hands the query after --, so a query starting with - is a query", () => {
+  assert.deepStrictEqual(M.hfSearchCommand("  qwen "), ["hf", "search", "--json", "--", "qwen"])
+  assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
+})
+
+// ---- Draft recipe on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
+const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.8-27b-mlx-4bit-tensorfold", repo: "TensorFold/Qwen3.8-27B-MLX-4bit",
+  path: "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml", revision: "948c129", license: "apache-2.0",
+  weights_bytes: 16074529674, placeholder_gib: 15, source: "drafted", warnings: [] }, over))
+
+test("draftCommand asks the host about the id, so a clash is refused before anything is written, and the repo comes after --", () => {
+  assert.deepStrictEqual(M.draftCommand("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"),
+    ["recipe", "draft", "--host", "me@dgx", "--json", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
+})
+
+test("parseDraftResult keeps the file to add and the warnings, and refuses what isn't a draft", () => {
+  const d = M.parseDraftResult(draftJson({ warnings: ["License 'llama3' may restrict use: read its terms before you use it", ""] }))
+  assert.strictEqual(d.id, "qwen3.8-27b-mlx-4bit-tensorfold")
+  assert.strictEqual(d.path, "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml")
+  assert.deepStrictEqual(d.warnings, ["License 'llama3' may restrict use: read its terms before you use it"])
+  assert.deepStrictEqual(M.parseDraftResult(draftJson()).warnings, [])
+  assert.strictEqual(M.parseDraftResult(""), null)
+  assert.strictEqual(M.parseDraftResult("[]"), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ ok: false })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ path: "" })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ id: undefined })), null)
+  assert.strictEqual(M.parseDraftResult(draftJson({ warnings: "x" })), null)
+})
+
+test("draftStatus says which step runs, and the outcome in words that call the recipe drafted and not yet fitting", () => {
+  assert.strictEqual(M.draftStatus("drafting", "me@dgx", "A/B"), "Drafting A/B…")
+  assert.strictEqual(M.draftStatus("checking", "me@dgx", "A/B"), "Asking dgx to check the draft…")
+  assert.strictEqual(M.draftStatus("adding", "me@dgx", "A/B"), "Adding the draft to dgx…")
+  assert.strictEqual(M.draftStatus("", "me@dgx", "A/B"), "")
+  assert.match(M.draftDone("me@dgx", "my-id"), /my-id.*dgx.*drafted, not yet fitting.*Measure/)
+})
+
+test("draftErrorText drops the CLI's --id advice, which the card can't act on", () => {
+  assert.strictEqual(M.draftErrorText("demo@spark-a already has a recipe 'x' (curated or yours): pick another id with --id"), "demo@spark-a already has a recipe 'x' (curated or yours)")
+  assert.strictEqual(M.draftErrorText("/d/x.toml already exists: pick another id with --id, or delete the file"), "/d/x.toml already exists: delete the file to draft it again")
+  assert.strictEqual(M.draftErrorText("Hugging Face did not answer"), "Hugging Face did not answer")
+})
+
+test("authorLaunch opens a terminal on the repo through launch, so the draft's errors and the agent show there", () => {
+  assert.deepStrictEqual(M.authorLaunch("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"), { verb: "author", host: "me@dgx", id: "TensorFold/Qwen3.8-27B-MLX-4bit" })
+})
+
+test("authorLaunch refuses what is not an OWNER/NAME repo, as the CLI does", () => {
+  for (const repo of ["", "notarepo", "../x/y", "a/b/c", "-x y/z", "a/..", null, undefined]) assert.strictEqual(M.authorLaunch("me@dgx", repo), null, String(repo))
+})
+
+test("the agent pill says an agent opens in a terminal and that downloads and measuring runs wait for the person", () => {
+  assert.strictEqual(M.AUTHOR_TEXT, "With an agent…")
+  assert.match(M.authorHint(), /terminal/)
+  assert.match(M.authorHint(), /asks before any download or measuring run/)
+  assert.doesNotMatch(M.authorHint(), /fits?\b/i)
+})

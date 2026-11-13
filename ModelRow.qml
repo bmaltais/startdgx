@@ -24,12 +24,14 @@ Rectangle {
   signal logsRequested()
   signal removeRequested()
   signal shareRequested()
+  signal contextRequested()
   signal selectRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
   readonly property string share: Model.shareAction(row.entry, row.pending, row.sharing) || ""   // "share", "unshare" or "" (none)
+  readonly property bool canContext: Model.contextAction(row.entry, row.pending) !== null
   readonly property bool shared: row.entry.shared === true
   readonly property bool blocked: Model.startBlocked(row.entry)
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
@@ -148,7 +150,8 @@ Rectangle {
         implicitHeight: Style.space(16) + verticalPadding * 2
         opacity: row.sharing !== "" ? 0.5 : 1
         tooltipText: row.sharing !== "" ? "Waiting for the machine"
-          : row.shared ? "Shared with the tailnet. Stop sharing  (t)" : "Share with the tailnet  (t)"
+          : row.shared ? "Shared: Omarchy on your other machines lists this model. Click to make it private  (t)"
+          : "Private to this machine. Click to share it with your tailnet  (t)"
         onClicked: if (row.share !== "") row.shareRequested()
         TailscaleMark {
           anchors.centerIn: parent
@@ -156,6 +159,15 @@ Rectangle {
           color: row.shared ? Color.accent : Color.muted
           crossed: !row.shared
         }
+      }
+
+      // The model's context size, chosen among the ones its recipe has measured, in a card.
+      Button {
+        Layout.alignment: Qt.AlignVCenter
+        visible: !row.away && row.canContext
+        iconText: "\uf1de"
+        tooltipText: "Context size…  (c)"
+        onClicked: row.contextRequested()
       }
 
       // Opens this model's logs in a terminal.

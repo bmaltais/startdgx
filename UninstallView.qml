@@ -1,7 +1,7 @@
 // A machine's uninstall card, over the manager. `startdgx launch uninstall` starts the real uninstall at once,
 // so this card is the confirmation: it shows the plan first (`uninstall HOST --dry-run --json`, which changes
 // nothing), and only its Uninstall… button opens the terminal that does it, where sudo asks for the machine's password.
-// Two opt-ins, off by default, are asked for where they would do something (DgxModel.uninstallChoices): deleting the
+// Opt-ins, off by default, are asked for where they would do something (DgxModel.uninstallChoices): deleting the recipes you added (--delete-recipes), deleting the
 // model weights (--delete-models) and removing the packages the install added (--remove-packages). Each change asks
 // the machine for the plan again, and Uninstall… waits for it. Esc, Cancel or a click outside closes it and nothing
 // happens.

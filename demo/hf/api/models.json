@@ -1,0 +1,268 @@
+[
+ {
+  "id": "TensorFold/Qwen3.8-27B-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx",
+    "4-bit"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "4-bit",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx",
+    "abliterated"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "abliterated",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "LiquidAI/LFM2.5-24B-A2B-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "other",
+   "base_model": "LiquidAI/LFM2.5-24B-A2B"
+  },
+  "tags": [
+   "mlx",
+   "license:other"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3000000000
+   },
+   "total": 24000000000
+  }
+ },
+ {
+  "id": "someone/Gemma-4-31B-uncensored-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx",
+    "uncensored"
+   ]
+  },
+  "tags": [
+   "mlx",
+   "uncensored"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3875000000
+   },
+   "total": 31000000000
+  }
+ },
+ {
+  "id": "someone/Qwen3.8-27B-MLX-8bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "someone/Qwen3.8-27B-MLX-3bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "someone/Qwen3.8-27B-mxfp4",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "someone/Qwen3.8-27B-bf16",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx",
+    "4-bit"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "4-bit",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "someone/Mystery-70B-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "mit"
+  },
+  "tags": [
+   "mlx",
+   "license:mit"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 8750000000
+   },
+   "total": 70000000000
+  }
+ },
+ {
+  "id": "someone/Qwen3.8-27B-gated-MLX-4bit",
+  "gated": "auto",
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "apache-2.0",
+   "base_model": "Qwen/Qwen3.8-27B"
+  },
+  "tags": [
+   "mlx",
+   "license:apache-2.0"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 3419591070
+   },
+   "total": 27356728560
+  }
+ },
+ {
+  "id": "someone/Broken-Config-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "mit"
+  },
+  "tags": [
+   "mlx",
+   "license:mit"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 125000000
+   },
+   "total": 1000000000
+  }
+ },
+ {
+  "id": "someone/No-Config-MLX-4bit",
+  "gated": false,
+  "cardData": {
+   "library_name": "mlx",
+   "tags": [
+    "mlx"
+   ],
+   "license": "mit"
+  },
+  "tags": [
+   "mlx",
+   "license:mit"
+  ],
+  "safetensors": {
+   "parameters": {
+    "U32": 125000000
+   },
+   "total": 1000000000
+  }
+ }
+]

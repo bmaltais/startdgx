@@ -9,8 +9,12 @@ die() { echo "release-engine: $*" >&2; exit 1; }
 [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dgx\.[0-9]+$ ]] || die "$tag isn't of the form vX.Y.Z-dgx.N"
 cd "$fork"
 [ -z "$(git status --porcelain)" ] || die "the checkout has uncommitted changes"
-git fetch -q origin || die "can't fetch origin"
+git fetch -q --tags origin || die "can't fetch origin"
 git merge-base --is-ancestor origin/master HEAD || die "origin/master isn't merged into HEAD"
+# The tag names the upstream release it contains: the highest upstream vX.Y.Z (not a -dgx one) reachable from HEAD.
+upstream=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -Ev -- '-' | sort -V | tail -1)
+[ -n "$upstream" ] || die "no upstream vX.Y.Z tag is reachable from HEAD"
+[ "${tag%-dgx.*}" = "$upstream" ] || die "$tag doesn't name the upstream release it contains: HEAD contains $upstream, so tag it $upstream-dgx.N"
 tests/engine-test.sh || die "tests/engine-test.sh failed"
 git tag "$tag"
 echo "Tagged $tag at $(git rev-parse "$tag^{commit}"). To publish it:"

@@ -1,0 +1,11 @@
+# Drafted: its numbers are guesses, so it is not yet fitting.
+name = "My Draft 70B"
+summary = "A 70B model whose footprint nobody has measured."
+runtime = "tensorfold"
+vendor = "qwen"
+
+[[variant]]
+ctx = 65536
+peak_ram_gib = 90
+peak_gpu_gib = 88
+source = "drafted"

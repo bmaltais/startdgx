@@ -199,6 +199,11 @@ ColumnLayout {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         if (action) section.actionRequested(action)
       }
+      onContextRequested: {
+        const action = Model.keyAction("c", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending)
+        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
+        if (action) section.actionRequested(action)
+      }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
       onRemoveRequested: {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
