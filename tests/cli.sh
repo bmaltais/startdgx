@@ -372,7 +372,7 @@ tail -1 "$FAKE_LOG.args" | grep -q -- '-o ServerAliveInterval=15 -o ServerAliveC
 # filesystem handles symlinks and permissions.
 cat >"$FAKE_HOSTBIN/lsblk" <<'F'
 #!/usr/bin/env bash
-cat <<'J'
+cat <<J
 {"blockdevices":[
  {"name":"loop0","type":"loop","tran":null,"fstype":"squashfs","mountpoint":"/snap/core22/1","fssize":"73400320","fsavail":"0"},
  {"name":"nvme0n1","type":"disk","tran":"nvme","fstype":null,"mountpoint":null,"children":[
@@ -380,14 +380,39 @@ cat <<'J'
   {"name":"nvme0n1p2","type":"part","tran":"nvme","fstype":"ext4","mountpoint":"/","fssize":"982000000000","fsavail":"424000000000"}]},
  {"name":"sda","type":"disk","tran":"usb","fstype":null,"mountpoint":null,"children":[
   {"name":"sda1","type":"part","tran":"usb","fstype":null,"mountpoint":null},
-  {"name":"sda2","type":"part","tran":"usb","fstype":"ext4","mountpoint":"/media/usbdisk","fssize":"1966000000000","fsavail":"492000000000"}]},
- {"name":"sdb","type":"disk","tran":"usb","fstype":"exfat","mountpoint":"/media/stick","fssize":"64000000000","fsavail":"60000000000"}
+  {"name":"sda2","type":"part","tran":"usb","fstype":"ext4","mountpoint":"$FAKE_HOST/media/usbdisk","fssize":"1966000000000","fsavail":"492000000000"}]},
+ {"name":"sdb","type":"disk","tran":"usb","fstype":"exfat","mountpoint":"$FAKE_HOST/media/stick","fssize":"64000000000","fsavail":"60000000000"}
 ]}
 J
 F
 chmod +x "$FAKE_HOSTBIN/lsblk"
-exp='{"store": null, "disks": [{"mount": "/media/usbdisk", "bus": "usb", "fstype": "ext4", "size": 1966000000000, "free": 492000000000, "usable": true, "reason": ""}, {"mount": "/media/stick", "bus": "usb", "fstype": "exfat", "size": 64000000000, "free": 60000000000, "usable": false, "reason": "exfat cannot hold symlinks and permissions; use ext4, xfs or btrfs"}]}'
+mkdir -p "$FAKE_HOST/media/usbdisk" "$FAKE_HOST/media/stick"
+# shellcheck disable=SC2016 # $FAKE_HOST in the expected text is replaced on the next line
+exp='{"store": null, "disks": [{"mount": "$FAKE_HOST/media/usbdisk", "bus": "usb", "fstype": "ext4", "size": 1966000000000, "free": 492000000000, "usable": true, "reason": ""}, {"mount": "$FAKE_HOST/media/stick", "bus": "usb", "fstype": "exfat", "size": 64000000000, "free": 60000000000, "usable": false, "reason": "exfat cannot hold symlinks and permissions; use ext4, xfs or btrfs"}]}'
+exp=${exp//\$FAKE_HOST/$FAKE_HOST}
 same "$(s storage me@dgx --json)" "$exp"; ok $? "storage lists the mounted disks other than the root device, and says which a model store can use"
+# storage --set: the folder is made on a usable disk and marked, then remembered on the host; --unset forgets it, but not
+# while a model's weights are linked into it.
+cfg=$FAKE_HOST/home/.local/share/startdgx/store.json store=$FAKE_HOST/media/usbdisk/startdgx-models
+out=$(s storage me@dgx --set "$FAKE_HOST/media/stick/models" 2>&1); ok $((!$?)) "storage --set refuses a disk whose filesystem can't hold symlinks"
+same "$out" "Error: $FAKE_HOST/media/stick: exfat cannot hold symlinks and permissions; use ext4, xfs or btrfs"; ok $? "and says why"
+out=$(s storage me@dgx --set "$FAKE_HOST/home/models" 2>&1); ok $((!$?)) "storage --set refuses a folder that is on the root disk"
+same "$out" "Error: $FAKE_HOST/home/models isn't on an external disk; the root disk is where the models already are"; ok $? "and says so"
+out=$(s storage me@dgx --set "$FAKE_HOST/media/usbdisk/../stick/x" 2>&1); ok $((!$?)) "storage --set refuses a path that climbs out of its disk"
+same "$out" "Error: Give the store as an absolute path without .. or a trailing slash"; ok $? "and says what it wants"
+[ ! -e "$cfg" ] && none_of "$FAKE_HOST/media/stick/models" "$FAKE_HOST/home/models"; ok $? "a refused --set changes nothing"
+s storage me@dgx --set "$store" >/dev/null; ok $? "storage --set takes a folder on a usable disk"
+present "$store/.startdgx-store" && grep -q "$store" "$cfg"; ok $? "and marks the folder and remembers it on the host"
+s storage me@dgx --json | grep -q '"store": {"path": "'"$store"'", "present": true}'; ok $? "storage then names the store, present"
+rm "$store/.startdgx-store"
+s storage me@dgx --json | grep -q '"present": false'; ok $? "a store whose marker is gone (the disk isn't mounted) is not present"
+touch "$store/.startdgx-store"
+ed=$FAKE_HOST/home/.local/share/omarchy/agent-local; mkdir -p "$ed/blobs/sha256"; : >"$store/w"; ln -s "$store/w" "$ed/blobs/sha256/w"
+s storage me@dgx --unset >/dev/null 2>&1; ok $((!$?)) "storage --unset refuses while a model's weights are linked into the store"
+present "$cfg"; ok $? "and keeps the setting"
+rm "$ed/blobs/sha256/w"
+s storage me@dgx --unset >/dev/null; ok $? "storage --unset forgets the store"
+[ ! -e "$cfg" ] && present "$store/w"; ok $? "and leaves the disk's contents alone"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).

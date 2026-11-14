@@ -630,14 +630,21 @@ def cmd_recipe(args):
           "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
-# Read-only, for storage: the disks mounted on the host that could hold a model store, and the store in use, if one is set
-# (STORE_CONFIG). A disk counts when it is mounted, isn't on the root device's physical disk (the efi partition too) and
-# isn't a loop or a snap; it is usable when its filesystem keeps symlinks and permissions. Prints one JSON line.
+# For storage, run on the host with python3 -I - MODE [PATH]. The disks mounted there that could hold a model store, and
+# the store in use, if one is set (STORE_CONFIG). A disk counts when it is mounted, isn't on the root device's physical
+# disk (the efi partition too) and isn't a loop or a snap; it is usable when its filesystem keeps symlinks and
+# permissions. A store is present when its marker file is: an unmounted disk leaves an empty mount point, which would
+# otherwise take the writes meant for it. The mode "list" is read-only and prints one JSON line; "set" and "unset" print
+# nothing, and fail with an "Error:" line on stderr.
 STORE_CONFIG = ".local/share/startdgx/store.json"
 STORE_MARKER = ".startdgx-store"
 STORE_FILESYSTEMS = ("ext4", "xfs", "btrfs")
-STORAGE_PROBE = f'''
-import json, os, subprocess
+STORAGE_SCRIPT = '''
+import json, os, subprocess, sys
+CONFIG, MARKER, DATA = os.path.expanduser("~/@CONFIG@"), "@MARKER@", os.path.expanduser("~/@DATA@")
+def fail(text):
+  print("Error: " + text, file=sys.stderr)
+  sys.exit(1)
 out = json.loads(subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,TYPE,TRAN,FSTYPE,MOUNTPOINT,FSSIZE,FSAVAIL"], capture_output=True, text=True, check=True).stdout)
 flat = []
 def walk(node, top):
@@ -653,23 +660,61 @@ for top, dev in flat:
   if not mount or mount == "/" or top["name"] == root or dev.get("type") == "loop" or mount.startswith("/snap/"):
     continue
   fstype = dev.get("fstype") or ""
-  usable = fstype in {STORE_FILESYSTEMS!r}
-  disks.append({{"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
+  usable = fstype in @FILESYSTEMS@
+  disks.append({"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
                 "free": int(dev.get("fsavail") or 0), "usable": usable,
-                "reason": "" if usable else f"{{fstype or 'this filesystem'}} cannot hold symlinks and permissions; use ext4, xfs or btrfs"}})
-store = None
-try:
-  path = json.load(open(os.path.expanduser("~/{STORE_CONFIG}")))["path"]
-  store = {{"path": path, "present": os.path.exists(os.path.join(path, "{STORE_MARKER}"))}}
-except (OSError, ValueError, KeyError, TypeError):
-  pass
-print(json.dumps({{"store": store, "disks": disks}}))
-'''
+                "reason": "" if usable else (fstype or "this filesystem") + " cannot hold symlinks and permissions; use ext4, xfs or btrfs"})
+def current():
+  try:
+    return json.load(open(CONFIG))["path"]
+  except (OSError, ValueError, KeyError, TypeError):
+    return None
+mode = sys.argv[1]
+if mode == "list":
+  path = current()
+  store = {"path": path, "present": os.path.exists(os.path.join(path, MARKER))} if path else None
+  print(json.dumps({"store": store, "disks": disks}))
+elif mode == "set":
+  path = sys.argv[2]
+  if not os.path.isabs(path) or os.path.normpath(path) != path:
+    fail("Give the store as an absolute path without .. or a trailing slash")
+  real = os.path.realpath(path)
+  home = max((d for d in disks if real == d["mount"] or real.startswith(d["mount"].rstrip("/") + "/")), key=lambda d: len(d["mount"]), default=None)
+  if home is None:
+    fail(path + " isn't on an external disk; the root disk is where the models already are")
+  if not home["usable"]:
+    fail(home["mount"] + ": " + home["reason"])
+  os.makedirs(path, exist_ok=True)
+  open(os.path.join(path, MARKER), "a").close()
+  os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+  with open(CONFIG + ".new", "w") as f:
+    json.dump({"path": path}, f)
+  os.replace(CONFIG + ".new", CONFIG)
+elif mode == "unset":
+  path = current()
+  if path:
+    linked = 0
+    for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
+      for name in names:
+        full = os.path.join(folder, name)
+        if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
+          linked += 1
+    if linked:
+      fail(str(linked) + " model file(s) are on the store; move those models back first")
+    os.remove(CONFIG)
+'''.replace("@CONFIG@", STORE_CONFIG).replace("@MARKER@", STORE_MARKER).replace("@DATA@", ENGINE_DATA).replace("@FILESYSTEMS@", repr(STORE_FILESYSTEMS))
+
+
+def storage_run(host, args, *argv):
+  return ssh_raw(host, shlex.join(["python3", "-I", "-", *argv]), stdin=STORAGE_SCRIPT, timeout=args.timeout, what="storage").stdout
 
 
 def cmd_storage(args):
   host = target(args.host)
-  out = ssh_raw(host, "python3 -I -", stdin=STORAGE_PROBE, timeout=args.timeout, what="probe").stdout
+  if args.set or args.unset:
+    storage_run(host, args, *(["set", args.set] if args.set else ["unset"]))
+    return
+  out = storage_run(host, args, "list")
   try:
     found = json.loads(out.strip().splitlines()[-1])
     found["store"], found["disks"]
@@ -2417,7 +2462,12 @@ def build_parser():
     s.set_defaults(fn=fn)
     return s
 
-  add("storage", cmd_storage).add_argument("--json", action="store_true", help="as {store, disks}")
+  st = add("storage", cmd_storage, description="The disks on HOST that could keep its model weights, and the model store in use. "
+           "--set makes a folder on one of them the store; --unset forgets it (refused while models are linked into it).")
+  st.add_argument("--json", action="store_true", help="as {store, disks}")
+  stm = st.add_mutually_exclusive_group()
+  stm.add_argument("--set", metavar="PATH", help="use PATH, a folder on an external disk, as the model store")
+  stm.add_argument("--unset", action="store_true", help="stop using a model store")
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
   i = add("install", cmd_install, timeout=3600)
