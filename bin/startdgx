@@ -802,7 +802,7 @@ for name in sorted(os.listdir(base)):
         shutil.rmtree(left)
 filesets = sorted(n for n in os.listdir(base) if "." not in n and os.path.isdir(os.path.join(base, n)))
 if direction == "usb":
-  total, moved = 0, False
+  total, freed, kept, moved = 0, 0, 0, False
   for fs in filesets:
     here, there = os.path.join(base, fs), os.path.join(store, rid, fs)
     if os.path.islink(here):
@@ -830,20 +830,31 @@ if direction == "usb":
         info = os.lstat(os.path.join(folder, name))
         if not os.path.islink(os.path.join(folder, name)):
           blobs[(info.st_dev, info.st_ino)] = os.path.join(folder, name)
-    linked = {}
+    linked, leaving = {}, []
     for rel in files(here):
       info = os.stat(os.path.join(here, rel))
-      if (info.st_dev, info.st_ino) in blobs:
-        linked[os.path.join(there, rel)] = blobs[(info.st_dev, info.st_ino)]
+      blob = blobs.get((info.st_dev, info.st_ino))
+      if blob:
+        linked[os.path.join(there, rel)] = blob
+      leaving.append((info.st_size, info.st_nlink, blob))
     os.rename(here, here + ".moving")
     os.symlink(there, here)
     shutil.rmtree(here + ".moving")
+    replaced = set()
     for copy, blob in linked.items():
       if os.path.isfile(blob) and not os.path.islink(blob) and os.stat(blob).st_nlink == 1:
         os.symlink(copy, blob + ".tmp")
         os.replace(blob + ".tmp", blob)
+        replaced.add(blob)
+    # What the internal disk got back: a file nothing else links, or a blob nothing else links now. A blob another model's
+    # folder still links stays, and so does its space.
+    for size, nlinks, blob in leaving:
+      if (blob in replaced) if blob else nlinks == 1:
+        freed += size
+      else:
+        kept += size
     moved = True
-  print("moved " + str(total) if moved else "already")
+  print("moved " + str(total) + " " + str(freed) + " " + str(kept) if moved else "already")
 else:
   total, moved = 0, False
   for fs in filesets:
@@ -924,12 +935,19 @@ def cmd_move(args):
   found = out.split()
   if not found or found[0] not in ("moved", "already"):
     raise Error(f"{host} gave an answer startdgx can't read")
-  print_moved(args.model, args.to, int(found[1]) if found[0] == "moved" else None)
+  kept = int(found[3]) if len(found) > 3 else 0
+  print_moved(args.model, args.to, int(found[1]) if found[0] == "moved" else None, int(found[2]) if len(found) > 2 else 0, kept)
 
 
-def print_moved(model, to, moved_bytes):
+def print_moved(model, to, moved_bytes, freed=0, kept=0):
   where = "the store" if to == "usb" else "the internal disk"
-  print(f"{model}: " + (f"on {where} ({size_text(moved_bytes)})" if moved_bytes is not None else f"already on {where}"))
+  if moved_bytes is None:
+    print(f"{model}: already on {where}")
+  elif kept:
+    print(f"{model}: on {where} ({size_text(moved_bytes)}), freeing {size_text(freed)} on the internal disk; "
+          f"{size_text(kept)} is shared with another model and stays there")
+  else:
+    print(f"{model}: on {where} ({size_text(moved_bytes)})")
 
 
 def cmd_delete(args):
