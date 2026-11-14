@@ -498,6 +498,14 @@ echo "$out" | grep -q "^The model store isn't mounted; what it holds of frag sta
 touch "$store/.startdgx-store"
 s start me@dgx st >/dev/null 2>&1; ok $? "start goes ahead once the store is mounted"
 rm -rf "$ed/models/st" "$store/st" "$ed/models/zz" "$ed/models/crashy" "$ed/models/c2" "$store/zz" "$store/crashy" "$store/c2"
+# A model that shares a blob with another frees less than it moves: the move says so, and the second one frees the rest.
+mkdir -p "$ed/models/sh1/fs1" "$ed/models/sh2/fs1"
+head -c 100 /dev/urandom >"$ed/blobs/sha256/own1"; head -c 40 /dev/urandom >"$ed/blobs/sha256/shared"
+ln "$ed/blobs/sha256/own1" "$ed/models/sh1/fs1/w"; ln "$ed/blobs/sha256/shared" "$ed/models/sh1/fs1/tok"; ln "$ed/blobs/sha256/shared" "$ed/models/sh2/fs1/tok"
+same "$(s move me@dgx sh1 --to usb)" "sh1: on the store (140 B), freeing 100 B on the internal disk; 40 B is shared with another model and stays there"; ok $? "move says how much a shared blob keeps on the internal disk"
+same "$(s move me@dgx sh2 --to usb)" "sh2: on the store (40 B)"; ok $? "and the model that shares it frees it"
+same "$(stat -c %F "$ed/blobs/sha256/shared")" "symbolic link"; ok $? "whose blob then links to the store"
+rm -rf "$ed/models/sh1" "$ed/models/sh2" "$store/sh1" "$store/sh2" "$ed/blobs/sha256/own1" "$ed/blobs/sha256/shared"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).
