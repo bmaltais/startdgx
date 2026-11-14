@@ -865,7 +865,11 @@ def cmd_storage(args):
     found["store"], found["disks"], found["models"]
   except (ValueError, IndexError, KeyError, TypeError) as error:
     raise Error(f"{host} gave an answer startdgx can't read") from error
-  if args.json:
+  print_storage(found, args.json)
+
+
+def print_storage(found, as_json):
+  if as_json:
     print(json.dumps(found))
     return
   store = found["store"]
@@ -881,8 +885,12 @@ def cmd_move(args):
   found = out.split()
   if not found or found[0] not in ("moved", "already"):
     raise Error(f"{host} gave an answer startdgx can't read")
-  where = "the store" if args.to == "usb" else "the internal disk"
-  print(f"{args.model}: " + (f"on {where} ({size_text(int(found[1]))})" if found[0] == "moved" else f"already on {where}"))
+  print_moved(args.model, args.to, int(found[1]) if found[0] == "moved" else None)
+
+
+def print_moved(model, to, moved_bytes):
+  where = "the store" if to == "usb" else "the internal disk"
+  print(f"{model}: " + (f"on {where} ({size_text(moved_bytes)})" if moved_bytes is not None else f"already on {where}"))
 
 
 def cmd_delete(args):
@@ -2099,6 +2107,9 @@ DEMO_RATE = 1_200_000_000  # bytes a second that a demo setup downloads at
 DEMO_WAIT_MS = 2000  # how long a demo setup waits before it downloads, as the engine's waits for its lock and unit
 
 
+DEMO_USB = "/media/demo/usb"
+
+
 def demo_enabled():
   return os.environ.get("STARTDGX_DEMO") == "1" or os.path.exists(os.path.join(config_dir(), "demo", "ENABLED"))
 
@@ -2517,6 +2528,59 @@ def demo_recipe(args):
           "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
+def demo_storage_of(machine):
+  return machine.setdefault("storage", {"store": None, "locations": {}})
+
+
+def demo_model_bytes(machine, rid):
+  # What a demo setup of it downloads (demo_use and demo_delete), so they agree.
+  r = next((r for r in machine["list"] if r["id"] == rid), {})
+  return int((r.get("memory_gib") or 30) * 2**29)
+
+
+def demo_storage(args):
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    storage = demo_storage_of(machine)
+    if args.set:
+      if not args.set.startswith(DEMO_USB + "/"):
+        raise Error(f"{args.set} isn't on an external disk; the root disk is where the models already are")
+      storage["store"] = {"path": args.set, "present": True}
+      return
+    if args.unset:
+      on_store = [rid for rid, where in storage["locations"].items() if where == "usb"]
+      if on_store:
+        raise Error(f"{len(on_store)} model file(s) are on the store; move those models back first")
+      storage["store"] = None
+      return
+    models = [{"id": rid, "location": storage["locations"].get(rid, "nvme"), "bytes": demo_model_bytes(machine, rid)}
+              for rid, row in sorted(machine["status"]["models"].items()) if row["unit"] != "installing"]
+    disk = {"mount": DEMO_USB, "bus": "usb", "fstype": "ext4", "size": 2 * 10**12, "free": 15 * 10**11, "usable": True, "reason": ""}
+    print_storage({"store": storage["store"], "disks": [disk], "models": models}, args.json)
+
+
+def demo_move(args):
+  rid = recipe(args.model)
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    storage = demo_storage_of(machine)
+    if not storage["store"]:
+      raise Error(f"No model store is set; set one with: startdgx storage {args.host} --set PATH")
+    row = machine["status"]["models"].get(rid)
+    if row is None or row["unit"] == "installing":
+      raise Error(f"{rid} isn't set up")
+    if row["unit"] in ("active", "activating", "deactivating"):
+      raise Error(f"{rid} is running; stop it first")
+    here = storage["locations"].get(rid, "nvme")
+    if args.to == "usb":
+      done = here == "usb"
+      storage["locations"][rid] = "usb"
+    else:
+      done = here in ("nvme", "both")
+      storage["locations"][rid] = "both" if here != "nvme" else "nvme"
+    print_moved(rid, args.to, None if done else demo_model_bytes(machine, rid))
+
+
 def demo_delete(args):
   if args.dry_run:
     rid = recipe(args.model)
@@ -2601,7 +2665,7 @@ def demo_logs(args):
 
 
 DEMO_COMMANDS = {"status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "use": demo_use, "variants": demo_variants, "recipe": demo_recipe, "delete": demo_delete,
-                 "add": demo_add, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
+                 "add": demo_add, "storage": demo_storage, "move": demo_move, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
 
 
 def build_parser():

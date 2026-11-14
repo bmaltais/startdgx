@@ -1297,6 +1297,21 @@ after=$(wc -l <"$tmp/hf-log"); gt "$after" "$before"; ok $? "after an hour the s
 kill "$hfsrv" 2>/dev/null; wait "$hfsrv" 2>/dev/null
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 ds hf search qwen --json); ok $? "demo hf search ignores STARTDGX_HF_BASE and serves the bundled fixtures"
 same "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" 4; ok $? "with the same rows"
+# storage and move in demo mode: a USB disk and where each model is, kept in the demo state, and nothing run.
+dj 'd["store"] is None and [x["mount"] for x in d["disks"]] == ["/media/demo/usb"] and d["disks"][0]["usable"] and all(m["location"] == "nvme" for m in d["models"]) and len(d["models"]) == 3' storage $a --json
+ok $? "demo storage lists a USB disk, no store, and every set-up model on the NVMe"
+out=$(ds move $a $abl --to usb 2>&1); ok $((!$?)) "demo move refuses without a store"
+same "$out" "Error: No model store is set; set one with: startdgx storage $a --set PATH"; ok $? "and says how to set one"
+ds storage $a --set /media/demo/usb/startdgx-models; ok $? "demo storage --set takes a folder on the USB disk"
+ds storage $a --set /tmp/elsewhere >/dev/null 2>&1; ok $((!$?)) "and refuses one that isn't on it"
+dj 'd["store"] == {"path": "/media/demo/usb/startdgx-models", "present": True}' storage $a --json; ok $? "then names the store"
+out=$(ds move $a $qwen --to usb 2>&1); same "$out" "Error: $qwen is running; stop it first"; ok $? "demo move refuses a running model"
+out=$(ds move $a $abl --to usb); echo "$out" | grep -q "^$abl: on the store ("; ok $? "demo move --to usb moves a stopped model"
+dj '{m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "usb"' storage $a --json; ok $? "and storage says so"
+out=$(ds storage $a --unset 2>&1); ok $((!$?)) "demo storage --unset refuses while a model is on the store"
+out=$(ds move $a $abl --to nvme); echo "$out" | grep -q "^$abl: on the internal disk ("; ok $? "demo move --to nvme brings it back"
+dj '{m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "both"' storage $a --json; ok $? "to both disks"
+ds storage $a --unset; ok $? "demo storage --unset forgets the store"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 # recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
 # checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).
