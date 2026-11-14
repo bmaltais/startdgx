@@ -699,6 +699,21 @@ def models_found(path, present):
     if states:
       found.append({"id": rid, "location": states.pop() if len(states) == 1 else "mixed", "bytes": size})
   return found
+def linked_into(path):
+  # How many files of the engine's blobs and models link into the store at PATH.
+  linked = 0
+  for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
+    for name in names:
+      full = os.path.join(folder, name)
+      if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
+        linked += 1
+  models = os.path.join(DATA, "models")
+  for rid in os.listdir(models) if os.path.isdir(models) else []:
+    for name in os.listdir(os.path.join(models, rid)):
+      full = os.path.join(models, rid, name)
+      if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
+        linked += 1
+  return linked
 if mode == "list":
   disks = discover()
   path = current()
@@ -731,6 +746,11 @@ elif mode == "set":
     fail(path + " isn't on an external disk; the root disk is where the models already are")
   if not home["usable"]:
     fail(home["mount"] + ": " + home["reason"])
+  old = current()
+  if old and os.path.realpath(old) != real:
+    linked = linked_into(old)
+    if linked:
+      fail(str(linked) + " model file(s) are on the current store, " + old + "; move those models back first")
   os.makedirs(path, exist_ok=True)
   open(os.path.join(path, MARKER), "a").close()
   os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
@@ -740,18 +760,7 @@ elif mode == "set":
 elif mode == "unset":
   path = current()
   if path:
-    linked = 0
-    for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
-      for name in names:
-        full = os.path.join(folder, name)
-        if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
-          linked += 1
-    models = os.path.join(DATA, "models")
-    for rid in os.listdir(models) if os.path.isdir(models) else []:
-      for name in os.listdir(os.path.join(models, rid)):
-        full = os.path.join(models, rid, name)
-        if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
-          linked += 1
+    linked = linked_into(path)
     if linked:
       fail(str(linked) + " model file(s) are on the store; move those models back first")
     os.remove(CONFIG)
@@ -2602,6 +2611,9 @@ def demo_storage(args):
     if args.set:
       if not args.set.startswith(DEMO_USB + "/"):
         raise Error(f"{args.set} isn't on an external disk; the root disk is where the models already are")
+      on_store = [rid for rid, where in storage["locations"].items() if where != "nvme"]
+      if storage["store"] and storage["store"]["path"] != args.set and on_store:
+        raise Error(f"{len(on_store)} model file(s) are on the current store, {storage['store']['path']}; move those models back first")
       storage["store"] = {"path": args.set, "present": True}
       return
     if args.unset:

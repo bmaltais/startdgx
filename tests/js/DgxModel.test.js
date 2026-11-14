@@ -1211,3 +1211,103 @@ test("commandFor: a move runs move, to the disk asked for, with room for a big c
   assert.deepStrictEqual(M.commandFor("me@h1", move("usb")), ["move", "me@h1", "a", "--to", "usb", "--timeout", "3600"])
   assert.deepStrictEqual(M.commandFor("me@h1", move("nvme")), ["move", "me@h1", "a", "--to", "nvme", "--timeout", "3600"])
 })
+
+// ---- the model store panel -------------------------------------------------------------------------------
+
+test("modelState: a move shows its words while it runs, and queued behind another command", () => {
+  assert.deepStrictEqual(M.modelState(row({ unit: "inactive" }), "move-usb"), { kind: "moving", text: "Moving to USB" })
+  assert.deepStrictEqual(M.modelState(row({ unit: "inactive" }), "move-nvme"), { kind: "moving", text: "Moving to NVMe" })
+  assert.deepStrictEqual(M.modelState(row({ unit: "inactive" }), "queued move-usb"), { kind: "stopped", text: "Stopped · move queued" })
+  assert.strictEqual(M.modelState(row({ unit: "removing" }), "move-usb").kind, "removing", "the machine's own state wins")
+  assert.strictEqual(M.modelState(row({ unit: "active" }), "move-usb").kind, "running")
+})
+
+test("a model being moved can't be started, stopped, removed or moved again", () => {
+  assert.strictEqual(M.toggleAction(row({ unit: "inactive" }), "move-usb"), null)
+  assert.strictEqual(M.toggleAction(row({ unit: "inactive" }), "queued move-usb"), null)
+  assert.strictEqual(M.removeAction(row({ unit: "inactive" }), "move-usb"), null)
+  assert.strictEqual(M.keyAction("s", { kind: "model", host: "h", id: "m" }, row({ unit: "inactive" }), "move-usb"), null)
+})
+
+test("hostBusy: a host moving a model polls quickly", () => {
+  assert.ok(M.BUSY_KINDS.indexOf("moving") >= 0)
+})
+
+test("submit: a move has a slot of its own, so another model's stop never waits for the copy", () => {
+  const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
+  const s = M.submit(M.newQueue(), move, row())
+  assert.deepStrictEqual(s.queue.moves, [move])
+  const l = M.launch(s.queue)
+  assert.deepStrictEqual(l.run, [move])
+  assert.strictEqual(l.queue.moving, move)
+  const stop = { op: 2, key: "h/other", kind: "stop", shows: "stop" }
+  const t = M.submit(l.queue, stop, row({ recipe: "other", unit: "active" }))
+  assert.deepStrictEqual(M.launch(t.queue).run, [stop], "the stop runs while the move copies")
+  assert.deepStrictEqual(M.marks(l.queue, {}), { "h/m": "move-usb" })
+  assert.strictEqual(M.finish(l.queue, "move").action, move)
+  assert.strictEqual(M.finish(l.queue, "move").queue.moving, null)
+})
+
+test("submit: a start of a model that is being moved is dropped", () => {
+  const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
+  const start = { op: 2, key: "h/m", kind: "start", shows: "start" }
+  const queued = M.submit(M.submit(M.newQueue(), move, row()).queue, start, row())
+  assert.deepStrictEqual(queued.dropped, [start], "behind a queued move")
+  const running = M.submit(M.launch(M.submit(M.newQueue(), move, row()).queue).queue, start, row())
+  assert.deepStrictEqual(running.dropped, [start], "behind a running one")
+  assert.deepStrictEqual(running.queue.starts, [])
+})
+
+test("submit: store changes wait behind moves, on the same slot", () => {
+  const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
+  const unset = { op: 2, key: "h/", kind: "storageUnset", shows: "storage" }
+  const q = M.submit(M.launch(M.submit(M.newQueue(), move, row()).queue).queue, unset, null).queue
+  assert.deepStrictEqual(q.moves, [unset])
+  assert.deepStrictEqual(M.launch(q).run, [])
+  assert.strictEqual(M.marks(q, {})["h/"], "queued storage")
+})
+
+test("summarize: a model being moved counts as busy, from its mark", () => {
+  const hs = up(models(row({ recipe: "m", unit: "inactive" })))
+  assert.strictEqual(M.summarize(["h"], { h: hs }, { "h/m": "move-usb" }).busy, 1)
+  assert.strictEqual(M.summarize(["h"], { h: hs }, { "h/m": "move-usb" }).kind, "busy")
+  assert.strictEqual(M.summarize(["h"], { h: hs }, {}).busy, 0)
+  assert.strictEqual(M.summarize(["h"], { h: hs }).busy, 0, "marks are optional")
+})
+
+test("commandFor: storage set and unset", () => {
+  assert.deepStrictEqual(M.commandFor("h", { kind: "storageSet", key: "h/", path: "/mnt/u/models" }), ["storage", "h", "--set", "/mnt/u/models", "--timeout", "60"])
+  assert.deepStrictEqual(M.commandFor("h", { kind: "storageUnset", key: "h/" }), ["storage", "h", "--unset", "--timeout", "60"])
+})
+
+test("storageAnswer: the host's storage, or why not", () => {
+  const ok = JSON.stringify({ store: null, disks: [], models: [] })
+  assert.deepStrictEqual(M.storageAnswer(0, ok, "", "h"), { storage: { store: null, disks: [], models: [] } })
+  assert.deepStrictEqual(M.storageAnswer(1, "", "Error: nope\n", "h"), { storage: null, error: "nope" })
+  assert.deepStrictEqual(M.storageAnswer(0, "junk", "", "h"), { storage: null, error: "h sent an unreadable storage answer" })
+})
+
+test("diskRows: each disk with its free space, an unusable one with its reason", () => {
+  const storage = { store: { path: "/m/u/models", present: true }, models: [], disks: [
+    { mount: "/m/u", bus: "usb", fstype: "ext4", size: 2e12, free: 1.5e12, usable: true, reason: "" },
+    { mount: "/m/v", bus: "usb", fstype: "ntfs", size: 5e11, free: 1e11, usable: false, reason: "NTFS can't hold the models" }] }
+  assert.deepStrictEqual(M.diskRows(storage), [
+    { mount: "/m/u", text: "/m/u · USB ext4 · 1397.0 GiB free of 1862.6 GiB", usable: true, reason: "", inUse: true },
+    { mount: "/m/v", text: "/m/v · USB ntfs · 93.1 GiB free of 465.7 GiB", usable: false, reason: "NTFS can't hold the models", inUse: false }])
+  assert.deepStrictEqual(M.diskRows(null), [])
+})
+
+test("storageSummary: the store in words", () => {
+  assert.strictEqual(M.storageSummary(null), "")
+  assert.strictEqual(M.storageSummary({ store: null, disks: [], models: [] }), "Models stay on the internal disk")
+  assert.strictEqual(M.storageSummary({ store: { path: "/m/u/models", present: true }, disks: [], models: [] }), "Store: /m/u/models")
+  assert.strictEqual(M.storageSummary({ store: { path: "/m/u/models", present: false }, disks: [], models: [] }), "Store: /m/u/models (disk not mounted)")
+})
+
+test("storagePathProblem: a custom store path must be absolute", () => {
+  assert.strictEqual(M.storagePathProblem("/mnt/u/models"), "")
+  assert.strictEqual(M.storagePathProblem(" /mnt/u/models "), "")
+  assert.strictEqual(M.storagePathProblem(""), "Type the folder on the machine")
+  assert.strictEqual(M.storagePathProblem("models"), "The path must start with /")
+  assert.strictEqual(M.storagePathProblem("/a\nb"), "The path must be one line")
+})

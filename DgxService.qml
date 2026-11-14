@@ -1,5 +1,5 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
-// machine has its own HostPoller (status poll, and its three command slots: a start, a share, and a stop, use or delete); the machine list,
+// machine has its own HostPoller (status poll, and its four command slots: a start, a share, a move or store change, and a stop, use or delete); the machine list,
 // adding, forgetting, discovery, a machine's catalog for the model picker, the Add recipe card's check, add and remove, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
@@ -22,6 +22,10 @@ Item {
   readonly property var hostList: Object.keys(service.hosts).sort()
   // target -> { loaded, online, error, status, lastSeenMs }; see DgxModel.
   property var hostState: ({})
+  // `startdgx storage` per machine, as last read ("target" -> DgxModel.parseStorage), and why a read failed. A machine whose
+  // read fails keeps its last good one.
+  property var storage: ({})
+  property var storageErrors: ({})
   // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
   // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
   property var marks: ({})
@@ -124,7 +128,7 @@ Item {
   property string removeError: ""
   readonly property bool removePlanning: removeQuery.busy
 
-  readonly property var summary: Model.summarize(service.hostList, service.shownState)
+  readonly property var summary: Model.summarize(service.hostList, service.shownState, service.pending)
   readonly property var rows: Model.rows(service.hostList, service.shownState)
 
   function entry(host, id) {
@@ -146,6 +150,16 @@ Item {
     service.setHostState(host, { loaded: true, online: true, error: "", status: status, lastSeenMs: Date.now() })
     service.setups = Model.settleSetups(service.setups, host, status)
     service.notifyChanges()
+  }
+  function storageRead(host, storage, error) {
+    const errors = Object.assign({}, service.storageErrors)
+    if (storage) {
+      const next = Object.assign({}, service.storage)
+      next[host] = storage
+      service.storage = next
+      delete errors[host]
+    } else errors[host] = error
+    service.storageErrors = errors
   }
   function statusFailed(host, why) {
     const old = service.hostState[host] || {}
@@ -197,6 +211,20 @@ Item {
   function share(host, id, kind) { service.act(host, kind, id) }
   // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its weights.
   function remove(host, id) { service.act(host, "delete", id) }
+  // Copies a stopped model's files to the machine's model store ("usb") or back to its internal disk ("nvme"), which takes minutes.
+  function move(host, id, to) {
+    const p = service.poller(host)
+    if (p) p.run("move", id, service.entry(host, id), { to: to, shows: "move-" + to })
+  }
+  // The machine's model store: a folder on an external disk, or none. Marked "storage" under "host/" while it runs.
+  function setStore(host, path) {
+    const p = service.poller(host)
+    if (p) p.run("storageSet", "", null, { path: path, shows: "storage" })
+  }
+  function unsetStore(host) {
+    const p = service.poller(host)
+    if (p) p.run("storageUnset", "", null, { shows: "storage" })
+  }
   function act(host, kind, id) {
     const p = service.poller(host)
     if (p) p.run(kind, id, service.entry(host, id))
@@ -442,6 +470,14 @@ Item {
     const setups = ({})
     for (const key in service.setups) if (want.indexOf(Model.keyHost(key)) >= 0) setups[key] = service.setups[key]
     service.setups = setups
+    // What a forgotten machine's storage said goes with it, so one added again starts clean.
+    const storage = ({}), storageErrors = ({})
+    for (let m = 0; m < want.length; m++) {
+      if (service.storage[want[m]]) storage[want[m]] = service.storage[want[m]]
+      if (service.storageErrors[want[m]]) storageErrors[want[m]] = service.storageErrors[want[m]]
+    }
+    service.storage = storage
+    service.storageErrors = storageErrors
   }
 
   Component.onCompleted: service.refreshHosts()
