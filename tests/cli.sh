@@ -1209,7 +1209,7 @@ gib = -(-16074529674 * 10 // 2**30) / 10
 ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 1 and len(v) == 1
       and r["hardware"] == [{"gpu": "nvidia-gb10", "ram_class": 128}]
       and a[0] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0",
-                   "files": ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"], "dest": "target", "model": "."}
+                   "files": ["*.safetensors", "*.json", "chat_template.jinja"], "dest": "target", "model": "."}
       and v[0]["source"] == "drafted" and v[0]["peak_ram_gib"] == gib and v[0]["peak_gpu_gib"] == gib and v[0]["ctx"] > 0)
 sys.exit(not ok)
 F
