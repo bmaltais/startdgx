@@ -619,7 +619,8 @@ Item {
       if (code !== 0) service.recipeRemoveError = Model.errorLine(recipeRemoveErr.text, "The recipe could not be removed")
       else {
         service.notice = Model.lastLine(recipeRemoveOut.text)
-        if (service.listHost === recipeRemoveProc.host) service.recipes = null
+        // The picker, if it is open on this machine, shows the list without it.
+        if (service.listHost === recipeRemoveProc.host) { service.recipes = null; service.listRecipes(recipeRemoveProc.host) }
       }
       service.loadUserRecipes(recipeRemoveProc.host)
     }

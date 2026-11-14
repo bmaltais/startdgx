@@ -135,6 +135,7 @@ FocusScope {
           readonly property var r: modelData.recipe
           readonly property bool current: index === card.cursor
           readonly property bool can: modelData.action === "use"
+          readonly property bool removable: Model.isUserRecipe(recipeRow.r) && recipeRow.r.installed !== true
           readonly property var measureCtx: Model.pickerMeasureCtx(recipeRow.r)
           readonly property string facts: Model.recipeFacts(recipeRow.r)
           readonly property string marks: Model.recipeMarks(recipeRow.r).join(" · ")
@@ -235,6 +236,19 @@ FocusScope {
               }
             }
 
+            // A recipe of yours, not set up here: take it off the machine's list (its file stays on this computer, the engine
+            // refuses while a model uses it).
+            Button {
+              Layout.alignment: Qt.AlignVCenter
+              Layout.preferredWidth: implicitHeight
+              visible: recipeRow.removable
+              enabled: card.dgx.recipeRemoving === "" && !card.dgx.recipeBusy
+              iconText: "\uf1f8"
+              tooltipText: "Remove " + String(recipeRow.r.name || recipeRow.r.id) + " from " + Model.hostName(card.host) + "'s list. It is yours: nothing else is deleted"
+              foreground: Color.muted
+              onClicked: card.dgx.removeRecipe(card.host, recipeRow.r.id)
+            }
+
             // A recipe of yours whose numbers aren't measured: measure it from here (its context when the row has one,
             // else Add recipe…, which lists its variants).
             Button {
@@ -263,6 +277,17 @@ FocusScope {
         Layout.fillHeight: true
         Layout.preferredWidth: implicitWidth
       }
+    }
+
+    Text {
+      Layout.fillWidth: true
+      visible: card.mine && card.dgx.recipeRemoveError !== ""
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: card.dgx.recipeRemoveError
+      color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
     }
 
     RowLayout {
