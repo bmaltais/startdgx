@@ -77,10 +77,10 @@ cat >"$tmp/stub" <<'F'
 printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
 F
 for tool in loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; done
-# systemctl logs like the others, and answers is-active for a unit that has a running-UNIT file in the fake host.
+# systemctl logs like the others, and answers is-active with what a running-UNIT file in the fake host holds (inactive without one).
 cat >"$FAKE_HOSTBIN/systemctl" <<'F'
 #!/usr/bin/env bash
-if [ "$*" != "${*/is-active/}" ]; then [ -e "$FAKE_HOST/running-${*: -1}" ]; exit; fi
+if [ "$*" != "${*/is-active/}" ]; then st=$(cat "$FAKE_HOST/running-${*: -1}" 2>/dev/null || echo inactive); echo "$st"; [ "$st" = active ]; exit; fi
 printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
 F
 cat >"$FAKE_HOSTBIN/id" <<'F'
@@ -433,9 +433,11 @@ same "$out" "Error: No model store is set; set one with: startdgx storage me@dgx
 s storage me@dgx --set "$store" >/dev/null
 out=$(s move me@dgx nope --to usb 2>&1); ok $((!$?)) "move refuses a model that isn't set up"
 same "$out" "Error: nope isn't set up"; ok $? "and says so"
-: >"$FAKE_HOST/running-omarchy-agent-local-model-big.service"
+ echo active >"$FAKE_HOST/running-omarchy-agent-local-model-big.service"
 out=$(s move me@dgx big --to usb 2>&1); ok $((!$?)) "move refuses a model that is running"
 same "$out" "Error: big is running; stop it first"; ok $? "and says to stop it"
+echo activating >"$FAKE_HOST/running-omarchy-agent-local-model-big.service"
+s move me@dgx big --to usb >/dev/null 2>&1; ok $((!$?)) "move refuses a model that is loading too"
 rm "$FAKE_HOST/running-omarchy-agent-local-model-big.service"
 rm "$store/.startdgx-store"
 out=$(s move me@dgx big --to usb 2>&1); ok $((!$?)) "move refuses when the store's disk isn't mounted"
@@ -473,7 +475,29 @@ s move me@dgx big --to usb >/dev/null; rm "$store/.startdgx-store"; same "$(loc)
 touch "$store/.startdgx-store"
 # delete also removes the model's folder on the store, which the engine doesn't know about.
 s delete me@dgx big >/dev/null; ok $? "delete removes a model"
+rm -rf "$ed/models/big" "$ed/blobs/sha256/aaa" "$ed/blobs/sha256/bbb"   # the engine's remove does these; the fake one doesn't
 [ ! -e "$store/big" ] && present "$store/.startdgx-store"; ok $? "and its copy on the store, not the store"
+# The cases a move can be left in: a crash between its steps, a store that is unmounted, and what depends on the store.
+mkdir -p "$ed/models/crashy/fs1.moving" "$ed/models/c2/fs1.returning" "$store/c2/fs1"
+echo old >"$ed/models/crashy/fs1.moving/w"; echo new >"$ed/models/c2/fs1.returning/w"; echo new >"$store/c2/fs1/w"
+s move me@dgx crashy --to usb >/dev/null; ok $? "a move after a crash between its rename and its link finds the model's files again"
+[ -L "$ed/models/crashy/fs1" ] && same "$(cat "$store/crashy/fs1/w")" old && [ ! -e "$ed/models/crashy/fs1.moving" ]; ok $? "and finishes the move"
+mkdir -p "$ed/models/crashy/fs1.moving"; echo stale >"$ed/models/crashy/fs1.moving/w"
+s move me@dgx crashy --to usb >/dev/null; [ ! -e "$ed/models/crashy/fs1.moving" ] && same "$(cat "$store/crashy/fs1/w")" old; ok $? "a leftover copy beside a finished move is deleted, the store's copy kept"
+s move me@dgx c2 --to nvme >/dev/null; ok $? "a move back after a crash between its two last steps finds the new folder"
+[ -d "$ed/models/c2/fs1" ] && [ ! -L "$ed/models/c2/fs1" ] && same "$(cat "$ed/models/c2/fs1/w")" new && [ ! -e "$ed/models/c2/fs1.returning" ]; ok $? "and puts it in place"
+mkdir -p "$ed/models/zz"; ln -s "$store/zz" "$ed/models/zz/fs1"; mkdir -p "$store/zz"
+out=$(s storage me@dgx --unset 2>&1); ok $((!$?)) "storage --unset refuses while a model's folder links into the store, blobs or not"
+rm "$ed/models/zz/fs1"
+mkdir -p "$ed/models/st" "$store/st/fs1"; ln -s "$store/st/fs1" "$ed/models/st/fs1"
+rm "$store/.startdgx-store"
+out=$(s start me@dgx st 2>&1); ok $((!$?)) "start refuses a model whose weights are on a store that isn't mounted"
+same "$out" "Error: st's weights are on the model store, whose disk isn't mounted"; ok $? "and says so"
+out=$(s delete me@dgx frag 2>&1); ok $? "delete with the store unmounted still removes the model"
+echo "$out" | grep -q "^The model store isn't mounted; what it holds of frag stays there"; ok $? "and says what stays on the store"
+touch "$store/.startdgx-store"
+s start me@dgx st >/dev/null 2>&1; ok $? "start goes ahead once the store is mounted"
+rm -rf "$ed/models/st" "$store/st" "$ed/models/zz" "$ed/models/crashy" "$ed/models/c2" "$store/zz" "$store/crashy" "$store/c2"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).
@@ -1312,6 +1336,8 @@ out=$(ds storage $a --unset 2>&1); ok $((!$?)) "demo storage --unset refuses whi
 out=$(ds move $a $abl --to nvme); echo "$out" | grep -q "^$abl: on the internal disk ("; ok $? "demo move --to nvme brings it back"
 dj '{m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "both"' storage $a --json; ok $? "to both disks"
 ds storage $a --unset; ok $? "demo storage --unset forgets the store"
+ds storage $a --set /media/demo/usb/startdgx-models; ds move $a $abl --to usb >/dev/null; ds delete $a $abl >/dev/null
+python3 -c 'import json,sys; sys.exit("'$abl'" in json.load(open(sys.argv[1]))["hosts"]["spark-a"]["storage"]["locations"])' "$tmp/state/startdgx-demo/state.json"; ok $? "demo delete forgets where the model was"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 # recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
 # checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).

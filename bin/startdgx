@@ -427,7 +427,10 @@ def cmd_list(args):
 
 
 def cmd_start(args):
-  sys.stdout.write(ssh(target(args.host), "start", recipe(args.model), timeout=args.timeout).stdout)
+  host, rid = target(args.host), recipe(args.model)
+  # Weights on a model store whose disk is gone are a folder link to nothing: the engine would fail on its mount.
+  storage_run(host, args, "mounted", rid)
+  sys.stdout.write(ssh(host, "start", rid, timeout=args.timeout).stdout)
 
 
 def cmd_stop(args):
@@ -702,11 +705,21 @@ if mode == "list":
   present = bool(path) and os.path.exists(os.path.join(path, MARKER))
   store = {"path": path, "present": present} if path else None
   print(json.dumps({"store": store, "disks": disks, "models": models_found(path, present)}))
+elif mode == "mounted":
+  # The store counts as mounted when its marker is there, as everywhere else: an unmounted disk may leave a folder behind.
+  path = current()
+  base = os.path.join(DATA, "models", sys.argv[2])
+  for name in os.listdir(base) if os.path.isdir(base) else []:
+    on_disk = path and os.path.exists(os.path.join(path, MARKER)) and os.path.isdir(os.path.join(base, name))
+    if os.path.islink(os.path.join(base, name)) and not on_disk:
+      fail(sys.argv[2] + "'s weights are on the model store, whose disk isn't mounted")
 elif mode == "forget":
+  import shutil
   path = current()
   if path and os.path.exists(os.path.join(path, MARKER)):
-    import shutil
     shutil.rmtree(os.path.join(path, sys.argv[2]), ignore_errors=True)
+  elif path:
+    print("The model store isn't mounted; what it holds of " + sys.argv[2] + " stays there")
 elif mode == "set":
   disks = discover()
   path = sys.argv[2]
@@ -733,6 +746,12 @@ elif mode == "unset":
         full = os.path.join(folder, name)
         if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
           linked += 1
+    models = os.path.join(DATA, "models")
+    for rid in os.listdir(models) if os.path.isdir(models) else []:
+      for name in os.listdir(os.path.join(models, rid)):
+        full = os.path.join(models, rid, name)
+        if os.path.islink(full) and os.path.realpath(full).startswith(os.path.realpath(path) + "/"):
+          linked += 1
     if linked:
       fail(str(linked) + " model file(s) are on the store; move those models back first")
     os.remove(CONFIG)
@@ -756,7 +775,8 @@ if not os.path.exists(os.path.join(store, MARKER)):
 base = os.path.join(DATA, "models", rid)
 if not os.path.isdir(base):
   fail(rid + " isn't set up")
-if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "omarchy-agent-local-model-" + rid + ".service"]).returncode == 0:
+unit = subprocess.run(["systemctl", "--user", "is-active", "omarchy-agent-local-model-" + rid + ".service"], capture_output=True, text=True).stdout.strip()
+if unit in ("active", "activating", "deactivating", "reloading"):
   fail(rid + " is running; stop it first")
 def digest(path):
   h = hashlib.sha256()
@@ -770,6 +790,16 @@ def files(root):
       yield os.path.relpath(os.path.join(folder, name), root)
 def size_of(root):
   return sum(os.path.getsize(os.path.join(root, f)) for f in files(root))
+# A move that stopped between steps leaves one of two folders beside the fileset: X.moving, the old files kept while the
+# link goes in, or X.returning, the files built before they replace the link. If X is gone they are the model's files.
+for name in sorted(os.listdir(base)):
+  for suffix in (".moving", ".returning"):
+    if name.endswith(suffix):
+      left, fileset = os.path.join(base, name), os.path.join(base, name[:-len(suffix)])
+      if not os.path.lexists(fileset):
+        os.rename(left, fileset)
+      else:
+        shutil.rmtree(left)
 filesets = sorted(n for n in os.listdir(base) if "." not in n and os.path.isdir(os.path.join(base, n)))
 if direction == "usb":
   total, moved = 0, False
@@ -787,6 +817,7 @@ if direction == "usb":
         shutil.copyfile(os.path.join(here, rel), os.path.join(part, rel))
         if digest(os.path.join(here, rel)) != digest(os.path.join(part, rel)):
           raise OSError("the copy of " + rel + " differs from the original")
+      os.sync()
       shutil.rmtree(there, ignore_errors=True)
       os.rename(part, there)
     except OSError as error:
@@ -795,8 +826,10 @@ if direction == "usb":
     blobs = {}
     for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
       for name in names:
-        info = os.stat(os.path.join(folder, name))
-        blobs[(info.st_dev, info.st_ino)] = os.path.join(folder, name)
+        # A blob that is a link (to the store, which may be unmounted) is nobody's hard link.
+        info = os.lstat(os.path.join(folder, name))
+        if not os.path.islink(os.path.join(folder, name)):
+          blobs[(info.st_dev, info.st_ino)] = os.path.join(folder, name)
     linked = {}
     for rel in files(here):
       info = os.stat(os.path.join(here, rel))
@@ -820,7 +853,8 @@ else:
     if not os.path.isdir(there):
       fail("The store has no copy of " + rid + " (" + there + ")")
     total += size_of(there)
-    back = here + ".moving"
+    back = here + ".returning"
+    tmps = []
     parked = {}
     for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
       for name in names:
@@ -834,14 +868,19 @@ else:
         source, dest = os.path.join(there, rel), os.path.join(back, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         blob = parked.get(source)
+        tmps.append((blob or dest) + ".tmp")
         shutil.copyfile(source, (blob or dest) + ".tmp")
         if digest(source) != digest((blob or dest) + ".tmp"):
           raise OSError("the copy of " + rel + " differs from the store's")
         os.replace((blob or dest) + ".tmp", blob or dest)
         if blob:
           os.link(blob, dest)
+      os.sync()
     except OSError as error:
       shutil.rmtree(back, ignore_errors=True)
+      for tmp in tmps:
+        if os.path.exists(tmp):
+          os.remove(tmp)
       fail("Couldn't copy " + rid + " back from the store: " + str(error))
     os.remove(here)
     os.rename(back, here)
@@ -910,7 +949,7 @@ def cmd_delete(args):
   host, rid = target(args.host), recipe(args.model)
   sys.stdout.write(ssh(host, "remove", rid, timeout=args.timeout).stdout)
   # The engine knows nothing of the model store: what it kept of this model there goes too.
-  storage_run(host, args, "forget", rid)
+  sys.stdout.write(storage_run(host, args, "forget", rid))
 
 
 def print_remove_plan(plan, as_json):
@@ -2598,7 +2637,9 @@ def demo_delete(args):
     print_remove_plan(plan, args.json)
     return
   with demo_state(write=True) as state:
-    models = demo_host(state, args.host)["status"]["models"]
+    machine = demo_host(state, args.host)
+    demo_storage_of(machine)["locations"].pop(recipe(args.model), None)
+    models = machine["status"]["models"]
     if models.get(recipe(args.model), {}).get("unit") == "installing":
       del models[args.model]
       print(f"Cancelled the setup of {args.model}")
