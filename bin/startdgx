@@ -1552,7 +1552,7 @@ def cmd_hf_search(args):
 # variant is `drafted` with its memory placeholders equal to the weights' size, which never count as fitting (ADR 0001).
 DRAFT_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DRAFT_CTX = 8192
-DRAFT_FILES = ["*.safetensors", "*.json", "chat_template.jinja", "vocab.json"]
+DRAFT_FILES = ["*.safetensors", "*.json", "chat_template.jinja"]
 # What a card's license may be to go into a draft: a license id, never free text (it is written into a file the engine reads).
 DRAFT_LICENSE_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}")
 DRAFT_FREE_LICENSES = re.compile(r"^(apache-2\.0|mit|isc|unlicense|cc0-1\.0|cc-by-4\.0|bsd(-[0-9a-z]+)*|bsl-1\.0|mpl-2\.0)$")
