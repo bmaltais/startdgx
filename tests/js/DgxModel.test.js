@@ -1311,3 +1311,103 @@ test("storagePathProblem: a custom store path must be absolute", () => {
   assert.strictEqual(M.storagePathProblem("models"), "The path must start with /")
   assert.strictEqual(M.storagePathProblem("/a\nb"), "The path must be one line")
 })
+
+// ---- the gear panels ------------------------------------------------------------------------------------
+
+const keysOf = (pages) => pages.map((p) => p.title + ":" + p.fields.map((f) => f.key).join(","))
+const storeOf = (path, present) => ({ store: path ? { path: path, present: present !== false } : null, models: [],
+  disks: [{ mount: "/m/u", bus: "usb", fstype: "ext4", size: 2e12, free: 1e12, usable: true, reason: "" },
+          { mount: "/m/v", bus: "usb", fstype: "ntfs", size: 5e11, free: 1e11, usable: false, reason: "NTFS can't hold the models" }] })
+
+test("hostPages: General, Storage and Machine, each with only what applies", () => {
+  const base = { machine: "spark-a", update: null, needsSetup: false, storage: null, readError: "", busy: false }
+  assert.deepStrictEqual(keysOf(M.hostPages(base)), ["General:logs", "Storage:store,folder", "Machine:uninstall,forget"])
+  const update = { from: "v1", to: "v2", text: "Engine v1; v2 is available" }
+  assert.deepStrictEqual(M.hostPages(Object.assign({}, base, { update: update }))[0].fields.map((f) => f.key), ["update", "logs"])
+  assert.strictEqual(M.hostPages(Object.assign({}, base, { update: update }))[0].fields[0].hint, "Engine v1; v2 is available")
+  assert.deepStrictEqual(M.hostPages(Object.assign({}, base, { needsSetup: true }))[0].fields.map((f) => f.key), ["setup", "logs"])
+  assert.strictEqual(M.hostPages(base)[2].fields[1].danger, true, "Forget is the destructive one")
+})
+
+test("hostPages: the model store is a choice among the usable disks, and waits while it can't change", () => {
+  const base = { machine: "m", update: null, needsSetup: false, readError: "", busy: false }
+  let f = M.hostPages(Object.assign({}, base, { storage: storeOf(null) }))[1].fields[0]
+  assert.deepStrictEqual(f.options, [{ value: "", label: "Internal disk only" }, { value: "/m/u", label: "/m/u · USB ext4 · 931.3 GiB free" }])
+  assert.strictEqual(f.disabled, undefined)
+  assert.ok(/Not usable: \/m\/v/.test(f.note.text) && /NTFS/.test(f.note.text))
+  const withModels = storeOf("/m/u/startdgx-models")
+  withModels.models = [{ id: "a", location: "usb", bytes: 1 }, { id: "b", location: "both", bytes: 1 }, { id: "c", location: "nvme", bytes: 1 }]
+  f = M.hostPages(Object.assign({}, base, { storage: withModels }))[1].fields[0]
+  assert.strictEqual(f.disabled, true)
+  assert.strictEqual(f.note.kind, "bad")
+  assert.ok(/1 model has files on the store/.test(f.note.text), f.note.text)
+  assert.strictEqual(M.hostPages(Object.assign({}, base, { storage: storeOf(null), busy: true }))[1].fields[0].disabled, true)
+  const unread = M.hostPages(Object.assign({}, base, { storage: null, readError: "h didn't answer" }))[1].fields[0]
+  assert.strictEqual(unread.disabled, true)
+  assert.deepStrictEqual(unread.note, { kind: "bad", text: "h didn't answer" })
+  assert.deepStrictEqual(M.hostPages(Object.assign({}, base, { storage: null }))[1].fields[0].note, { kind: "muted", text: "Asking the machine…" })
+})
+
+test("hostValues: the disk in use, and the folder of your own", () => {
+  assert.deepStrictEqual(M.hostValues(storeOf(null)), { store: "", folder: "" })
+  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/startdgx-models")), { store: "/m/u", folder: "" })
+  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/mine")), { store: "", folder: "/m/u/mine" })
+  assert.deepStrictEqual(M.hostValues(null), { store: "", folder: "" })
+})
+
+test("hostChange: what a click in the machine's panel asks for", () => {
+  const h = "me@spark-a"
+  assert.deepStrictEqual(M.hostChange(h, "logs", true, null), { action: { type: "logs", host: h, id: "" } })
+  assert.deepStrictEqual(M.hostChange(h, "update", true, null), { action: { type: "install", host: h, replace: false } })
+  assert.deepStrictEqual(M.hostChange(h, "setup", true, null), { action: { type: "install", host: h, replace: true } })
+  assert.deepStrictEqual(M.hostChange(h, "uninstall", true, null), { action: { type: "uninstall", host: h } })
+  assert.deepStrictEqual(M.hostChange(h, "forget", true, null), { action: { type: "forget", host: h } })
+  assert.deepStrictEqual(M.hostChange(h, "store", "/m/u", storeOf(null)), { action: { type: "storageSet", host: h, path: "/m/u/startdgx-models" } })
+  assert.deepStrictEqual(M.hostChange(h, "store", "", storeOf("/m/u/startdgx-models")), { action: { type: "storageUnset", host: h } })
+  assert.deepStrictEqual(M.hostChange(h, "store", "/m/u", storeOf("/m/u/startdgx-models")), { action: null }, "the disk already in use")
+  assert.deepStrictEqual(M.hostChange(h, "store", "", storeOf(null)), { action: null }, "no store to remove")
+  assert.deepStrictEqual(M.hostChange(h, "folder", " /m/u/mine ", storeOf(null)), { action: { type: "storageSet", host: h, path: "/m/u/mine" } })
+  assert.deepStrictEqual(M.hostChange(h, "folder", "mine", storeOf(null)), { action: null, error: "The path must start with /" })
+  assert.deepStrictEqual(M.hostChange(h, "folder", "", storeOf(null)), { action: null }, "an emptied box asks nothing")
+})
+
+test("modelPages: share, logs, context sizes and where the files are", () => {
+  const entry = row({ unit: "inactive", shared: false, ctx: 131072 })
+  const choices = M.contextChoices([{ ctx: 131072, peak_ram_gib: 40, source: "measured" }, { ctx: 262144, peak_ram_gib: 200, source: "measured" }], 131072, 121.6)
+  const c = { entry: entry, pending: "", sharing: "", store: null, location: "", choices: choices, variantsLoading: false, variantsError: "", away: false }
+  assert.deepStrictEqual(keysOf(M.modelPages(c)), ["General:share,logs", "Context:ctx"], "no store: no Storage page")
+  const ctx = M.modelPages(c)[1].fields[0]
+  assert.deepStrictEqual(ctx.options, [{ value: 131072, label: "128K" }], "only sizes that fit are offered")
+  assert.ok(/256K/.test(ctx.note.text), "and the ones that don't say why")
+  const s = M.modelPages(Object.assign({}, c, { store: { path: "/m/u/x", present: true }, location: "nvme" }))
+  assert.deepStrictEqual(keysOf(s), ["General:share,logs", "Context:ctx", "Storage:where,move-usb"])
+  assert.strictEqual(s[2].fields[0].hint, "On NVMe")
+  assert.strictEqual(s[2].fields[1].label, "Move to USB")
+  const running = M.modelPages(Object.assign({}, c, { entry: row({ unit: "active" }), store: { path: "/m/u/x", present: true }, location: "nvme" }))
+  assert.deepStrictEqual(keysOf(running)[2], "Storage:where", "a running model can't be moved")
+  assert.ok(/stopped/.test(running[2].fields[0].note.text))
+  assert.strictEqual(M.modelPages(Object.assign({}, c, { entry: row({ unit: "active", shared: true }) }))[0].fields[0].disabled, undefined)
+  assert.strictEqual(M.modelPages(Object.assign({}, c, { sharing: "share" }))[0].fields[0].disabled, true, "its own click is waiting")
+  assert.strictEqual(M.modelPages(Object.assign({}, c, { pending: "start" }))[1].fields[0].disabled, true)
+  assert.deepStrictEqual(M.modelPages(Object.assign({}, c, { choices: [], variantsLoading: true }))[1].fields[0].note, { kind: "muted", text: "Asking the machine which sizes it has measured…" })
+  assert.deepStrictEqual(M.modelPages(Object.assign({}, c, { choices: [], variantsError: "no recipe" }))[1].fields[0].note, { kind: "bad", text: "no recipe" })
+})
+
+test("modelValues and modelChange", () => {
+  assert.deepStrictEqual(M.modelValues(row({ shared: true, ctx: 131072 })), { share: true, ctx: 131072 })
+  const h = "me@spark-a", id = "qwen3.8-27b-tensorfold"
+  assert.deepStrictEqual(M.modelChange(h, id, "share", true), { type: "share", host: h, id: id })
+  assert.deepStrictEqual(M.modelChange(h, id, "share", false), { type: "unshare", host: h, id: id })
+  assert.deepStrictEqual(M.modelChange(h, id, "logs", true), { type: "logs", host: h, id: id })
+  assert.deepStrictEqual(M.modelChange(h, id, "ctx", 262144), { type: "setContext", host: h, id: id, ctx: 262144 })
+  assert.deepStrictEqual(M.modelChange(h, id, "move-usb", true), { type: "move", host: h, id: id, to: "usb" })
+  assert.deepStrictEqual(M.modelChange(h, id, "move-nvme", true), { type: "move", host: h, id: id, to: "nvme" })
+  assert.strictEqual(M.modelChange(h, id, "nonsense", true), null)
+})
+
+test("keyAction: g opens the settings of the machine or the model under the cursor", () => {
+  assert.deepStrictEqual(M.keyAction("g", { kind: "host", host: "h" }, null, "", false, false), { type: "hostSettings", host: "h" })
+  assert.deepStrictEqual(M.keyAction("g", { kind: "model", host: "h", id: "m" }, row(), "", false, false), { type: "modelSettings", host: "h", id: "m" })
+  assert.deepStrictEqual(M.keyAction("g", { kind: "add", host: "h" }, null, "", false, false), { type: "hostSettings", host: "h" })
+  assert.strictEqual(M.keyAction("g", { kind: "host", host: "h" }, null, "", true, false), null, "an away machine has none")
+})

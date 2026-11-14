@@ -1,6 +1,6 @@
 // The manager: your machines, the models on each and what they are doing, and a way to add more. Opened from
 // the launcher or the bar icon. Keyboard: Up/Down (or j/k) move, Enter or s starts or stops the model under the
-// cursor, l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
+// cursor, g its settings, l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
 // machine, f forgets it (each of d, u and f after a question in a card), n adds a machine, r looks again. Esc
 // closes. A held key acts once.
 pragma ComponentBehavior: Bound

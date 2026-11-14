@@ -118,7 +118,7 @@ ColumnLayout {
           Layout.fillWidth: true
           visible: section.update !== null
           textFormat: Text.PlainText
-          text: section.update ? section.update.text : ""
+          text: section.update ? section.update.text + ". Update it in the machine's settings." : ""
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
@@ -128,7 +128,7 @@ ColumnLayout {
           Layout.fillWidth: true
           visible: section.needsSetup
           textFormat: Text.PlainText
-          text: "A model can't be set up here until the machine has its one-time root setup. Install… runs it in a terminal, where sudo asks for the password; an engine startdgx didn't install is backed up first."
+          text: "A model can't be set up here until the machine has its one-time root setup: Install… in its settings runs it."
           color: Color.urgent
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
@@ -136,47 +136,12 @@ ColumnLayout {
         }
       }
 
-      TextLink {
+      // Update, Install, Logs, Uninstall, Forget and the model store are behind the gear.
+      Button {
         Layout.alignment: Qt.AlignVCenter
-        visible: section.update !== null && !section.needsSetup
-        text: "Update…"
-        tooltip: section.update ? "Install " + section.update.to + " on " + section.machine + " in a terminal, where sudo asks for the password" : ""
-        onClicked: section.actionRequested({ type: "install", host: section.host, replace: false })
-      }
-
-      TextLink {
-        Layout.alignment: Qt.AlignVCenter
-        visible: section.needsSetup
-        text: "Install…"
-        tooltip: "Set up " + section.machine + " as root in a terminal, backing up an engine startdgx didn't install (uninstall puts it back)"
-        onClicked: section.actionRequested({ type: "install", host: section.host, replace: true })
-      }
-
-      TextLink {
-        Layout.alignment: Qt.AlignVCenter
-        visible: section.loaded && !section.away
-        text: "Storage…"
-        tooltip: "Where " + section.machine + " keeps its model files: its internal disk, or an external disk as a model store"
-        onClicked: section.actionRequested({ type: "storage", host: section.host })
-      }
-      TextLink {
-        Layout.alignment: Qt.AlignVCenter
-        visible: section.loaded && !section.away
-        text: "Logs…"
-        tooltip: "Open the logs of the model started last, in a terminal  (l)"
-        onClicked: section.actionRequested({ type: "logs", host: section.host, id: "" })
-      }
-      TextLink {
-        Layout.alignment: Qt.AlignVCenter
-        text: "Uninstall…"
-        tooltip: "See what uninstalling the engine from " + section.machine + " would change, then do it in a terminal  (u)"
-        onClicked: section.actionRequested({ type: "uninstall", host: section.host })
-      }
-      TextLink {
-        Layout.alignment: Qt.AlignVCenter
-        text: "Forget…"
-        tooltip: "Take " + section.machine + " off this list, after a question; nothing on it changes  (f)"
-        onClicked: section.actionRequested({ type: "forget", host: section.host })
+        iconText: "\uf013"
+        tooltipText: "Settings…  (g)"
+        onClicked: section.actionRequested({ type: "hostSettings", host: section.host })
       }
     }
   }
@@ -191,7 +156,6 @@ ColumnLayout {
       Layout.leftMargin: Style.spacing.xxl
       entry: section.entryOf(modelData)
       pending: section.pending[Model.modelKey(section.host, modelData)] || ""
-      sharing: section.pending[Model.shareKey(section.host, modelData)] || ""
       nowMs: section.nowMs
       away: section.away
       location: Model.locationOf(section.storage, modelData)
@@ -204,18 +168,11 @@ ColumnLayout {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         if (action) section.actionRequested(action)
       }
-      onShareRequested: {
-        const action = Model.keyAction("t", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending, false, false, modelRow.sharing)
-        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
-        if (action) section.actionRequested(action)
-      }
-      onContextRequested: {
-        const action = Model.keyAction("c", { kind: "model", host: section.host, id: modelRow.modelData }, modelRow.entry, modelRow.pending)
-        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
-        if (action) section.actionRequested(action)
-      }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
-      onMoveRequested: to => section.actionRequested({ type: "move", host: section.host, id: modelRow.modelData, to: to })
+      onSettingsRequested: {
+        section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
+        section.actionRequested({ type: "modelSettings", host: section.host, id: modelRow.modelData })
+      }
       onRemoveRequested: {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         section.actionRequested({ type: "removeModel", host: section.host, id: modelRow.modelData })

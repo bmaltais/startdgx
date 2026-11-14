@@ -388,6 +388,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (k === "u") return { type: "uninstall", host: row.host }
   if (k === "f") return { type: "forget", host: row.host }
   if (away) return null
+  if (k === "g") return row.kind === "model" ? { type: "modelSettings", host: row.host, id: row.id } : { type: "hostSettings", host: row.host }
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
   if (k === "e") return { type: "addRecipe", host: row.host }
@@ -596,6 +597,150 @@ function moveOffers(location, unit, store) {
   case "mixed": return [toUsb, toNvme]
   }
   return []
+}
+
+// ---- the gear panels -------------------------------------------------------------------------------------
+// A machine's panel and a model's panel are pages of fields for the settings window (SettingsWindow.qml): the rows keep
+// to a name, a status and a few buttons, and what else there is to do or set sits behind the gear. These build the pages
+// from what the manager knows; hostChange and modelChange say what a click in a panel asks for.
+
+var STORE_FOLDER = "/startdgx-models"
+
+// Models whose files are linked into the model store (not one that only has a spare copy there): switching stores under
+// them would strand those files, and the machine refuses it.
+function linkedCount(storage) {
+  return storage ? storage.models.filter(function (m) { return m.location !== "nvme" && m.location !== "both" }).length : 0
+}
+
+// c: { machine, update (engineUpdate), needsSetup, storage (parseStorage or null), readError, busy (a store change waits) }
+function hostPages(c) {
+  const general = []
+  if (c.needsSetup) general.push({ key: "setup", type: "action", label: "Set up this machine", button: "Install…",
+    hint: "A model can't be set up here until the machine has its one-time root setup. This runs it in a terminal, where sudo asks for the password; an engine startdgx didn't install is backed up first." })
+  else if (c.update) general.push({ key: "update", type: "action", label: "Update the engine", button: "Update…",
+    hint: c.update.text })
+  general.push({ key: "logs", type: "action", label: "Logs", button: "Open…", hint: "Open the logs of the model started last, in a terminal." })
+
+  const storage = c.storage
+  const linked = linkedCount(storage)
+  const wait = c.busy || !storage || linked > 0
+  const options = [{ value: "", label: "Internal disk only" }]
+  const unusable = []
+  const disks = diskRows(storage)
+  for (let i = 0; i < disks.length; i++) {
+    const d = storage.disks[i]
+    if (d.usable) options.push({ value: disks[i].mount, label: disks[i].mount + " · " + (d.bus ? String(d.bus).toUpperCase() + " " : "") + d.fstype + " · " + sizeText(d.free) + " free" })
+    else unusable.push(disks[i].mount + " (" + disks[i].reason + ")")
+  }
+  const note = linked > 0 ? { kind: "bad", text: linked + " model" + (linked === 1 ? " has" : "s have") + " files on the store. Move " + (linked === 1 ? "it" : "them") + " back to the internal disk (Move to NVMe, in the model's panel) before changing or removing the store." }
+    : !storage ? (c.readError ? { kind: "bad", text: c.readError } : { kind: "muted", text: "Asking the machine…" })
+    : unusable.length ? { kind: "muted", text: "Not usable: " + unusable.join("; ") }
+    : null
+  const store = { key: "store", type: "choice", stacked: true, label: "Model store",
+    hint: "An external disk for model files. Choosing one moves nothing: each model has its own Move to USB in its panel, which copies it, checks it and frees the internal disk. A model on the store loads from there, a little slower." }
+  const folder = { key: "folder", type: "text", label: "Or a folder of your own", placeholder: "/media/you/disk/models",
+    hint: "An absolute path on the machine, on an external disk. Press Enter to use it." }
+  store.options = options
+  if (note) store.note = note
+  if (wait) { store.disabled = true; folder.disabled = true }
+
+  return [
+    { title: "General", fields: general },
+    { title: "Storage", fields: [store, folder] },
+    { title: "Machine", fields: [
+      { key: "uninstall", type: "action", label: "Uninstall the engine", button: "Uninstall…", hint: "See what uninstalling would change on the machine, then do it in a terminal." },
+      { key: "forget", type: "action", label: "Forget this machine", button: "Forget…", danger: true, hint: "Take it off this list. Nothing on the machine changes, and Add machine can add it again." }] }
+  ]
+}
+
+// What the machine's panel shows in its controls: the disk the store is on (one this plugin made), or else the folder.
+function hostValues(storage) {
+  const path = storage && storage.store ? String(storage.store.path) : ""
+  if (path === "") return { store: "", folder: "" }
+  const disks = storage.disks.filter(function (d) { return path === d.mount + STORE_FOLDER })
+  return disks.length ? { store: String(disks[0].mount), folder: "" } : { store: "", folder: path }
+}
+
+// What a click in the machine's panel asks for: { action } (null: nothing to do) and, when what was typed won't do, { error }.
+function hostChange(host, key, value, storage) {
+  const current = storage && storage.store ? String(storage.store.path) : ""
+  switch (key) {
+  case "logs": return { action: { type: "logs", host: host, id: "" } }
+  case "update": return { action: { type: "install", host: host, replace: false } }
+  case "setup": return { action: { type: "install", host: host, replace: true } }
+  case "uninstall": return { action: { type: "uninstall", host: host } }
+  case "forget": return { action: { type: "forget", host: host } }
+  case "store": {
+    if (value === "") return { action: current === "" ? null : { type: "storageUnset", host: host } }
+    const path = String(value) + STORE_FOLDER
+    return { action: path === current ? null : { type: "storageSet", host: host, path: path } }
+  }
+  case "folder": {
+    const path = String(value).trim()
+    if (path === "") return { action: null }
+    const problem = storagePathProblem(path)
+    if (problem !== "") return { action: null, error: problem }
+    return { action: path === current ? null : { type: "storageSet", host: host, path: path } }
+  }
+  }
+  return { action: null }
+}
+
+// c: { entry, pending, sharing, store ({ path, present } or null), location, choices (contextChoices), variantsLoading,
+// variantsError, away }
+function modelPages(c) {
+  const share = { key: "share", type: "bool", label: "Share on my tailnet", hint: "Omarchy on your other machines lists this model while it is shared." }
+  if (!shareAction(c.entry, c.pending, c.sharing)) share.disabled = true
+  const general = [share]
+  if (c.entry.unit !== "installing") general.push({ key: "logs", type: "action", label: "Logs", button: "Open…", hint: "Open this model's logs in a terminal." })
+  const pages = [{ title: "General", fields: general }]
+
+  if (contextAction(c.entry, "")) {
+    const fitting = c.choices.filter(function (x) { return x.fits })
+    const skipped = c.choices.filter(function (x) { return !x.fits }).map(function (x) { return x.label + ": " + x.text })
+    const ctx = { key: "ctx", type: "choice", stacked: true, label: "Context size",
+      hint: "Only the sizes the recipe has measured can run. Choosing one restarts the model with it, which interrupts requests in flight (a stopped model starts).",
+      options: fitting.map(function (x) { return { value: x.ctx, label: x.label } }) }
+    if (c.variantsError !== "" && c.choices.length === 0) ctx.note = { kind: "bad", text: c.variantsError }
+    else if (c.variantsLoading && c.choices.length === 0) ctx.note = { kind: "muted", text: "Asking the machine which sizes it has measured…" }
+    else if (skipped.length) ctx.note = { kind: "muted", text: "Not offered. " + skipped.join("  ") }
+    if (!contextAction(c.entry, c.pending)) ctx.disabled = true
+    pages.push({ title: "Context", fields: [ctx] })
+  }
+
+  if (c.store) {
+    const where = { key: "where", type: "info", label: "Location", hint: locationText(c.location) }
+    const offers = c.away || c.pending !== "" || c.sharing !== "" ? [] : moveOffers(c.location, c.entry.unit, c.store)
+    const fields = [where]
+    if (offers.length === 0) where.note = { kind: "muted", text: !c.store.present ? "The model store's disk isn't mounted." : "A model can only be moved while it is stopped." }
+    for (let i = 0; i < offers.length; i++) {
+      fields.push({ key: "move-" + offers[i].to, type: "action", label: offers[i].label, button: "Move", hint: MOVE_HINTS[c.location + ">" + offers[i].to] || MOVE_HINTS[offers[i].to] })
+    }
+    pages.push({ title: "Storage", fields: fields })
+  }
+  return pages
+}
+
+var MOVE_HINTS = {
+  usb: "Copy the weights to the model store, check them, and free the internal disk.",
+  nvme: "Copy the weights back to the internal disk and leave the model store.",
+  "both>usb": "The store already has a copy: this frees the internal disk's."
+}
+
+function modelValues(entry) {
+  return { share: !!entry && entry.shared === true, ctx: entry ? Number(entry.ctx) : 0 }
+}
+
+// What a click in a model's panel asks for, as a dispatch action, or null.
+function modelChange(host, id, key, value) {
+  switch (key) {
+  case "share": return { type: value ? "share" : "unshare", host: host, id: id }
+  case "logs": return { type: "logs", host: host, id: id }
+  case "ctx": return { type: "setContext", host: host, id: id, ctx: Number(value) }
+  case "move-usb": return { type: "move", host: host, id: id, to: "usb" }
+  case "move-nvme": return { type: "move", host: host, id: id, to: "nvme" }
+  }
+  return null
 }
 
 // ---- notifications -------------------------------------------------------------------------------------
