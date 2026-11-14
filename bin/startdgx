@@ -652,31 +652,63 @@ def current():
     return None
 '''
 STORAGE_SCRIPT = STORE_PRELUDE + '''
-out = json.loads(subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,TYPE,TRAN,FSTYPE,MOUNTPOINT,FSSIZE,FSAVAIL"], capture_output=True, text=True, check=True).stdout)
-flat = []
-def walk(node, top):
-  for dev in node:
-    owner = top or dev
-    flat.append((owner, dev))
-    walk(dev.get("children") or [], owner)
-walk(out["blockdevices"], None)
-root = next((top["name"] for top, dev in flat if dev.get("mountpoint") == "/"), None)
-disks = []
-for top, dev in flat:
-  mount = dev.get("mountpoint")
-  if not mount or mount == "/" or top["name"] == root or dev.get("type") == "loop" or mount.startswith("/snap/"):
-    continue
-  fstype = dev.get("fstype") or ""
-  usable = fstype in @FILESYSTEMS@
-  disks.append({"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
-                "free": int(dev.get("fsavail") or 0), "usable": usable,
-                "reason": "" if usable else (fstype or "this filesystem") + " cannot hold symlinks and permissions; use ext4, xfs or btrfs"})
+def discover():
+  out = json.loads(subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,TYPE,TRAN,FSTYPE,MOUNTPOINT,FSSIZE,FSAVAIL"], capture_output=True, text=True, check=True).stdout)
+  flat = []
+  def walk(node, top):
+    for dev in node:
+      owner = top or dev
+      flat.append((owner, dev))
+      walk(dev.get("children") or [], owner)
+  walk(out["blockdevices"], None)
+  root = next((top["name"] for top, dev in flat if dev.get("mountpoint") == "/"), None)
+  disks = []
+  for top, dev in flat:
+    mount = dev.get("mountpoint")
+    if not mount or mount == "/" or top["name"] == root or dev.get("type") == "loop" or mount.startswith("/snap/"):
+      continue
+    fstype = dev.get("fstype") or ""
+    usable = fstype in @FILESYSTEMS@
+    disks.append({"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
+                  "free": int(dev.get("fsavail") or 0), "usable": usable,
+                  "reason": "" if usable else (fstype or "this filesystem") + " cannot hold symlinks and permissions; use ext4, xfs or btrfs"})
+  return disks
 mode = sys.argv[1]
+def tree_size(root):
+  return sum(os.path.getsize(os.path.join(f, n)) for f, _, names in os.walk(root) for n in names)
+def models_found(path, present):
+  found = []
+  base = os.path.join(DATA, "models")
+  for rid in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+    states, size = set(), 0
+    for fs in sorted(n for n in os.listdir(os.path.join(base, rid)) if "." not in n):
+      here = os.path.join(base, rid, fs)
+      copy = os.path.join(path, rid, fs) if path and present else None
+      if os.path.islink(here):
+        state = "usb" if copy and os.path.isdir(copy) else "usb-missing"
+        size = None if state == "usb-missing" or size is None else size + tree_size(copy)
+      elif os.path.isdir(here):
+        state = "both" if copy and os.path.isdir(copy) else "nvme"
+        size = None if size is None else size + tree_size(here)
+      else:
+        continue
+      states.add(state)
+    if states:
+      found.append({"id": rid, "location": states.pop() if len(states) == 1 else "mixed", "bytes": size})
+  return found
 if mode == "list":
+  disks = discover()
   path = current()
-  store = {"path": path, "present": os.path.exists(os.path.join(path, MARKER))} if path else None
-  print(json.dumps({"store": store, "disks": disks}))
+  present = bool(path) and os.path.exists(os.path.join(path, MARKER))
+  store = {"path": path, "present": present} if path else None
+  print(json.dumps({"store": store, "disks": disks, "models": models_found(path, present)}))
+elif mode == "forget":
+  path = current()
+  if path and os.path.exists(os.path.join(path, MARKER)):
+    import shutil
+    shutil.rmtree(os.path.join(path, sys.argv[2]), ignore_errors=True)
 elif mode == "set":
+  disks = discover()
   path = sys.argv[2]
   if not os.path.isabs(path) or os.path.normpath(path) != path:
     fail("Give the store as an absolute path without .. or a trailing slash")
@@ -830,7 +862,7 @@ def cmd_storage(args):
   out = storage_run(host, args, "list")
   try:
     found = json.loads(out.strip().splitlines()[-1])
-    found["store"], found["disks"]
+    found["store"], found["disks"], found["models"]
   except (ValueError, IndexError, KeyError, TypeError) as error:
     raise Error(f"{host} gave an answer startdgx can't read") from error
   if args.json:
@@ -867,7 +899,10 @@ def cmd_delete(args):
       raise Error(f"{rid} isn't set up on {host}")
     print_remove_plan(plan, args.json)
     return
-  sys.stdout.write(ssh(target(args.host), "remove", recipe(args.model), timeout=args.timeout).stdout)
+  host, rid = target(args.host), recipe(args.model)
+  sys.stdout.write(ssh(host, "remove", rid, timeout=args.timeout).stdout)
+  # The engine knows nothing of the model store: what it kept of this model there goes too.
+  storage_run(host, args, "forget", rid)
 
 
 def print_remove_plan(plan, as_json):
@@ -2587,7 +2622,7 @@ def build_parser():
 
   st = add("storage", cmd_storage, description="The disks on HOST that could keep its model weights, and the model store in use. "
            "--set makes a folder on one of them the store; --unset forgets it (refused while models are linked into it).")
-  st.add_argument("--json", action="store_true", help="as {store, disks}")
+  st.add_argument("--json", action="store_true", help="as {store, disks, models}; a model's location is nvme, usb, both, usb-missing or mixed")
   stm = st.add_mutually_exclusive_group()
   stm.add_argument("--set", metavar="PATH", help="use PATH, a folder on an external disk, as the model store")
   stm.add_argument("--unset", action="store_true", help="stop using a model store")
