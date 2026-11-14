@@ -779,6 +779,42 @@ if direction == "usb":
         os.replace(blob + ".tmp", blob)
     moved = True
   print("moved " + str(total) if moved else "already")
+else:
+  total, moved = 0, False
+  for fs in filesets:
+    here, there = os.path.join(base, fs), os.path.join(store, rid, fs)
+    if not os.path.islink(here):
+      continue
+    if not os.path.isdir(there):
+      fail("The store has no copy of " + rid + " (" + there + ")")
+    total += size_of(there)
+    back = here + ".moving"
+    parked = {}
+    for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
+      for name in names:
+        blob = os.path.join(folder, name)
+        if os.path.islink(blob):
+          parked[os.readlink(blob)] = blob
+    try:
+      shutil.rmtree(back, ignore_errors=True)
+      os.makedirs(back)
+      for rel in files(there):
+        source, dest = os.path.join(there, rel), os.path.join(back, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        blob = parked.get(source)
+        shutil.copyfile(source, (blob or dest) + ".tmp")
+        if digest(source) != digest((blob or dest) + ".tmp"):
+          raise OSError("the copy of " + rel + " differs from the store's")
+        os.replace((blob or dest) + ".tmp", blob or dest)
+        if blob:
+          os.link(blob, dest)
+    except OSError as error:
+      shutil.rmtree(back, ignore_errors=True)
+      fail("Couldn't copy " + rid + " back from the store: " + str(error))
+    os.remove(here)
+    os.rename(back, here)
+    moved = True
+  print("moved " + str(total) if moved else "already")
 '''
 
 
@@ -813,7 +849,8 @@ def cmd_move(args):
   found = out.split()
   if not found or found[0] not in ("moved", "already"):
     raise Error(f"{host} gave an answer startdgx can't read")
-  print(f"{args.model}: " + (f"on the store ({size_text(int(found[1]))})" if found[0] == "moved" else "already on the store"))
+  where = "the store" if args.to == "usb" else "the internal disk"
+  print(f"{args.model}: " + (f"on {where} ({size_text(int(found[1]))})" if found[0] == "moved" else f"already on {where}"))
 
 
 def cmd_delete(args):
@@ -2555,7 +2592,7 @@ def build_parser():
   stm.add_argument("--set", metavar="PATH", help="use PATH, a folder on an external disk, as the model store")
   stm.add_argument("--unset", action="store_true", help="stop using a model store")
   mv = add("move", cmd_move, model=True, timeout=3600, description="Move a stopped model's weights between the host's internal disk and its model store (see storage). "
-           "--to usb copies them to the store, checks them and links the model's folder to the copy; the internal copy is then deleted.")
+           "--to usb copies them to the store, checks them and links the model's folder to the copy; the internal copy is then deleted. --to nvme copies them back and keeps the store's copy.")
   mv.add_argument("--to", required=True, choices=("usb", "nvme"), help="usb: the model store; nvme: back to the internal disk")
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)

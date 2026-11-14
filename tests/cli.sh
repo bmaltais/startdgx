@@ -452,6 +452,19 @@ cmp -s "$store/big/fs1/target/w1" "$tmp/aaa" && cmp -s "$store/big/fs1/tok" "$tm
 [ -L "$ed/blobs/sha256/aaa" ] && cmp -s "$ed/blobs/sha256/aaa" "$tmp/aaa"; ok $? "the engine's blob links to the store's copy"
 [ -d "$ed/models/big/fs1.rank0" ] && [ ! -L "$ed/models/big/fs1.rank0" ] && present "$ed/models/big/fs1.rank0/s"; ok $? "the model's state stays where it was"
 same "$(s move me@dgx big --to usb)" "big: already on the store"; ok $? "moving a model that is on the store again changes nothing"
+# move --to nvme: the reverse. The weights come back as the engine lays them out (a blob, with the model's file hard-linked
+# to it); the store's copy stays, so the model is on both and moving it to the store again is only a check and a link.
+rm "$store/.startdgx-store"
+out=$(s move me@dgx big --to nvme 2>&1); ok $((!$?)) "move --to nvme refuses when the store's disk isn't mounted"
+touch "$store/.startdgx-store"
+out=$(s move me@dgx big --to nvme 2>&1); ok $? "move --to nvme brings a model back"
+same "$out" "big: on the internal disk (3.4 KiB)"; ok $? "and says how much"
+[ -d "$ed/models/big/fs1" ] && [ ! -L "$ed/models/big/fs1" ] && cmp -s "$ed/models/big/fs1/target/w1" "$tmp/aaa" && cmp -s "$ed/models/big/fs1/tok" "$tmp/bbb"; ok $? "the model's folder holds the weights again, byte for byte"
+[ ! -L "$ed/blobs/sha256/aaa" ] && [ "$ed/blobs/sha256/aaa" -ef "$ed/models/big/fs1/target/w1" ]; ok $? "each linked to the engine's blob as before"
+cmp -s "$store/big/fs1/target/w1" "$tmp/aaa"; ok $? "the store keeps its copy"
+same "$(s move me@dgx big --to nvme)" "big: already on the internal disk"; ok $? "moving a model that is on the internal disk again changes nothing"
+out=$(s move me@dgx big --to usb 2>&1); ok $? "a model on both goes back to the store"
+[ -L "$ed/models/big/fs1" ] && cmp -s "$ed/blobs/sha256/aaa" "$tmp/aaa" && [ -L "$ed/blobs/sha256/aaa" ]; ok $? "by link again, with the store's copy checked"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).
