@@ -52,7 +52,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         textFormat: Text.PlainText
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         text: "Uninstall from " + Model.hostName(card.host)
         color: Color.foreground
         font.family: Style.font.family

@@ -1,7 +1,7 @@
 // StartDGX: DGX Spark machines and their models, from the Omarchy shell. This file owns the window, the
 // cards over it, the IPC entry points and the bar icon's status; DgxService.qml owns the machines and every
 // call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, ForgetView.qml, AddModelView.qml,
-// AddRecipeView.qml, FindView.qml, RecipeRunView.qml, ContextView.qml and RemoveView.qml draw what is in it.
+// AddRecipeView.qml, FindView.qml, RecipeRunView.qml, RemoveView.qml and SettingsCard.qml draw what is in it.
 //
 //   omarchy-shell io.github.bmaltais.startdgx open               toggle the manager
 //   omarchy-shell io.github.bmaltais.startdgx addMachine         the manager with its Add machine card
@@ -11,6 +11,8 @@
 //   omarchy-shell io.github.bmaltais.startdgx findModel <host> [query]   the manager with a machine's Find on Hugging Face card
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 //   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
+//   omarchy-shell io.github.bmaltais.startdgx settings <host> <model|""> <page|"">   a machine's settings window, or a model's, on a page
+//   omarchy-shell io.github.bmaltais.startdgx size <width> <height>   the manager at that size, centred (0 0: the default)
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Effects
@@ -36,7 +38,7 @@ Item {
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
   // A card floats over the manager: "add" (Add machine), "uninstall", "forget", "hostSettings" (one machine's), "modelSettings", "addModel" (a
-  // machine's model picker, Add recipe or Find on Hugging Face card), "remove", "context" or "recipeRun" (one model's or recipe's), or "" for none.
+  // machine's model picker, Add recipe or Find on Hugging Face card), "remove" or "recipeRun" (one model's or recipe's), or "" for none.
   property string card: ""
   // The path the Add recipe card opens with (IPC addRecipe's second argument).
   property string cardPath: ""
@@ -46,6 +48,8 @@ Item {
   property string cardMode: "measure"
   property var cardRecipe: ({})
   property int cardCtx: 0
+  // The page a settings window opens on, by its title ("" is the first).
+  property string cardPage: ""
   property string cardHost: ""
   property string cardModel: ""
   property var targetScreen: null
@@ -119,19 +123,21 @@ Item {
 
   // The gear on a machine's row, or on a model's: its settings window. A machine's reads its storage, a model's the
   // context sizes its recipe has measured.
-  function showHostSettings(host) {
+  function showHostSettings(host, page) {
     if (!core.hosts[host]) return
     root.ensureManager()
     root.cardHost = host
+    root.cardPage = page || ""
     root.card = "hostSettings"
     const p = core.poller(host)
     if (p) p.pollStorage()
   }
-  function showModelSettings(host, id) {
+  function showModelSettings(host, id, page) {
     if (!core.entry(host, id)) return
     root.ensureManager()
     root.cardHost = host
     root.cardModel = id
+    root.cardPage = page || ""
     root.card = "modelSettings"
     core.planContext(host, id)
     const p = core.poller(host)
@@ -176,14 +182,6 @@ Item {
     root.card = "recipeRun"
     core.planRecipeRun(host, r.id, ctx)
   }
-  function showContext(host, id) {
-    if (!Model.contextAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
-    root.ensureManager()
-    root.cardHost = host
-    root.cardModel = id
-    root.card = "context"
-    core.planContext(host, id)
-  }
   function showRemove(host, id) {
     if (!Model.removeAction(core.entry(host, id), core.pending[Model.modelKey(host, id)] || "")) return
     root.ensureManager()
@@ -207,8 +205,8 @@ Item {
     case "stop": core.stop(action.host, action.id); break
     case "share": case "unshare": core.share(action.host, action.id, action.type); break
     case "move": core.move(action.host, action.id, action.to); break
-    case "hostSettings": root.showHostSettings(action.host); break
-    case "modelSettings": root.showModelSettings(action.host, action.id); break
+    case "hostSettings": root.showHostSettings(action.host, action.page); break
+    case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
     case "setContext": core.setContext(action.host, action.id, action.ctx); break
     case "storageSet": core.setStore(action.host, action.path); break
     case "storageUnset": core.unsetStore(action.host); break
@@ -230,8 +228,6 @@ Item {
     case "measureRecipe": root.showRecipeRun("measure", action.host, action.recipe, action.ctx); break
     case "measureNow": core.measureRecipe(action.host, action.recipe.id, action.ctx); root.closeCard(); break
     case "confirmRecipe": core.confirmRecipe(action.host, action.id); break
-    case "context": root.showContext(action.host, action.id); break
-    case "contextNow": core.setContext(action.host, action.id, action.ctx); root.closeCard(); break
     case "removeModel": root.showRemove(action.host, action.id); break
     case "removeNow": core.remove(action.host, action.id); root.closeCard(); break
     }
@@ -262,6 +258,8 @@ Item {
     function findModel(host: string, query: string): void { root.showFind(host, query) }
     function removeModel(host: string, model: string): void { root.showRemove(host, model) }
     function forget(host: string): void { root.showForget(host) }
+    function settings(host: string, model: string, page: string): void { if (model !== "") root.showModelSettings(host, model, page); else root.showHostSettings(host, page) }
+    function size(width: int, height: int): void { root.ensureManager(); win.resizeTo(width, height) }
     function start(host: string, model: string): string { core.start(host, model); return "ok" }
     function stop(host: string, model: string): string { core.stop(host, model); return "ok" }
   }
@@ -324,6 +322,13 @@ Item {
       win.dragY += (h - frame.height) / 2
       win.sizeW = w
       win.sizeH = h
+    }
+    // The manager at a given size, centred (IPC `size`, for the test session; 0 0 is the default size).
+    function resizeTo(w, h) {
+      win.resetWindow()
+      if (w > 0 && h > 0) win.resizeBy(w - frame.width, h - frame.height)
+      win.dragX = 0
+      win.dragY = 0
     }
     // Keeps the card on the screen: at least the top strip stays reachable.
     function moveBy(dx, dy) {
@@ -440,7 +445,8 @@ Item {
       anchors.fill: frame
       radius: frame.radius
       color: Qt.rgba(0, 0, 0, 0.35)
-      MouseArea { anchors.fill: parent; onClicked: root.closeCard() }
+      // Takes the pointer's hover too, so no row or button behind the veil shows its tooltip through it.
+      MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: root.closeCard() }
     }
 
     RectangularShadow {
@@ -464,8 +470,9 @@ Item {
       border.width: Style.normalBorderWidth
       border.color: Util.alpha(Color.foreground, 0.14)
 
-      // Swallow clicks so they do not reach the veil behind the card.
-      MouseArea { anchors.fill: parent }
+      // Swallow clicks so they do not reach the veil behind the card, and hover so the manager's rows under the card
+      // (it is wider than the manager, and may be taller) show no tooltip over it.
+      MouseArea { anchors.fill: parent; hoverEnabled: true }
 
       // Built only while open, so a closed card holds nothing.
       Loader {
@@ -475,18 +482,17 @@ Item {
         active: root.card !== ""
         sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
-          : root.card === "context" ? contextCard : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : addCard
+          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
-      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : "model"; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
+      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : "model"; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }
       Component { id: findCard; FindView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
       Component { id: recipeRunCard; RecipeRunView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; mode: cardLoader.owner.cardMode; recipe: cardLoader.owner.cardRecipe; ctx: cardLoader.owner.cardCtx } }
-      Component { id: contextCard; ContextView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
       Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }
 
       Button {

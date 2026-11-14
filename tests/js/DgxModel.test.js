@@ -203,7 +203,7 @@ test("pollInterval: quick while you look or something moves, slow otherwise, slo
 const peers = require("../../demo/discover.json")
 
 test("parsePeers keeps discover's list, and refuses anything else", () => {
-  assert.strictEqual(M.parsePeers(JSON.stringify(peers)).length, 7)
+  assert.strictEqual(M.parsePeers(JSON.stringify(peers)).length, 8)
   assert.deepStrictEqual(M.parsePeers("[]"), [])
   assert.strictEqual(M.parsePeers("{}"), null)
   assert.strictEqual(M.parsePeers(JSON.stringify([{ name: "x" }])), null, "a peer with no target")
@@ -881,9 +881,9 @@ test("contextAction: a model that is set up can change its context, unless it is
   assert.strictEqual(M.contextAction(null, ""), null)
 })
 
-test("the c key opens a model's context card, and the command it sends carries the context", () => {
+test("the c key opens a model's settings on the Context page, and the command a choice sends carries the context", () => {
   const model = { host: "h1", kind: "model", id: "a" }
-  assert.deepStrictEqual(M.keyAction("c", model, row({ unit: "active" }), "", false, false, ""), { type: "context", host: "h1", id: "a" })
+  assert.deepStrictEqual(M.keyAction("c", model, row({ unit: "active" }), "", false, false, ""), { type: "modelSettings", host: "h1", id: "a", page: "Context" })
   assert.strictEqual(M.keyAction("c", model, row({ unit: "installing" }), "", false, false, ""), null)
   assert.strictEqual(M.keyAction("c", { host: "h1", kind: "host" }, null, "", false, false, ""), null)
   assert.deepStrictEqual(M.commandFor("h1", { key: "h1/a", kind: "context", ctx: 65536 }), ["use", "--detach", "h1", "a", "--ctx", "65536", "--timeout", "120"])
@@ -1326,7 +1326,7 @@ test("hostPages: General, Storage and Machine, each with only what applies", () 
   assert.deepStrictEqual(M.hostPages(Object.assign({}, base, { update: update }))[0].fields.map((f) => f.key), ["update", "logs"])
   assert.strictEqual(M.hostPages(Object.assign({}, base, { update: update }))[0].fields[0].hint, "Engine v1; v2 is available")
   assert.deepStrictEqual(M.hostPages(Object.assign({}, base, { needsSetup: true }))[0].fields.map((f) => f.key), ["setup", "logs"])
-  assert.strictEqual(M.hostPages(base)[2].fields[1].danger, true, "Forget is the destructive one")
+  assert.strictEqual(M.hostPages(base)[2].fields.some((f) => f.danger), false, "both open a card that asks, so neither is loud")
 })
 
 test("hostPages: the model store is a choice among the usable disks, and waits while it can't change", () => {
@@ -1377,8 +1377,9 @@ test("modelPages: share, logs, context sizes and where the files are", () => {
   const c = { entry: entry, pending: "", sharing: "", store: null, location: "", choices: choices, variantsLoading: false, variantsError: "", away: false }
   assert.deepStrictEqual(keysOf(M.modelPages(c)), ["General:share,logs", "Context:ctx"], "no store: no Storage page")
   const ctx = M.modelPages(c)[1].fields[0]
-  assert.deepStrictEqual(ctx.options, [{ value: 131072, label: "128K" }], "only sizes that fit are offered")
-  assert.ok(/256K/.test(ctx.note.text), "and the ones that don't say why")
+  assert.strictEqual(ctx.type, "info", "one size that fits is not a choice")
+  assert.strictEqual(ctx.hint, "128K, which needs 40 GiB of memory. It is the only size that fits this machine, so there is nothing to choose.")
+  assert.ok(/^Not offered\. 256K: Needs 200 GiB/.test(ctx.note.text), "and the ones that don't fit say why")
   const s = M.modelPages(Object.assign({}, c, { store: { path: "/m/u/x", present: true }, location: "nvme" }))
   assert.deepStrictEqual(keysOf(s), ["General:share,logs", "Context:ctx", "Storage:where,move-usb"])
   assert.strictEqual(s[2].fields[0].hint, "On NVMe")
@@ -1410,4 +1411,61 @@ test("keyAction: g opens the settings of the machine or the model under the curs
   assert.deepStrictEqual(M.keyAction("g", { kind: "model", host: "h", id: "m" }, row(), "", false, false), { type: "modelSettings", host: "h", id: "m" })
   assert.deepStrictEqual(M.keyAction("g", { kind: "add", host: "h" }, null, "", false, false), { type: "hostSettings", host: "h" })
   assert.strictEqual(M.keyAction("g", { kind: "host", host: "h" }, null, "", true, false), null, "an away machine has none")
+})
+
+// ---- one choice per context, and a row's line ----
+
+// The engine's recipe nemotron-3.5-bolt-tensorfold: two variants at one context, a bigger setup and one for 64 GB.
+const twice = [{ ctx: 262144, peak_ram_gib: 40, peak_gpu_gib: 40 }, { ctx: 262144, peak_ram_gib: 54, peak_gpu_gib: 54 }]
+
+test("contextChoices: a context measured twice is one choice, with the numbers of the variant the engine runs", () => {
+  // `use --ctx` picks, at that context, the variant that needs the most and still fits (the engine's pick_variant).
+  const big = M.contextChoices(M.parseVariants(JSON.stringify(twice)), 262144, 121.6)
+  assert.deepStrictEqual(big.map((x) => x.label + " " + x.need + " " + x.fits + " " + x.current), ["256K 54 true true"])
+  const small = M.contextChoices(twice, 262144, 60)
+  assert.deepStrictEqual(small.map((x) => x.label + " " + x.need + " " + x.fits), ["256K 40 true"], "a 64 GB machine falls back to the smaller one")
+  const none = M.contextChoices(twice, 0, 32)
+  assert.deepStrictEqual(none.map((x) => x.need + " " + x.fits), ["40 false"], "nothing fits: the smallest one's reason, as the engine gives")
+  assert.match(none[0].text, /^Needs 40 GiB of memory and 8 GiB for the desktop/)
+  assert.deepStrictEqual(M.contextChoices(twice, 0, 0).map((x) => x.need), [54], "memory unknown: the engine's first try")
+  const mixed = M.contextChoices(twice.concat([{ ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30 }, { ctx: 524288, peak_ram_gib: 90, peak_gpu_gib: 90 }]), 65536, 121.6)
+  assert.deepStrictEqual(mixed.map((x) => x.label), ["512K", "256K", "64K"], "largest first, each once")
+  // A drafted variant never fits, so a measured one at the same context is the one that runs.
+  const drafted = M.contextChoices([{ ctx: 65536, peak_ram_gib: 50, peak_gpu_gib: 50, source: "drafted" }, { ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30 }], 0, 121.6)
+  assert.deepStrictEqual(drafted.map((x) => x.need + " " + x.source), ["30 measured"])
+})
+
+test("variantRows: a recipe's own list keeps every variant", () => {
+  assert.deepStrictEqual(M.variantRows(M.parseVariants(JSON.stringify(twice))).map((x) => x.label + " " + x.need), ["256K 54", "256K 40"])
+})
+
+test("modelPages: the Context page offers a choice only when there is one to make", () => {
+  const entry = row({ unit: "inactive", ctx: 262144 })
+  const page = (variants, ram, over) => M.modelPages(Object.assign({ entry: entry, pending: "", sharing: "", store: null, location: "",
+    choices: M.contextChoices(variants, entry.ctx, ram), variantsLoading: false, variantsError: "", away: false }, over))[1].fields[0]
+  const one = page(twice, 121.6)
+  assert.strictEqual(one.type, "info")
+  assert.strictEqual(one.hint, "256K, which needs 54 GiB of memory. It is the only size the recipe has measured, so there is nothing to choose.")
+  assert.strictEqual(one.note, undefined)
+  const many = page(twice.concat([{ ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30, source: "estimated" }]), 121.6)
+  assert.strictEqual(many.type, "choice")
+  assert.deepStrictEqual(many.options, [{ value: 262144, label: "256K · 54 GiB" }, { value: 65536, label: "64K · about 30 GiB" }], "each once, with what it needs")
+  assert.strictEqual(M.modelValues(entry).ctx, many.options[0].value, "the size in use is the option that is lit")
+  const none = page(twice, 32)
+  assert.strictEqual(none.type, "info")
+  assert.strictEqual(none.hint, "None of the sizes the recipe has measured fits this machine.")
+  assert.match(none.note.text, /^Not offered\. 256K: Needs 40 GiB/)
+  assert.strictEqual(page([], 121.6, { variantsLoading: true }).type, "info", "nothing to choose from while the machine is asked")
+})
+
+test("modelLine: state first, then context and memory, where the files are and Shared", () => {
+  // Each fact's own spaces are no-break ones, so a wrapped line breaks between facts.
+  const line = (entry, pending, location) => M.modelLine(entry, pending, location).replace(/\u00a0/g, "_")
+  assert.strictEqual(line(row({ unit: "active", shared: true }), "", "usb"), "Running · 128K_context · On_USB · Shared")
+  assert.strictEqual(line(row({ unit: "inactive" }), "", ""), "Stopped · 128K_context · 28_GiB", "no store: no location")
+  assert.strictEqual(line(row({ unit: "inactive", fits: false, fit_reason: "Not enough memory" }), "", "both"), "Not enough memory · 128K_context · 28_GiB · On_NVMe_and_USB")
+  assert.strictEqual(line(row({ unit: "failed", error: "CUDA error", shared: true }), "", "nvme"), "Failed · 128K_context · 28_GiB · On_NVMe · Shared", "the reason has its own line")
+  assert.strictEqual(line(row({ unit: "installing", ctx: null, observed: null, install: { phase: "failed" }, error: "x" }), "", ""), "Setup failed")
+  assert.strictEqual(line(row({ unit: "inactive" }), "move-usb", "nvme"), "Moving to USB · 128K_context · 28_GiB · On_NVMe")
+  assert.strictEqual(line(row({ unit: "active" }), "queued stop", ""), "Running · stop queued · 128K_context")
 })

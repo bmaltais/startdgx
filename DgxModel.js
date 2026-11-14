@@ -182,6 +182,17 @@ function modelFacts(entry) {
   return facts.join(" · ")
 }
 
+// The line under a model's name, the most telling first, so that what a narrow row drops is the least: what it is
+// doing (a failure's reason has a line of its own), its context and memory, where its files are (`location`, only on a
+// machine with a model store) and whether it is shared. Each fact keeps its words together (no-break spaces), so a row
+// that wraps the line breaks it between facts.
+function modelLine(entry, pending, location) {
+  const state = modelState(entry, pending)
+  const facts = modelFacts(entry).split(" · ").concat([locationText(location), entry.shared === true ? "Shared" : ""])
+    .filter(function (s) { return s !== "" }).map(function (s) { return s.replace(/ /g, "\u00a0") })
+  return [state.kind === "failed" ? (entry.unit === "installing" ? "Setup failed" : "Failed") : state.text].concat(facts).join(" · ")
+}
+
 // ---- machines ----------------------------------------------------------------------------------------
 
 // `startdgx hosts --json`: { target: { profile } }, or null when it isn't that.
@@ -392,7 +403,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
   if (k === "e") return { type: "addRecipe", host: row.host }
-  if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "context", host: row.host, id: row.id }
+  if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "modelSettings", host: row.host, id: row.id, page: "Context" }
   if ((k === "d" || k === "delete") && row.kind === "model" && removeAction(entry, pending)) return { type: "removeModel", host: row.host, id: row.id }
   if (k === "t" && row.kind === "model" && entry) {
     const share = shareAction(entry, pending, sharing)
@@ -649,7 +660,7 @@ function hostPages(c) {
     { title: "Storage", fields: [store, folder] },
     { title: "Machine", fields: [
       { key: "uninstall", type: "action", label: "Uninstall the engine", button: "Uninstall…", hint: "See what uninstalling would change on the machine, then do it in a terminal." },
-      { key: "forget", type: "action", label: "Forget this machine", button: "Forget…", danger: true, hint: "Take it off this list. Nothing on the machine changes, and Add machine can add it again." }] }
+      { key: "forget", type: "action", label: "Forget this machine", button: "Forget…", hint: "Take it off this list. Nothing on the machine changes, and Add machine can add it again." }] }
   ]
 }
 
@@ -697,13 +708,25 @@ function modelPages(c) {
 
   if (contextAction(c.entry, "")) {
     const fitting = c.choices.filter(function (x) { return x.fits })
-    const skipped = c.choices.filter(function (x) { return !x.fits }).map(function (x) { return x.label + ": " + x.text })
-    const ctx = { key: "ctx", type: "choice", stacked: true, label: "Context size",
-      hint: "Only the sizes the recipe has measured can run. Choosing one restarts the model with it, which interrupts requests in flight (a stopped model starts).",
-      options: fitting.map(function (x) { return { value: x.ctx, label: x.label } }) }
+    const skipped = c.choices.filter(function (x) { return !x.fits }).map(function (x) { return x.label + ": " + x.text + "." })
+    const restart = "Choosing one restarts the model with it, which interrupts requests in flight (a stopped model starts)."
+    let ctx
+    if (fitting.length > 1) {
+      ctx = { key: "ctx", type: "choice", stacked: true, label: "Context size",
+        hint: "The sizes the recipe has measured, each with the memory it needs. " + restart,
+        options: fitting.map(function (x) { return { value: x.ctx, label: x.label + " · " + (x.source === "estimated" ? "about " : "") + x.need + " GiB" } }) }
+    } else {
+      // One size is not a choice, and none is nothing to choose from: say so instead of a lone button.
+      // (Stacked like the choice it may turn into once the machine has answered, so the row keeps its layout.)
+      ctx = { key: "ctx", type: "info", stacked: true, label: "Context size", hint: fitting.length === 1
+        ? fitting[0].label + ", which needs " + (fitting[0].source === "estimated" ? "about " : "") + fitting[0].need + " GiB of memory. It is the only size "
+          + (skipped.length ? "that fits this machine" : "the recipe has measured") + ", so there is nothing to choose."
+        : c.choices.length ? "None of the sizes the recipe has measured fits this machine."
+        : "The sizes the recipe has measured. " + restart }
+    }
     if (c.variantsError !== "" && c.choices.length === 0) ctx.note = { kind: "bad", text: c.variantsError }
     else if (c.variantsLoading && c.choices.length === 0) ctx.note = { kind: "muted", text: "Asking the machine which sizes it has measured…" }
-    else if (skipped.length) ctx.note = { kind: "muted", text: "Not offered. " + skipped.join("  ") }
+    else if (skipped.length) ctx.note = { kind: "muted", text: "Not offered. " + skipped.join(" ") }
     if (!contextAction(c.entry, c.pending)) ctx.disabled = true
     pages.push({ title: "Context", fields: [ctx] })
   }
@@ -955,7 +978,7 @@ function removeAction(entry, pending) {
 var RESERVE_GIB = 8
 
 // `startdgx variants HOST MODEL --json`: [{ ctx, peak_ram_gib, peak_gpu_gib }], the contexts the recipe has
-// measured, largest first; or null.
+// measured, largest first (and at one context the one that needs the most first, the engine's own order); or null.
 function parseVariants(text) {
   const parsed = parseJson(text)
   if (!Array.isArray(parsed) || parsed.length === 0) return null
@@ -963,25 +986,44 @@ function parseVariants(text) {
     const v = parsed[i]
     if (!isPlainObject(v) || !(Number(v.ctx) > 0) || !(Number(v.peak_ram_gib) > 0)) return null
   }
-  return parsed.slice().sort(function (a, b) { return b.ctx - a.ctx })
+  return parsed.slice().sort(function (a, b) { return b.ctx - a.ctx || b.peak_ram_gib - a.peak_ram_gib })
 }
 
-// What the context card lists: one choice per measured context, { ctx, label, text, fits, current }. It fits when
-// its memory and the desktop's reserve are within the machine's (ramTotalGib; 0 when unknown, which leaves it to the
-// engine, whose own check refuses what doesn't fit and keeps the old setup).
+// One variant as a row: { ctx, label, need, text, fits, current, source }. It fits when its memory and the desktop's
+// reserve are within the machine's (ramTotalGib; 0 when unknown, which leaves it to the engine, whose own check refuses
+// what doesn't fit and keeps the old setup).
+function variantChoice(v, currentCtx, ramTotalGib) {
+  const need = Number(v.peak_ram_gib)
+  const source = recipeSource(v)
+  const room = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
+  return {
+    ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", need: need, fits: room && source !== "drafted", current: v.ctx === Number(currentCtx), source: source,
+    text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
+      : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
+      : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (v.confirmed === true ? "; you confirmed it" : "")
+      : "Needs " + need + " GiB of memory"
+  }
+}
+
+// Every variant of a recipe, as its file has them (the Add recipe card's list): two at one context are two rows.
+function variantRows(variants) {
+  return variants.map(function (v) { return variantChoice(v, 0, 0) })
+}
+
+// The context sizes a model can be given: one choice per context, largest first. A recipe may measure a context more
+// than once (a bigger setup for a bigger machine), and `use --ctx` names only the context: the engine then takes the
+// variant that needs the most memory and still fits, or refuses with the smallest one's reason (its pick_variant). So
+// each choice carries the numbers of the variant the engine would run.
 function contextChoices(variants, currentCtx, ramTotalGib) {
-  return variants.map(function (v) {
-    const need = Number(v.peak_ram_gib)
-    const source = recipeSource(v)
-    const room = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
-    const fits = room && source !== "drafted"
-    return {
-      ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", fits: fits, current: v.ctx === Number(currentCtx), source: source,
-      text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
-        : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
-        : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (v.confirmed === true ? "; you confirmed it" : "")
-        : "Needs " + need + " GiB of memory"
-    }
+  const groups = {}, order = []
+  for (let i = 0; i < variants.length; i++) {
+    const c = variantChoice(variants[i], currentCtx, ramTotalGib)
+    if (!groups[c.ctx]) { groups[c.ctx] = []; order.push(c.ctx) }
+    groups[c.ctx].push(c)
+  }
+  return order.sort(function (a, b) { return b - a }).map(function (ctx) {
+    const same = groups[ctx].sort(function (a, b) { return b.need - a.need })
+    return same.filter(function (c) { return c.fits })[0] || same[same.length - 1]
   })
 }
 

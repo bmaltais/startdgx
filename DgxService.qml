@@ -86,7 +86,7 @@ Item {
   property string hfAsked: ""
   readonly property bool hfSearching: hfQuery.busy
 
-  // The context card's choices (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
+  // A model's context sizes, for its settings window and the Add recipe card's variants (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
   property string variantsHost: ""
   property string variantsId: ""
   property var variants: null

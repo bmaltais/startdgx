@@ -13,6 +13,7 @@ FocusScope {
   property string kind: "host"          // "host" or "model"
   property string host: ""
   property string model: ""
+  property string startPage: ""         // the title of the page to open on ("" is the first)
 
   readonly property var dgx: card.svc.dgx
   readonly property string machine: Model.hostName(card.host)
@@ -45,6 +46,10 @@ FocusScope {
 
   implicitHeight: win.implicitHeight
 
+  Component.onCompleted: {
+    for (let i = 0; i < card.pages.length; i++) if (card.pages[i].title === card.startPage) win.page = i
+  }
+
   Keys.onPressed: event => {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
   }
@@ -57,6 +62,7 @@ FocusScope {
     pages: card.pages
     values: card.values
     footerText: card.problem !== "" ? card.problem : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
+    footerIsError: card.problem !== "" || (card.svc.notice !== "" && card.svc.noticeIsError)
 
     onChanged: function (key, value) {
       card.problem = ""

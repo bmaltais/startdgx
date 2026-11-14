@@ -1,5 +1,5 @@
-// One machine: its name, what it is, whether it answers (and why not), its quiet actions (Logs, Uninstall…,
-// Forget), its models and, on a machine that answers, an Add model… row that opens its model picker. The manager owns the cursor and every decision; this file only paints and passes on
+// One machine: its name, what it is, whether it answers (and why not), the gear that opens its settings window (logs,
+// update, the model store, uninstall, forget), its models and, on a machine that answers, an Add model… row that opens its model picker. The manager owns the cursor and every decision; this file only paints and passes on
 // what was asked for, as the same actions the keys make (DgxModel.keyAction).
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -69,33 +69,43 @@ ColumnLayout {
       anchors.rightMargin: Style.spacing.md
       spacing: Style.spacing.lg
 
-      Rectangle {
-        Layout.preferredWidth: Style.space(8)
-        Layout.preferredHeight: Style.space(8)
-        Layout.alignment: Qt.AlignVCenter
-        radius: width / 2
-        color: !section.loaded ? Util.alpha(Color.foreground, 0.35) : section.away ? Color.urgent : Color.accent
-      }
-
       ColumnLayout {
+        id: headText
+        // The lines under the name start under it, clear of the dot.
+        readonly property real indent: Style.space(8) + Style.spacing.lg
         Layout.fillWidth: true
         spacing: 0
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
+          // The dot sits on the name's line, also when lines of status follow it.
+          Rectangle {
+            Layout.preferredWidth: Style.space(8)
+            Layout.preferredHeight: Style.space(8)
+            Layout.rightMargin: Style.spacing.lg - Style.spacing.md
+            Layout.alignment: Qt.AlignVCenter
+            radius: width / 2
+            color: !section.loaded ? Util.alpha(Color.foreground, 0.35) : section.away ? Color.urgent : Color.accent
+          }
           Text {
+            // As wide as the name, and cut when the row is narrower, so it never runs under the gear.
+            Layout.fillWidth: true
+            Layout.maximumWidth: Math.ceil(implicitWidth)
             textFormat: Text.PlainText
             text: section.machine
             color: Color.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.subtitle
             font.bold: true
+            elide: Text.ElideRight
           }
           Text {
+            // Takes what the name leaves.
             Layout.fillWidth: true
+            Layout.preferredWidth: 0
             textFormat: Text.PlainText
             // The SSH target, when it says more than the name (a user).
-            text: [section.host !== section.machine ? section.host : "", Model.hostLine(section.profile)].filter(function (s) { return s !== "" }).join("  ·  ")
+            text: [section.host !== section.machine ? section.host : "", Model.hostLine(section.profile)].filter(function (s) { return s !== "" }).join(" · ")
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -104,6 +114,7 @@ ColumnLayout {
         }
         Text {
           Layout.fillWidth: true
+          Layout.leftMargin: headText.indent
           visible: text !== ""
           textFormat: Text.PlainText
           text: !section.loaded ? "Asking the machine…"
@@ -116,6 +127,7 @@ ColumnLayout {
         }
         Text {
           Layout.fillWidth: true
+          Layout.leftMargin: headText.indent
           visible: section.update !== null
           textFormat: Text.PlainText
           text: section.update ? section.update.text + ". Update it in the machine's settings." : ""
@@ -126,6 +138,7 @@ ColumnLayout {
         }
         Text {
           Layout.fillWidth: true
+          Layout.leftMargin: headText.indent
           visible: section.needsSetup
           textFormat: Text.PlainText
           text: "A model can't be set up here until the machine has its one-time root setup: Install… in its settings runs it."

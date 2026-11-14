@@ -2252,6 +2252,9 @@ def demo_seed(folder):
     # A machine with the file needs-setup has an engine startdgx didn't install, and isn't set up as root.
     needs_setup = os.path.exists(os.path.join(DEMO_FIXTURES, "hosts", name, "needs-setup"))
     state["hosts"][name] = {"status": status, "list": listing, **({"needs_setup": True} if needs_setup else {})}
+    # A machine with the file storage.json starts with a model store set and some models on it ({store, locations}).
+    if os.path.exists(os.path.join(DEMO_FIXTURES, "hosts", name, "storage.json")):
+      state["hosts"][name]["storage"] = read_fixture("hosts", name, "storage.json")
   return state
 
 

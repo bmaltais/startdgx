@@ -248,7 +248,9 @@ FocusScope {
               Layout.fillWidth: true
               spacing: Style.spacing.md
               Text {
-                Layout.fillWidth: hfRow.label === ""
+                // As wide as the repo's name, and cut when the row is narrower: its label keeps its room.
+                Layout.fillWidth: true
+                Layout.maximumWidth: Math.ceil(implicitWidth)
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 text: hfRow.modelData.repo
@@ -259,7 +261,6 @@ FocusScope {
               }
               // A derivative says so, in the foreground colour: accent is for the one thing to do and the selected state.
               Text {
-                Layout.fillWidth: true
                 visible: hfRow.label !== ""
                 textFormat: Text.PlainText
                 text: hfRow.label
@@ -267,6 +268,7 @@ FocusScope {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
+              Item { Layout.fillWidth: true }
             }
             Text {
               Layout.fillWidth: true
@@ -289,19 +291,21 @@ FocusScope {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
               }
-              SettingsPill {
+              // A row's actions are bordered buttons, as in the model picker and Add machine.
+              Button {
                 text: Model.AUTHOR_TEXT
+                bordered: true
+                fontSize: Style.font.bodySmall
                 opacity: Model.authorLaunch(card.host, hfRow.modelData.repo) ? 1 : 0.4
+                tooltipText: Model.authorHint()
                 onClicked: card.author(hfRow.modelData.repo)
-                HoverHandler { id: authorHover }
-                PanelToolTip {
-                  visible: authorHover.hovered
-                  text: Model.authorHint()
-                }
               }
-              SettingsPill {
+              Button {
                 text: "Draft recipe"
+                bordered: true
+                fontSize: Style.font.bodySmall
                 opacity: card.dgx.recipeBusy ? 0.4 : 1
+                tooltipText: "Write a recipe for " + hfRow.modelData.repo + " and add it to " + Model.hostName(card.host) + " as drafted, not yet fitting"
                 onClicked: card.draft(hfRow.modelData.repo)
               }
             }

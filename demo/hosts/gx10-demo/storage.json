@@ -1,0 +1,10 @@
+{
+  "store": {
+    "path": "/media/demo/usb/startdgx-models",
+    "present": true
+  },
+  "locations": {
+    "qwen3.8-27b-abliterated-tensorfold": "usb",
+    "qwen3.8-27b-tensorfold": "both"
+  }
+}

@@ -31,13 +31,12 @@ Rectangle {
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
-  readonly property bool shared: row.entry.shared === true
   readonly property bool blocked: Model.startBlocked(row.entry)
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
-  readonly property string facts: Model.modelFacts(row.entry)
-  // Only a host with a store says where a model is, and a shared model says so.
-  readonly property string whereText: row.store ? Model.locationText(row.location) : ""
+  // What it is doing, its context and memory, where its files are (only a host with a store says) and Shared.
+  readonly property string line: Model.modelLine(row.entry, row.pending, row.store ? row.location : "")
+  readonly property string title: String(row.entry.name || row.entry.recipe || "")
   readonly property bool hot: hover.hovered || row.current
 
   // When a load or stop ends, its bar fills to the end before the row changes over, rather than vanishing near 90%.
@@ -92,9 +91,10 @@ Rectangle {
         spacing: Style.spacing.xxs
 
         Text {
+          id: nameText
           Layout.fillWidth: true
           textFormat: Text.PlainText
-          text: String(row.entry.name || row.entry.recipe || "")
+          text: row.title
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.body
@@ -102,9 +102,10 @@ Rectangle {
           elide: Text.ElideRight
           HoverHandler { id: nameHover }
           PanelToolTip {
-            // A setup has no endpoint until its model first starts.
-            visible: nameHover.hovered && String(row.entry.endpoint || "") !== ""
-            text: String(row.entry.endpoint || "") + " · model " + String(row.entry.recipe || "")
+            // A name the row had to cut is whole here. A setup has no endpoint until its model first starts.
+            visible: nameHover.hovered && text !== ""
+            text: [nameText.truncated ? row.title : "", String(row.entry.endpoint || "") !== "" ? String(row.entry.endpoint) + " · model " + String(row.entry.recipe || "") : ""]
+              .filter(function (s) { return s !== "" }).join("\n")
           }
         }
 
@@ -113,6 +114,9 @@ Rectangle {
           spacing: Style.spacing.md
           Rectangle {
             id: dot
+            // Beside the first line: the words wrap on a narrow row.
+            Layout.alignment: Qt.AlignTop
+            Layout.topMargin: Math.max(0, (lineMetrics.height - Style.space(7)) / 2)
             Layout.preferredWidth: Style.space(7)
             Layout.preferredHeight: Style.space(7)
             radius: width / 2
@@ -128,34 +132,48 @@ Rectangle {
             }
           }
           Text {
+            id: lineText
             Layout.fillWidth: true
             textFormat: Text.PlainText
-            // A failure's reason has its own line, which links to the logs.
-            text: (row.kind === "failed" ? (row.entry.unit === "installing" ? "Setup failed" : "Failed") : row.modelState.text)
-              + (row.whereText !== "" && row.kind !== "failed" ? "  ·  " + row.whereText : "")
-              + (row.shared && row.kind !== "failed" ? "  ·  Shared" : "")
-              + (row.facts !== "" ? "  ·  " + row.facts : "")
+            // A failure's reason has its own line, which links to the logs. A row too narrow for the words takes a
+            // second line rather than cut them short beside the buttons; a third is cut, and whole on hover.
+            text: row.line
             color: row.kind === "failed" ? Color.urgent : Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.Wrap
+            maximumLineCount: 2
             elide: Text.ElideRight
+            FontMetrics { id: lineMetrics; font: lineText.font }
+            HoverHandler { id: lineHover }
+            PanelToolTip {
+              visible: lineHover.hovered && lineText.truncated
+              text: row.line
+            }
           }
         }
       }
 
       // Everything else about the model (sharing, context size, logs, where its files are) is behind the gear.
+      // The three buttons keep their places on every row: one that has nothing to do now is hidden, not taken away,
+      // so the others don't move under the pointer and the rows' buttons stay in columns (each is as wide as it is tall,
+      // whatever its glyph).
       Button {
         Layout.alignment: Qt.AlignVCenter
+        Layout.preferredWidth: implicitHeight
         visible: !row.away
         iconText: "\uf013"
-        tooltipText: "Settings…"
+        tooltipText: "Settings…  (g)"
         onClicked: row.settingsRequested()
       }
 
       // Remove (or cancel a setup), after a question in a card.
       Button {
         Layout.alignment: Qt.AlignVCenter
-        visible: !row.away && row.removal !== ""
+        Layout.preferredWidth: implicitHeight
+        visible: !row.away
+        opacity: row.removal !== "" ? 1 : 0
+        enabled: row.removal !== ""
         iconText: row.removal === "cancel" ? "\uf00d" : "\uf1f8"
         tooltipText: row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
         // Quiet: a destructive action is never the loudest thing on the row.
@@ -165,20 +183,16 @@ Rectangle {
 
       // Start or stop. Greyed out, not disabled, so the reason still shows on hover.
       Button {
-        id: toggleButton
         Layout.alignment: Qt.AlignVCenter
-        visible: !row.away && (row.toggle !== "" || row.blocked)
+        Layout.preferredWidth: implicitHeight
+        visible: !row.away
+        enabled: row.toggle !== "" || row.blocked
         iconText: row.toggle === "stop" ? "\udb80\udfe4" : "\udb81\udc0a"
         tooltipText: row.blocked ? String(row.entry.fit_reason || "") || "Not enough memory"
           : row.toggle === "stop" ? "Stop  (s)" : "Start  (s)"
         foreground: row.blocked ? Color.muted : Color.foreground
-        opacity: row.blocked ? 0.5 : 1
+        opacity: !enabled ? 0 : row.blocked ? 0.5 : 1
         onClicked: if (!row.blocked) row.toggleRequested()
-        PanelToolTip {
-          // The keyboard cursor landing on a greyed-out start says why too.
-          visible: row.blocked && row.current
-          text: toggleButton.tooltipText
-        }
       }
     }
 
