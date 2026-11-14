@@ -116,7 +116,7 @@ FocusScope {
       }
     }
 
-    Toggle {
+    SwitchRow {
       Layout.fillWidth: true
       visible: card.toggleText !== ""
       label: card.toggleText
