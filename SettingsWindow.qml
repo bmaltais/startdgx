@@ -382,13 +382,13 @@ Item {
                 id: editor
                 enabled: row.live
                 opacity: row.live ? 1 : 0.4
-                // Stacked: under the label, full width. Otherwise on the right of the row.
-                anchors.top: row.stacked ? labels.bottom : undefined
-                anchors.topMargin: Style.spacing.sm
-                anchors.left: row.stacked ? parent.left : undefined
-                anchors.right: parent.right
-                anchors.verticalCenter: row.stacked ? undefined : parent.verticalCenter
-                anchors.verticalCenterOffset: row.stacked ? 0 : -row.noteHeight / 2
+                // Stacked: under the label, full width. Otherwise on the right of the row. Positioned with x and y,
+                // not anchors: the rows are reused when a page with as many fields replaces another, and an anchor
+                // switched back to undefined keeps its old place in Qt, which left a button on top of its label.
+                width: row.stacked ? parent.width : editor.implicitWidth
+                x: row.stacked ? 0 : parent.width - editor.width
+                y: row.stacked ? Style.spacing.md + labels.height + Style.spacing.sm
+                  : (parent.height - row.noteHeight - editor.height) / 2
                 sourceComponent: row.field.type === "bool" ? switchEditor
                   : row.field.type === "info" ? null
                   : row.field.type === "action" ? actionEditor
