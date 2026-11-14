@@ -9,7 +9,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
-import qs.Ui
 import "DgxModel.js" as Model
 
 FocusScope {
@@ -52,7 +51,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         textFormat: Text.PlainText
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         text: "Uninstall from " + Model.hostName(card.host)
         color: Color.foreground
         font.family: Style.font.family
@@ -106,7 +105,7 @@ FocusScope {
     // The opt-ins, off by default.
     Repeater {
       model: card.choices
-      delegate: Toggle {
+      delegate: SwitchRow {
         required property var modelData
         Layout.fillWidth: true
         label: modelData.label

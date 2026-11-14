@@ -57,7 +57,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         textFormat: Text.PlainText
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         text: "Add a recipe to " + Model.hostName(card.host)
         color: Color.foreground
         font.family: Style.font.family
@@ -248,7 +248,7 @@ FocusScope {
           font.pixelSize: Style.font.bodySmall
         }
         Repeater {
-          model: recipeRow.open && recipeRow.loaded && card.dgx.variants ? Model.contextChoices(card.dgx.variants, 0, 0) : []
+          model: recipeRow.open && recipeRow.loaded && card.dgx.variants ? Model.variantRows(card.dgx.variants) : []
           delegate: RowLayout {
             id: variant
             required property var modelData

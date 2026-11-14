@@ -171,15 +171,21 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: Style.spacing.md
                 Text {
+                  // As wide as the name, and cut when the row is narrower, so it never runs under the buttons.
+                  Layout.fillWidth: true
+                  Layout.maximumWidth: Math.ceil(implicitWidth)
                   textFormat: Text.PlainText
                   text: String(peerRow.modelData.name)
                   color: Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
                   font.bold: true
+                  elide: Text.ElideRight
                 }
                 Text {
+                  // Takes what the name leaves.
                   Layout.fillWidth: true
+                  Layout.preferredWidth: 0
                   textFormat: Text.PlainText
                   text: String(peerRow.modelData.target)
                   color: Color.muted
@@ -237,15 +243,9 @@ FocusScope {
         tooltipText: "Ask the tailnet again, as the user above  (r)"
         onClicked: card.lookAgain()
       }
-      Text {
+      FooterNote {
         Layout.fillWidth: true
-        horizontalAlignment: Text.AlignRight
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: card.svc.footerText
-        color: card.svc.notice !== "" && card.svc.noticeIsError ? Color.urgent : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
+        svc: card.svc
       }
     }
   }

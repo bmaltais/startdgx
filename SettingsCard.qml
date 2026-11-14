@@ -13,6 +13,7 @@ FocusScope {
   property string kind: "host"          // "host" or "model"
   property string host: ""
   property string model: ""
+  property string startPage: ""         // the title of the page to open on ("" is the first)
 
   readonly property var dgx: card.svc.dgx
   readonly property string machine: Model.hostName(card.host)
@@ -45,6 +46,20 @@ FocusScope {
 
   implicitHeight: win.implicitHeight
 
+  // Opens on the page asked for; again when the window is pointed at another machine, model or page while open.
+  property bool built: false
+  function start() {
+    if (!card.built) return
+    win.reset()
+    card.problem = ""
+    for (let i = 0; i < card.pages.length; i++) if (card.pages[i].title === card.startPage) win.page = i
+  }
+  Component.onCompleted: { card.built = true; card.start() }
+  onKindChanged: card.start()
+  onHostChanged: card.start()
+  onModelChanged: card.start()
+  onStartPageChanged: card.start()
+
   Keys.onPressed: event => {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
   }
@@ -57,6 +72,7 @@ FocusScope {
     pages: card.pages
     values: card.values
     footerText: card.problem !== "" ? card.problem : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
+    footerIsError: card.problem !== "" || (card.svc.notice !== "" && card.svc.noticeIsError)
 
     onChanged: function (key, value) {
       card.problem = ""
@@ -65,7 +81,7 @@ FocusScope {
         if (r.error) card.problem = r.error
         if (r.action) card.svc.dispatch(r.action)
       } else {
-        const action = Model.modelChange(card.host, card.model, key, value)
+        const action = Model.modelChange(card.host, card.model, key, value, card.entry)
         if (action) card.svc.dispatch(action)
       }
     }

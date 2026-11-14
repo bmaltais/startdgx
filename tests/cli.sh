@@ -1068,8 +1068,20 @@ dj() { local cond=$1; shift; ds "$@" | python3 -c "import json,sys; d=json.load(
 row() { dj "d['models'].get('$2', {}).get('unit') == '$3'" status "$1"; }
 a=demo@spark-a b=demo@spark-b c=demo@spark-c
 nem=nemotron-3.5-bolt-tensorfold qwen=qwen3.8-27b-tensorfold abl=qwen3.8-27b-abliterated-tensorfold flash=qwen3.8-flash-next-tensorfold
-dj 'sorted(d) == ["demo@spark-a", "demo@spark-b", "demo@spark-c"] and d["demo@spark-a"]["profile"]["platform"] == "aarch64-gb10"' hosts --json
+dj 'sorted(d) == ["demo@gx10-demo", "demo@spark-a", "demo@spark-b", "demo@spark-c"] and d["demo@spark-a"]["profile"]["platform"] == "aarch64-gb10"' hosts --json
 ok $? "demo hosts --json lists the fixture machines"
+# gx10-demo mirrors a real Spark's answers (tests/js/fixtures/gx10-*.json): long names, a recipe of yours, a model store with
+# models on it, and a recipe that measured one context twice.
+g=demo@gx10-demo
+dj 'd["models"]["'$abl'"]["name"] == "Qwen3.8 27B Abliterated TensorFold" and d["models"]["'$abl'"]["shared"] and d["models"]["'$nem'"]["unit"] == "failed" and len(d["models"]) == 5' status $g
+ok $? "demo gx10-demo has a long-named shared model, a failed one, and five in all"
+dj 'd["store"] == {"path": "/media/demo/usb/startdgx-models", "present": True} and {m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "usb" and {m["id"]: m["location"] for m in d["models"]}["'$qwen'"] == "both" and {m["id"]: m["location"] for m in d["models"]}["'$nem'"] == "nvme"' storage $g --json
+ok $? "it starts with a model store set (storage.json), one model on it and one on both disks"
+dj '[(v["ctx"], v["peak_ram_gib"]) for v in d] == [(262144, 54), (262144, 40)]' variants $g $nem --json
+ok $? "its Nemotron recipe has two variants at one context, as the engine's has"
+dj '{r["id"]: r for r in d}["nemotron-3.5-lightning-spark"]["user"] is True' list $g
+ok $? "and it has a recipe of yours"
+dj 'd["store"] is None' storage $a --json; ok $? "a demo machine without storage.json has no store"
 model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
 dj 'sorted(d) == ["best", "last", "link", "models", "ram_total_gib", "share_error"] and all(sorted(m) == sorted('"$model_keys"') for m in d["models"].values())' status $a
 ok $? "demo status has the engine's status and model row keys"

@@ -1,6 +1,9 @@
 // Copied from StartAppImage's SettingsWindow.qml (the family's reference implementation; copies are kept alike by hand). StartDGX's
 // additions: the field types "action" (a button on the right: { button, danger }, emits changed(key, true)) and "info" (a label and
-// hint, nothing to change), for a window that does things as well as sets them. Upstream them to StartAppImage when it needs them.
+// hint, nothing to change), for a window that does things as well as sets them; a title too long for one line takes up to three (a
+// model's name), a disabled setting keeps its note at full strength (it says why), and a choice's segment never grows past the
+// page (a long disk path is cut, and whole on hover); the footer's line turns red for an error (footerIsError) and takes a second
+// line when it is long. Upstream them to StartAppImage when it needs them.
 //
 // A settings window in the Start family's look, modelled on StartBar's: a header with a search
 // box, the pages down the left, the settings of the chosen page on the right, and a footer.
@@ -23,6 +26,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
+import qs.Ui
 
 Item {
   id: win
@@ -31,11 +35,12 @@ Item {
   // A small-caps line under the title that says what the window is for ("SETTINGS", maybe more).
   property string subtitle: ""
   property string titleIcon: ""                  // a file path, or empty
-  // The title block and the page heading beside it share one height.
-  readonly property real headHeight: win.subtitle !== "" ? Style.space(48) : Style.space(40)
+  // The title block and the page heading beside it share one height: taller when the title takes two lines.
+  readonly property real headHeight: Math.max(win.subtitle !== "" ? Style.space(48) : Style.space(40), titleColumn.implicitHeight + Style.spacing.md)
   property var pages: []
   property var values: ({})
   property string footerText: ""
+  property bool footerIsError: false             // the footer's text says something went wrong: red
   property string searchPlaceholder: "Find a setting"
   default property alias footerActions: footerRow.data
 
@@ -161,6 +166,7 @@ Item {
         asynchronous: true
       }
       Column {
+        id: titleColumn
         anchors.left: titleImage.visible ? titleImage.right : parent.left
         anchors.leftMargin: titleImage.visible ? Style.spacing.md : 0
         anchors.right: parent.right
@@ -168,6 +174,8 @@ Item {
         Text {
           textFormat: Text.PlainText
           width: parent.width
+          wrapMode: Text.Wrap
+          maximumLineCount: 3
           elide: Text.ElideRight
           text: win.title
           color: Color.foreground
@@ -329,7 +337,6 @@ Item {
               readonly property real noteHeight: note.visible ? note.implicitHeight + Style.spacing.xs : 0
 
               width: group.width
-              opacity: row.live ? 1 : 0.4
               height: (row.stacked
                 ? labels.implicitHeight + Style.spacing.sm + editor.height
                 : Math.max(labels.implicitHeight, editor.height)) + row.noteHeight + Style.spacing.md * 2
@@ -348,6 +355,8 @@ Item {
                 anchors.topMargin: Style.spacing.md
                 anchors.left: parent.left
                 width: row.stacked ? parent.width : parent.width - editor.width - Style.spacing.xxl
+                // A disabled setting is dimmed; its note, which says why, is not.
+                opacity: row.live ? 1 : 0.4
                 Text {
                   textFormat: Text.PlainText
                   width: parent.width
@@ -372,6 +381,7 @@ Item {
               Loader {
                 id: editor
                 enabled: row.live
+                opacity: row.live ? 1 : 0.4
                 // Stacked: under the label, full width. Otherwise on the right of the row.
                 anchors.top: row.stacked ? labels.bottom : undefined
                 anchors.topMargin: Style.spacing.sm
@@ -454,9 +464,11 @@ Item {
       anchors.right: footerRow.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.Wrap
+      maximumLineCount: 2
       elide: Text.ElideRight
       text: win.footerText + (win.footerText !== "" ? "   ·   " : "") + "Esc to close"
-      color: Util.alpha(Color.foreground, 0.55)
+      color: win.footerIsError ? Color.urgent : Util.alpha(Color.foreground, 0.55)
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }
@@ -566,6 +578,7 @@ Item {
           required property var modelData
           selected: flow.value === modelData.value
           text: modelData.label
+          maxWidth: flow.width
           onClicked: flow.commit(modelData.value)
         }
       }
@@ -600,8 +613,10 @@ Item {
     id: seg
     property string text: ""
     property bool selected: false
+    // The widest it may be (0: as wide as its words); words past it are cut, and whole on hover.
+    property real maxWidth: 0
     signal clicked()
-    width: segLabel.implicitWidth + Style.spacing.lg * 2
+    width: seg.maxWidth > 0 ? Math.min(segLabel.implicitWidth + Style.spacing.lg * 2, seg.maxWidth) : segLabel.implicitWidth + Style.spacing.lg * 2
     height: Style.space(28)
     radius: Math.max(Style.cornerRadius, Style.space(5))
     color: seg.selected ? Color.accent
@@ -610,12 +625,18 @@ Item {
       textFormat: Text.PlainText
       id: segLabel
       anchors.centerIn: parent
+      width: Math.min(implicitWidth, seg.width - Style.spacing.lg * 2)
+      elide: Text.ElideMiddle
       text: seg.text
       color: seg.selected ? Color.menu.background : Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }
     HoverHandler { id: segHover }
+    PanelToolTip {
+      visible: segHover.hovered && segLabel.truncated
+      text: seg.text
+    }
     MouseArea {
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor

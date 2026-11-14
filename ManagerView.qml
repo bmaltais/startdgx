@@ -1,6 +1,6 @@
 // The manager: your machines, the models on each and what they are doing, and a way to add more. Opened from
 // the launcher or the bar icon. Keyboard: Up/Down (or j/k) move, Enter or s starts or stops the model under the
-// cursor, g its settings, l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
+// cursor, g its settings (c: on the Context page), l opens its logs, d removes it (or cancels its setup), a adds a model to the machine, u uninstalls the
 // machine, f forgets it (each of d, u and f after a question in a card), n adds a machine, r looks again. Esc
 // closes. A held key acts once.
 pragma ComponentBehavior: Bound
@@ -112,7 +112,10 @@ FocusScope {
           font.bold: true
         }
         Text {
+          // A narrow manager gives the counts a second line: the last ones (failed, not answering) matter most.
           Layout.fillWidth: true
+          wrapMode: Text.Wrap
+          maximumLineCount: 2
           elide: Text.ElideRight
           text: Model.subtitle(view.summary)
           color: view.summary.kind === "alert" ? Color.urgent : Color.muted
@@ -214,16 +217,11 @@ FocusScope {
         tooltipText: "Find DGX Sparks on your tailnet  (n)"
         onClicked: view.svc.dispatch({ type: "addMachine" })
       }
-      Text {
+      FooterNote {
         Layout.fillWidth: true
+        // Clear of the resize grip in the corner.
         Layout.rightMargin: Style.space(20)
-        horizontalAlignment: Text.AlignRight
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: view.svc.footerText
-        color: view.svc.notice !== "" && view.svc.noticeIsError ? Color.urgent : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
+        svc: view.svc
       }
     }
   }

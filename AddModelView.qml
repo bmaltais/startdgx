@@ -66,7 +66,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         textFormat: Text.PlainText
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         text: "Add a model to " + Model.hostName(card.host)
         color: Color.foreground
         font.family: Style.font.family
@@ -164,7 +164,9 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: Style.spacing.md
                 Text {
-                  Layout.fillWidth: !recipeRow.modelData.best && recipeRow.marks === ""
+                  // As wide as the name, and cut when the row is narrower: the marks after it keep their room.
+                  Layout.fillWidth: true
+                  Layout.maximumWidth: Math.ceil(implicitWidth)
                   textFormat: Text.PlainText
                   text: String(recipeRow.r.name || recipeRow.r.id)
                   color: Color.foreground
@@ -175,7 +177,6 @@ FocusScope {
                 }
                 // Yours, and where a user recipe's numbers come from when they aren't measured.
                 Text {
-                  Layout.fillWidth: !recipeRow.modelData.best
                   visible: recipeRow.marks !== ""
                   textFormat: Text.PlainText
                   text: recipeRow.marks
@@ -185,13 +186,13 @@ FocusScope {
                 }
                 // The engine's own recommendation for this machine.
                 Text {
-                  Layout.fillWidth: true
                   visible: recipeRow.modelData.best
                   text: "recommended"
                   color: Color.accent
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
+                Item { Layout.fillWidth: true }
               }
               // Whether it runs here, or is set up; why not, when it can't.
               Text {
@@ -269,15 +270,9 @@ FocusScope {
         tooltipText: "Add a recipe of your own, a .toml file from this computer, to " + Model.hostName(card.host) + "'s catalog  (e)"
         onClicked: card.svc.dispatch({ type: "addRecipe", host: card.host })
       }
-      Text {
+      FooterNote {
         Layout.fillWidth: true
-        horizontalAlignment: Text.AlignRight
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: card.svc.footerText
-        color: card.svc.notice !== "" && card.svc.noticeIsError ? Color.urgent : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
+        svc: card.svc
       }
     }
   }

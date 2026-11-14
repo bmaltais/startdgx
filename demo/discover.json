@@ -1,5 +1,15 @@
 [
   {
+    "name": "gx10-demo",
+    "target": "demo@gx10-demo",
+    "reachable": true,
+    "reason": null,
+    "spark": true,
+    "installed": true,
+    "engine": true,
+    "added": false
+  },
+  {
     "name": "spark-a",
     "target": "demo@spark-a",
     "reachable": true,
