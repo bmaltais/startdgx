@@ -1505,3 +1505,11 @@ test("pickerMeasureCtx: a user recipe with unmeasured numbers can be measured fr
   assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "drafted", installed: true }), null)
   assert.strictEqual(M.pickerMeasureCtx({ id: "a", source: "drafted", context: 8192 }), null, "a curated recipe")
 })
+
+test("pickerMeasureCtx: a user recipe the engine lists with no source (no variant fits) goes to the variants", () => {
+  const row = { id: "a", user: true, source: null, context: null, memory_gib: null, available: false, installed: false }
+  assert.strictEqual(M.pickerMeasureCtx(row), 0)
+  assert.strictEqual(M.pickerMeasureCtx({ ...row, installed: true }), null)
+  assert.strictEqual(M.pickerMeasureCtx({ ...row, source: "measured", available: false }), null, "measured and too big is not for Measure…")
+  assert.strictEqual(M.pickerMeasureCtx({ id: "c", source: null, available: false }), null, "a curated recipe")
+})

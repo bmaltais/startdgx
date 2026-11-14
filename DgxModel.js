@@ -910,7 +910,11 @@ function variantActions(v) {
 // to measure at (the listing row's own), or 0 when the row doesn't say, which sends the person to Add recipe…'s variants.
 // null when there is nothing to measure.
 function pickerMeasureCtx(r) {
-  if (!isUserRecipe(r) || recipeSource(r) === "measured" || r.installed === true) return null
+  if (!isUserRecipe(r) || r.installed === true) return null
+  // The engine lists no source and no context for a recipe none of whose variants fits (a draft's only variant, say):
+  // it may be unmeasured, so the variants are the place to see.
+  const unsaid = (r.source === undefined || r.source === null || r.source === "") && r.available === false
+  if (recipeSource(r) === "measured" && !unsaid) return null
   return Number(r.context) > 0 ? Number(r.context) : 0
 }
 
