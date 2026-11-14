@@ -1164,3 +1164,50 @@ test("the agent pill says an agent opens in a terminal and that downloads and me
   assert.match(M.authorHint(), /asks before any download or measuring run/)
   assert.doesNotMatch(M.authorHint(), /fits?\b/i)
 })
+
+// ---- the model store: where a model's weights are, and what can be moved ----
+
+const store = (present) => ({ path: "/media/usb/startdgx-models", present: present })
+
+test("parseStorage: startdgx storage --json, or null when it isn't that", () => {
+  const text = JSON.stringify({ store: store(true), disks: [], models: [{ id: "a", location: "usb", bytes: 5 }] })
+  assert.deepStrictEqual(M.parseStorage(text).models, [{ id: "a", location: "usb", bytes: 5 }])
+  assert.strictEqual(M.parseStorage("nope"), null)
+  assert.strictEqual(M.parseStorage('{"store":null,"disks":[]}'), null, "no models list: not an answer startdgx gives")
+})
+
+test("locationOf: where one model's weights are, or nothing when it isn't listed", () => {
+  const storage = M.parseStorage(JSON.stringify({ store: null, disks: [], models: [{ id: "a", location: "both", bytes: 1 }] }))
+  assert.strictEqual(M.locationOf(storage, "a"), "both")
+  assert.strictEqual(M.locationOf(storage, "b"), "")
+  assert.strictEqual(M.locationOf(null, "a"), "")
+})
+
+test("locationText: the words under a model for where its weights are", () => {
+  assert.strictEqual(M.locationText("nvme"), "On NVMe")
+  assert.strictEqual(M.locationText("usb"), "On USB")
+  assert.strictEqual(M.locationText("both"), "On NVMe and USB")
+  assert.strictEqual(M.locationText("usb-missing"), "USB disk missing")
+  assert.strictEqual(M.locationText("mixed"), "Partly on USB")
+  assert.strictEqual(M.locationText(""), "")
+})
+
+test("moveOffers: what a model's card may offer, and nothing without a mounted store or while it runs", () => {
+  const offers = (location, unit, s) => M.moveOffers(location, unit, s).map((o) => o.to + ":" + o.label)
+  assert.deepStrictEqual(offers("nvme", "inactive", store(true)), ["usb:Move to USB"])
+  assert.deepStrictEqual(offers("usb", "inactive", store(true)), ["nvme:Move to NVMe"])
+  assert.deepStrictEqual(offers("both", "inactive", store(true)), ["usb:Free NVMe space"])
+  assert.deepStrictEqual(offers("mixed", "inactive", store(true)), ["usb:Move to USB", "nvme:Move to NVMe"])
+  assert.deepStrictEqual(offers("usb-missing", "inactive", store(false)), [])
+  assert.deepStrictEqual(offers("nvme", "inactive", store(false)), [], "a store whose disk isn't mounted offers nothing")
+  assert.deepStrictEqual(offers("nvme", "inactive", null), [], "no store set: the feature isn't there")
+  for (const unit of ["active", "activating", "deactivating", "installing", "removing"]) {
+    assert.deepStrictEqual(offers("nvme", unit, store(true)), [], unit + " can't be moved")
+  }
+})
+
+test("commandFor: a move runs move, to the disk asked for, with room for a big copy", () => {
+  const move = (to) => ({ op: 1, key: "me@h1/a", kind: "move", to: to, shows: "move" })
+  assert.deepStrictEqual(M.commandFor("me@h1", move("usb")), ["move", "me@h1", "a", "--to", "usb", "--timeout", "3600"])
+  assert.deepStrictEqual(M.commandFor("me@h1", move("nvme")), ["move", "me@h1", "a", "--to", "nvme", "--timeout", "3600"])
+})

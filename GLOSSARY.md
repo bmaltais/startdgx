@@ -24,6 +24,14 @@ _Avoid_: Built-in, official
 A recipe a person added to a host; it lives apart from the engine's own and never replaces a curated one.
 _Avoid_: Custom recipe, local recipe
 
+**Model store**:
+A folder on an external disk of a host (ext4, xfs or btrfs, marked with `.startdgx-store`) that holds copies of models' weights, set per host with `storage --set`. A store without its marker counts as not mounted.
+_Avoid_: Mirror, cache, USB folder
+
+**Location**:
+Where a model's weights are: `nvme` (the host's internal disk), `usb` (the store), `both`, `usb-missing` (on a store that isn't mounted) or `mixed` (filesets split). Moving a model changes it; moving to the store replaces the internal copy with a link, moving back keeps the store's copy.
+_Avoid_: Tier, storage class
+
 **Variant**:
 One context size of a recipe with the memory it needs and where those numbers came from.
 _Avoid_: Profile, size

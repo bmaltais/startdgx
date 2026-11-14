@@ -508,8 +508,45 @@ function commandFor(host, action) {
   // The engine publishes the model's route with tailscale serve, which can take a while.
   case "share": return ["share", host, id, "--timeout", "120"]
   case "unshare": return ["share", host, id, "--off", "--timeout", "120"]
+  // Copying a big model over USB takes minutes: 35 GB is about 25 s each way at the disk's speed, plus checking it.
+  case "move": return ["move", host, id, "--to", action.to, "--timeout", "3600"]
   }
   return null
+}
+
+// ---- the model store ------------------------------------------------------------------------------------
+
+// `startdgx storage HOST --json`: { store: { path, present } | null, disks, models: [{ id, location, bytes }] }, or
+// null when it isn't that. A model's location is nvme, usb, both, usb-missing (its store isn't mounted) or mixed.
+function parseStorage(text) {
+  const storage = parseJson(text)
+  return isPlainObject(storage) && Array.isArray(storage.disks) && Array.isArray(storage.models) && "store" in storage ? storage : null
+}
+
+function locationOf(storage, id) {
+  const models = storage ? storage.models : []
+  for (let i = 0; i < models.length; i++) if (models[i].id === id) return String(models[i].location)
+  return ""
+}
+
+var LOCATION_WORDS = { nvme: "On NVMe", usb: "On USB", both: "On NVMe and USB", "usb-missing": "USB disk missing", mixed: "Partly on USB" }
+
+function locationText(location) { return LOCATION_WORDS[location] || "" }
+
+// Only a model whose files nothing has open moves, and only to or from a store whose disk is mounted. A model on both
+// disks is offered the one thing that helps, freeing the NVMe; a split one either way.
+var MOVE_BUSY = { active: 1, activating: 1, deactivating: 1, installing: 1, removing: 1 }
+
+function moveOffers(location, unit, store) {
+  if (!store || !store.present || MOVE_BUSY[unit]) return []
+  const toUsb = { to: "usb", label: "Move to USB" }, toNvme = { to: "nvme", label: "Move to NVMe" }
+  switch (location) {
+  case "nvme": return [toUsb]
+  case "usb": return [toNvme]
+  case "both": return [{ to: "usb", label: "Free NVMe space" }]
+  case "mixed": return [toUsb, toNvme]
+  }
+  return []
 }
 
 // ---- notifications -------------------------------------------------------------------------------------
