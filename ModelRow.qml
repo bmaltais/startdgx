@@ -16,7 +16,6 @@ Rectangle {
 
   property var entry: ({})           // the model's row of the host's status
   property string pending: ""        // "start" or "stop" while a click waits for the host
-  property string sharing: ""        // "share" or "unshare" while that click waits for the host (DgxModel.shareKey)
   property real nowMs: 0             // the manager's clock, for the progress bars
   property bool current: false       // under the keyboard cursor
   property bool away: false          // the machine isn't answering: its last known state, dimmed, no actions
@@ -24,26 +23,21 @@ Rectangle {
   property var store: null           // the host's model store ({ path, present }) or null: no store, no location and no move
 
   signal toggleRequested()
-  signal logsRequested()
   signal removeRequested()
-  signal shareRequested()
-  signal contextRequested()
-  signal moveRequested(string to)
+  signal logsRequested()
+  signal settingsRequested()
   signal selectRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
-  readonly property string share: Model.shareAction(row.entry, row.pending, row.sharing) || ""   // "share", "unshare" or "" (none)
-  readonly property bool canContext: Model.contextAction(row.entry, row.pending) !== null
   readonly property bool shared: row.entry.shared === true
   readonly property bool blocked: Model.startBlocked(row.entry)
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
   readonly property string facts: Model.modelFacts(row.entry)
-  // Only a host with a store says where a model is, and only a model that nothing waits on is offered a move.
+  // Only a host with a store says where a model is, and a shared model says so.
   readonly property string whereText: row.store ? Model.locationText(row.location) : ""
-  readonly property var moves: row.away || row.pending !== "" || row.sharing !== "" ? [] : Model.moveOffers(row.location, row.entry.unit, row.store)
   readonly property bool hot: hover.hovered || row.current
 
   // When a load or stop ends, its bar fills to the end before the row changes over, rather than vanishing near 90%.
@@ -139,6 +133,7 @@ Rectangle {
             // A failure's reason has its own line, which links to the logs.
             text: (row.kind === "failed" ? (row.entry.unit === "installing" ? "Setup failed" : "Failed") : row.modelState.text)
               + (row.whereText !== "" && row.kind !== "failed" ? "  ·  " + row.whereText : "")
+              + (row.shared && row.kind !== "failed" ? "  ·  Shared" : "")
               + (row.facts !== "" ? "  ·  " + row.facts : "")
             color: row.kind === "failed" ? Color.urgent : Color.muted
             font.family: Style.font.family
@@ -148,56 +143,13 @@ Rectangle {
         }
       }
 
-      // Moves the model's files between the machine's internal disk and its model store (stopped models only).
-      Repeater {
-        model: row.moves
-        delegate: TextLink {
-          required property var modelData
-          Layout.alignment: Qt.AlignVCenter
-          text: modelData.label
-          tooltip: modelData.to === "usb" ? "Copy the weights to the model store, check them, and free the internal disk"
-            : "Copy the weights back to the internal disk and leave the model store"
-          onClicked: row.moveRequested(modelData.to)
-        }
-      }
-
-      // Shares the model with the other machines on the host's tailnet, or stops: the Tailscale mark, lit while shared
-      // and struck through while private. Dimmed while its click waits for the host.
-      Button {
-        id: shareButton
-        Layout.alignment: Qt.AlignVCenter
-        visible: !row.away && (row.share !== "" || row.sharing !== "")
-        implicitWidth: Style.space(16) + horizontalPadding * 2
-        implicitHeight: Style.space(16) + verticalPadding * 2
-        opacity: row.sharing !== "" ? 0.5 : 1
-        tooltipText: row.sharing !== "" ? "Waiting for the machine"
-          : row.shared ? "Shared: Omarchy on your other machines lists this model. Click to make it private  (t)"
-          : "Private to this machine. Click to share it with your tailnet  (t)"
-        onClicked: if (row.share !== "") row.shareRequested()
-        TailscaleMark {
-          anchors.centerIn: parent
-          iconSize: Style.space(13)
-          color: row.shared ? Color.accent : Color.muted
-          crossed: !row.shared
-        }
-      }
-
-      // The model's context size, chosen among the ones its recipe has measured, in a card.
+      // Everything else about the model (sharing, context size, logs, where its files are) is behind the gear.
       Button {
         Layout.alignment: Qt.AlignVCenter
-        visible: !row.away && row.canContext
-        iconText: "\uf1de"
-        tooltipText: "Context size…  (c)"
-        onClicked: row.contextRequested()
-      }
-
-      // Opens this model's logs in a terminal.
-      Button {
-        Layout.alignment: Qt.AlignVCenter
-        visible: !row.away && row.entry.unit !== "installing"
-        iconText: "\udb80\udd8d"
-        tooltipText: "Logs…  (l)"
-        onClicked: row.logsRequested()
+        visible: !row.away
+        iconText: "\uf013"
+        tooltipText: "Settings…"
+        onClicked: row.settingsRequested()
       }
 
       // Remove (or cancel a setup), after a question in a card.

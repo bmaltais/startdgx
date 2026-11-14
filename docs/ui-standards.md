@@ -10,7 +10,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 
 - **No settings window yet**, so no first run, no Window page and no *Remember size* / *Remember position* switches.
 - **Size and position are not remembered** across a shell restart: the manager moves and resizes as the kit says, and opens centred at its default size after a restart (see the decision log).
-- **Cards, not settings windows, float over the manager**: Add machine, a machine's uninstall card, model picker, Add recipe card and Find on Hugging Face card, a model's remove card and context card, and a machine's Storage card. They follow the stacking rules (the manager stays behind under a 35% veil, Esc and a click outside close only the card), but they are centred on the manager, sized to their content (560 wide), and neither move nor resize.
+- **Cards float over the manager; the gear's settings windows are the family's** (`SettingsWindow.qml`, copied from StartAppImage, pages left and settings right, applied at once, 760 wide, no resize or move yet): Add machine, a machine's uninstall card, model picker, Add recipe card and Find on Hugging Face card, a model's remove card and context card, and **settings windows** (the gear on a machine's or a model's row; see the decision log). They follow the stacking rules (the manager stays behind under a 35% veil, Esc and a click outside close only the card), but they are centred on the manager, sized to their content (560 wide), and neither move nor resize.
 
 ## The manager
 
@@ -19,9 +19,9 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 │ ▣ StartDGX                                         [⟳] ✕ │  header
 │   3 MACHINES · 1 RUNNING · 1 FAILED · 1 NOT ANSWERING     │
 │ MACHINES                                                  │
-│ ● spark-a  demo@spark-a · DGX Spark · 128 GB  Logs… Uninstall… Forget │  a machine
+│ ● spark-a  demo@spark-a · DGX Spark · 128 GB                      [⚙] │  a machine
 │   ┌─────────────────────────────────────────────────────┐ │
-│   │ ◆ Qwen3.8 27B                          [▤] [🗑] [⏸]  │ │  a model
+│   │ ◆ Qwen3.8 27B                          [⚙] [🗑] [⏸]  │ │  a model
 │   │   ● Running · 128K context                          │ │
 │   │   Memory  ━━━━━━━━━━──────────────     28 of 122 GiB │ │
 │   └─────────────────────────────────────────────────────┘ │
@@ -49,6 +49,7 @@ The kit's fifth principle names this app's tool: the QML never runs ssh, the eng
 | `e` | Add a recipe of your own to the machine… (in the model picker too) |
 | `f` | In the model picker: Find on Hugging Face… (in the manager `f` is Forget…) |
 | `d`, Delete | Remove the model… (or cancel its setup) |
+| `g` | Its settings (the gear): the machine's, or the model's under the cursor |
 | `l` | Its logs… (a machine's row: the model started last) |
 | `u` | Uninstall the machine… |
 | `f` | Forget the machine… (a card asks first) |
@@ -157,3 +158,4 @@ Newest first. One line each: what was decided, and why.
 | 2026-11-11 | Host actions (Logs, Uninstall…, Forget) are text links | Quiet by default: they are rare, and Uninstall is destructive. |
 | 2026-11-14 | The model store is optional per host and invisible until set; moving a model is a manual, per-model action ("Move to USB", "Move to NVMe", "Free NVMe space" for one on both), offered only for a stopped model and a mounted store | A big tensorfold model fills a small NVMe, but a host with room never needs it. Measured on a Spark with a 20 Gbps USB disk: it reads 1.9 GB/s against the NVMe's 5.0, so running from it is fine, and no automatic eviction is guessed at. The card shows the location in words (On NVMe, On USB, On NVMe and USB, USB disk missing). The UI rules are in `DgxModel.js` (`moveOffers`, `locationText`); the panel is the next row. |
 | 2026-11-14 | The panel for the model store: a machine's **Storage…** link (only once its storage has been read) opens a card listing the usable external disks (a button "Use this disk" sets `<mount>/startdgx-models`; unusable ones say why), a folder field for any other path, and Remove store. A model's row shows where its files are and the move button(s), only on a machine with a store. A move runs on a command slot of its own (so another model's Start, Stop or Remove never waits for the copy; store changes queue behind it), shows as "Moving to USB" and locks that model's own Start, Stop and Remove while it runs and after, until storage has been read again | The store is a rare, per-machine setting, so it gets a card like the other per-machine ones and costs a card-less host one link. Where the files are is only worth a line on a machine that has a store. A move copies tens of GB and a Start, Stop or Remove under it would fight the copy, so the row waits as it does for any command. Storage is read while the manager is open and the machine answers (every 30 s, and right after a move or store change; the move's mark stays until that read), and the bar icon counts a move as busy, not with the status poll: it changes only then, and costs an ssh round trip. The card won't switch or remove a store while models are linked into it (the CLI refuses too, and its message shows in the footer). |
+| 2026-11-14 | The rows are slim, as in StartAppImage: a machine's row is a dot, its name and status and a **gear**; a model's is its mark, name, status and **Start/Stop, gear, trash**. The gear (key `g`) opens a settings window floating over the manager (`SettingsWindow.qml`, copied from StartAppImage, with two field types added: `action`, a button, and `info`). A machine's pages: **General** (update or Install…, Logs), **Storage** (the model store, a choice among the usable disks, or a folder of your own), **Machine** (Uninstall…, Forget…). A model's: **General** (Share on my tailnet, Logs), **Context** (the measured sizes), **Storage** (location, Move to USB/NVMe; only on a machine with a store). Remove stays a trash button on the row. The old Storage card is gone | The row carried up to six controls and a text link per machine, so the manager looked cluttered; most of them are rare. StartAppImage already settled where rare things go. The status line says *Shared* and where the files are, so those stay visible without a button. Pages are built in `DgxModel.js` (`hostPages`, `modelPages`, with `hostChange`, `modelChange` for what a click asks), so they are tested. `SettingsWindow.qml` is a copy kept alike by hand: its `action` and `info` types should go back to StartAppImage. |
