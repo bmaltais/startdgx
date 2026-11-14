@@ -76,7 +76,13 @@ cat >"$tmp/stub" <<'F'
 #!/usr/bin/env bash
 printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
 F
-for tool in systemctl loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; done
+for tool in loginctl sudo; do cp "$tmp/stub" "$FAKE_HOSTBIN/$tool"; done
+# systemctl logs like the others, and answers is-active for a unit that has a running-UNIT file in the fake host.
+cat >"$FAKE_HOSTBIN/systemctl" <<'F'
+#!/usr/bin/env bash
+if [ "$*" != "${*/is-active/}" ]; then [ -e "$FAKE_HOST/running-${*: -1}" ]; exit; fi
+printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
+F
 cat >"$FAKE_HOSTBIN/id" <<'F'
 #!/usr/bin/env bash
 echo "${FAKE_ID:-me}"
@@ -413,6 +419,39 @@ present "$cfg"; ok $? "and keeps the setting"
 rm "$ed/blobs/sha256/w"
 s storage me@dgx --unset >/dev/null; ok $? "storage --unset forgets the store"
 [ ! -e "$cfg" ] && present "$store/w"; ok $? "and leaves the disk's contents alone"
+# move --to usb: the model's weights go to the store and the model's folder becomes a link to them, which the container's
+# bind mount follows (a link to each file would dangle inside it). The engine's blobs link to the store's files too, so a
+# later use finds them. Only a model that isn't running, and only once the copy is verified.
+ed=$FAKE_HOST/home/.local/share/omarchy/agent-local store=$FAKE_HOST/media/usbdisk/startdgx-models
+rm -rf "$ed"; mkdir -p "$ed/blobs/sha256" "$ed/models/big/fs1/target" "$ed/models/big/fs1.rank0" "$ed/models/frag/fs1"
+head -c 3000 /dev/urandom >"$ed/blobs/sha256/aaa"; head -c 500 /dev/urandom >"$ed/blobs/sha256/bbb"; head -c 70 /dev/urandom >"$ed/blobs/sha256/ccc"
+ln "$ed/blobs/sha256/aaa" "$ed/models/big/fs1/target/w1"; ln "$ed/blobs/sha256/bbb" "$ed/models/big/fs1/tok"; ln "$ed/blobs/sha256/ccc" "$ed/models/frag/fs1/w"
+echo state >"$ed/models/big/fs1.rank0/s"; cp "$ed/blobs/sha256/aaa" "$tmp/aaa"; cp "$ed/blobs/sha256/bbb" "$tmp/bbb"
+rm -f "$cfg"
+out=$(s move me@dgx big --to usb 2>&1); ok $((!$?)) "move refuses without a model store"
+same "$out" "Error: No model store is set; set one with: startdgx storage me@dgx --set PATH"; ok $? "and says how to set one"
+s storage me@dgx --set "$store" >/dev/null
+out=$(s move me@dgx nope --to usb 2>&1); ok $((!$?)) "move refuses a model that isn't set up"
+same "$out" "Error: nope isn't set up"; ok $? "and says so"
+: >"$FAKE_HOST/running-omarchy-agent-local-model-big.service"
+out=$(s move me@dgx big --to usb 2>&1); ok $((!$?)) "move refuses a model that is running"
+same "$out" "Error: big is running; stop it first"; ok $? "and says to stop it"
+rm "$FAKE_HOST/running-omarchy-agent-local-model-big.service"
+rm "$store/.startdgx-store"
+out=$(s move me@dgx big --to usb 2>&1); ok $((!$?)) "move refuses when the store's disk isn't mounted"
+same "$out" "Error: The model store $store isn't mounted"; ok $? "and says so"
+touch "$store/.startdgx-store"
+mkdir -p "$store/frag"; chmod 555 "$store/frag"
+s move me@dgx frag --to usb >/dev/null 2>&1; ok $((!$?)) "a move whose copy fails is an error"
+[ -d "$ed/models/frag/fs1" ] && [ ! -L "$ed/models/frag/fs1" ] && present "$ed/blobs/sha256/ccc"; ok $? "and leaves the model as it was"
+chmod 755 "$store/frag"
+out=$(s move me@dgx big --to usb 2>&1); ok $? "move --to usb moves a stopped model"
+same "$out" "big: on the store (3.4 KiB)"; ok $? "and says how much"
+[ -L "$ed/models/big/fs1" ] && same "$(readlink "$ed/models/big/fs1")" "$store/big/fs1"; ok $? "the model's folder is now a link to the store"
+cmp -s "$store/big/fs1/target/w1" "$tmp/aaa" && cmp -s "$store/big/fs1/tok" "$tmp/bbb"; ok $? "the store holds the weights, byte for byte"
+[ -L "$ed/blobs/sha256/aaa" ] && cmp -s "$ed/blobs/sha256/aaa" "$tmp/aaa"; ok $? "the engine's blob links to the store's copy"
+[ -d "$ed/models/big/fs1.rank0" ] && [ ! -L "$ed/models/big/fs1.rank0" ] && present "$ed/models/big/fs1.rank0/s"; ok $? "the model's state stays where it was"
+same "$(s move me@dgx big --to usb)" "big: already on the store"; ok $? "moving a model that is on the store again changes nothing"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).

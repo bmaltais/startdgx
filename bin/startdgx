@@ -639,12 +639,19 @@ def cmd_recipe(args):
 STORE_CONFIG = ".local/share/startdgx/store.json"
 STORE_MARKER = ".startdgx-store"
 STORE_FILESYSTEMS = ("ext4", "xfs", "btrfs")
-STORAGE_SCRIPT = '''
+STORE_PRELUDE = '''
 import json, os, subprocess, sys
 CONFIG, MARKER, DATA = os.path.expanduser("~/@CONFIG@"), "@MARKER@", os.path.expanduser("~/@DATA@")
 def fail(text):
   print("Error: " + text, file=sys.stderr)
   sys.exit(1)
+def current():
+  try:
+    return json.load(open(CONFIG))["path"]
+  except (OSError, ValueError, KeyError, TypeError):
+    return None
+'''
+STORAGE_SCRIPT = STORE_PRELUDE + '''
 out = json.loads(subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,TYPE,TRAN,FSTYPE,MOUNTPOINT,FSSIZE,FSAVAIL"], capture_output=True, text=True, check=True).stdout)
 flat = []
 def walk(node, top):
@@ -664,11 +671,6 @@ for top, dev in flat:
   disks.append({"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
                 "free": int(dev.get("fsavail") or 0), "usable": usable,
                 "reason": "" if usable else (fstype or "this filesystem") + " cannot hold symlinks and permissions; use ext4, xfs or btrfs"})
-def current():
-  try:
-    return json.load(open(CONFIG))["path"]
-  except (OSError, ValueError, KeyError, TypeError):
-    return None
 mode = sys.argv[1]
 if mode == "list":
   path = current()
@@ -702,7 +704,82 @@ elif mode == "unset":
     if linked:
       fail(str(linked) + " model file(s) are on the store; move those models back first")
     os.remove(CONFIG)
-'''.replace("@CONFIG@", STORE_CONFIG).replace("@MARKER@", STORE_MARKER).replace("@DATA@", ENGINE_DATA).replace("@FILESYSTEMS@", repr(STORE_FILESYSTEMS))
+'''.replace("@FILESYSTEMS@", repr(STORE_FILESYSTEMS))
+STORE_PRELUDE = STORE_PRELUDE.replace("@CONFIG@", STORE_CONFIG).replace("@MARKER@", STORE_MARKER).replace("@DATA@", ENGINE_DATA)
+STORAGE_SCRIPT = STORAGE_SCRIPT.replace("@CONFIG@", STORE_CONFIG).replace("@MARKER@", STORE_MARKER).replace("@DATA@", ENGINE_DATA)
+
+# For move, run on the host with python3 -I - RID DIRECTION HOST. A model's weights live in folders under the engine's
+# models/RID, one per fileset, hard-linked to blobs/. The container mounts only that folder, so a link to each file
+# would dangle in it; a link to the folder is followed by the mount. "usb" copies a fileset to STORE/RID/FILESET, checks
+# every byte, makes the folder a link to the copy, and points the blobs it freed at the copy (the engine looks for them
+# when it sets a recipe up again). Only a stopped model moves, and the old files go only after the copy is verified.
+MOVE_SCRIPT = STORE_PRELUDE + '''
+import hashlib, shutil
+rid, direction, host = sys.argv[1:4]
+store = current()
+if not store:
+  fail("No model store is set; set one with: startdgx storage " + host + " --set PATH")
+if not os.path.exists(os.path.join(store, MARKER)):
+  fail("The model store " + store + " isn't mounted")
+base = os.path.join(DATA, "models", rid)
+if not os.path.isdir(base):
+  fail(rid + " isn't set up")
+if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "omarchy-agent-local-model-" + rid + ".service"]).returncode == 0:
+  fail(rid + " is running; stop it first")
+def digest(path):
+  h = hashlib.sha256()
+  with open(path, "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 24), b""):
+      h.update(chunk)
+  return h.hexdigest()
+def files(root):
+  for folder, _, names in os.walk(root):
+    for name in names:
+      yield os.path.relpath(os.path.join(folder, name), root)
+def size_of(root):
+  return sum(os.path.getsize(os.path.join(root, f)) for f in files(root))
+filesets = sorted(n for n in os.listdir(base) if "." not in n and os.path.isdir(os.path.join(base, n)))
+if direction == "usb":
+  total, moved = 0, False
+  for fs in filesets:
+    here, there = os.path.join(base, fs), os.path.join(store, rid, fs)
+    if os.path.islink(here):
+      continue
+    total += size_of(here)
+    part = there + ".partial"
+    try:
+      shutil.rmtree(part, ignore_errors=True)
+      os.makedirs(part)
+      for rel in files(here):
+        os.makedirs(os.path.dirname(os.path.join(part, rel)), exist_ok=True)
+        shutil.copyfile(os.path.join(here, rel), os.path.join(part, rel))
+        if digest(os.path.join(here, rel)) != digest(os.path.join(part, rel)):
+          raise OSError("the copy of " + rel + " differs from the original")
+      shutil.rmtree(there, ignore_errors=True)
+      os.rename(part, there)
+    except OSError as error:
+      shutil.rmtree(part, ignore_errors=True)
+      fail("Couldn't copy " + rid + " to the store: " + str(error))
+    blobs = {}
+    for folder, _, names in os.walk(os.path.join(DATA, "blobs")):
+      for name in names:
+        info = os.stat(os.path.join(folder, name))
+        blobs[(info.st_dev, info.st_ino)] = os.path.join(folder, name)
+    linked = {}
+    for rel in files(here):
+      info = os.stat(os.path.join(here, rel))
+      if (info.st_dev, info.st_ino) in blobs:
+        linked[os.path.join(there, rel)] = blobs[(info.st_dev, info.st_ino)]
+    os.rename(here, here + ".moving")
+    os.symlink(there, here)
+    shutil.rmtree(here + ".moving")
+    for copy, blob in linked.items():
+      if os.path.isfile(blob) and not os.path.islink(blob) and os.stat(blob).st_nlink == 1:
+        os.symlink(copy, blob + ".tmp")
+        os.replace(blob + ".tmp", blob)
+    moved = True
+  print("moved " + str(total) if moved else "already")
+'''
 
 
 def storage_run(host, args, *argv):
@@ -728,6 +805,15 @@ def cmd_storage(args):
   for disk in found["disks"]:
     note = "" if disk["usable"] else f"  not usable: {disk['reason']}"
     print(f"  {disk['mount']}  {disk['bus'] or '?'} {disk['fstype']}  {size_text(disk['free'])} free of {size_text(disk['size'])}{note}")
+
+
+def cmd_move(args):
+  host = target(args.host)
+  out = ssh_raw(host, shlex.join(["python3", "-I", "-", recipe(args.model), args.to, host]), stdin=MOVE_SCRIPT, timeout=args.timeout, what="move").stdout
+  found = out.split()
+  if not found or found[0] not in ("moved", "already"):
+    raise Error(f"{host} gave an answer startdgx can't read")
+  print(f"{args.model}: " + (f"on the store ({size_text(int(found[1]))})" if found[0] == "moved" else "already on the store"))
 
 
 def cmd_delete(args):
@@ -2468,6 +2554,9 @@ def build_parser():
   stm = st.add_mutually_exclusive_group()
   stm.add_argument("--set", metavar="PATH", help="use PATH, a folder on an external disk, as the model store")
   stm.add_argument("--unset", action="store_true", help="stop using a model store")
+  mv = add("move", cmd_move, model=True, timeout=3600, description="Move a stopped model's weights between the host's internal disk and its model store (see storage). "
+           "--to usb copies them to the store, checks them and links the model's folder to the copy; the internal copy is then deleted.")
+  mv.add_argument("--to", required=True, choices=("usb", "nvme"), help="usb: the model store; nvme: back to the internal disk")
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
   i = add("install", cmd_install, timeout=3600)
