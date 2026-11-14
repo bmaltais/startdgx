@@ -23,9 +23,14 @@ FocusScope {
   // A store change is running or waiting its turn: its buttons wait.
   readonly property bool busy: (card.dgx.pending[card.host + "/"] || "") !== ""
   readonly property string pathProblem: Model.storagePathProblem(pathField.text)
-  readonly property int onStore: card.storage ? card.storage.models.filter(function (m) { return m.location !== "nvme" }).length : 0
+  // Models whose files are linked into the current store (not one that only has a spare copy there): switching stores
+  // under them would strand those files.
+  readonly property int onStore: card.storage ? card.storage.models.filter(function (m) { return m.location !== "nvme" && m.location !== "both" }).length : 0
 
-  function use(path) { if (!card.busy) card.svc.dispatch({ type: "storageSet", host: card.host, path: path }) }
+  readonly property string storePath: card.storage && card.storage.store ? String(card.storage.store.path) : ""
+  // A change to another folder waits until no model has files on the current store (the machine refuses it too).
+  function canUse(path) { return !card.busy && card.storage !== null && (card.onStore === 0 || path === card.storePath) }
+  function use(path) { if (card.canUse(path)) card.svc.dispatch({ type: "storageSet", host: card.host, path: path }) }
 
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
 
@@ -68,6 +73,7 @@ FocusScope {
       Layout.fillWidth: true
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
+      visible: card.storage !== null || card.readError === ""
       text: card.storage ? Model.storageSummary(card.storage) : "Asking the machine…"
       color: card.storage && card.storage.store && !card.storage.store.present ? Color.urgent : Color.foreground
       font.family: Style.font.family
@@ -80,6 +86,17 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: card.readError
+      color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Text {
+      Layout.fillWidth: true
+      visible: card.onStore > 0
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: card.onStore + " model" + (card.onStore === 1 ? " has" : "s have") + " files on the store. Move " + (card.onStore === 1 ? "it" : "them") + " back to the internal disk (Move to NVMe on the row) before choosing another folder or removing the store."
       color: Color.urgent
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
@@ -154,7 +171,7 @@ FocusScope {
         }
         SettingsPill {
           visible: diskRow.modelData.usable && !diskRow.modelData.inUse
-          opacity: card.busy ? 0.5 : 1
+          opacity: card.canUse(diskRow.modelData.mount + "/startdgx-models") ? 1 : 0.5
           text: "Use this disk"
           onClicked: card.use(diskRow.modelData.mount + "/startdgx-models")
         }
@@ -181,7 +198,7 @@ FocusScope {
       }
       SettingsPill {
         text: "Use this folder"
-        opacity: card.busy || card.pathProblem !== "" ? 0.5 : 1
+        opacity: card.pathProblem !== "" || !card.canUse(pathField.text.trim()) ? 0.5 : 1
         onClicked: if (card.pathProblem === "") card.use(pathField.text.trim())
       }
     }
@@ -208,11 +225,11 @@ FocusScope {
       }
       SettingsPill {
         visible: card.storage !== null && card.storage.store !== null
-        opacity: card.busy ? 0.5 : 1
+        opacity: card.busy || card.onStore > 0 ? 0.5 : 1
         text: "Remove store"
         danger: true
-        // Files on the store stay where they are; the machine refuses while any model is on it.
-        onClicked: if (!card.busy) card.svc.dispatch({ type: "storageUnset", host: card.host })
+        // Files on the store stay where they are; the machine refuses while any model is linked into it, and so does this button.
+        onClicked: if (!card.busy && card.onStore === 0) card.svc.dispatch({ type: "storageUnset", host: card.host })
       }
       SettingsPill {
         text: "Close"

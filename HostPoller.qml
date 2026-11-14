@@ -1,6 +1,6 @@
-// One machine's link to bin/startdgx: its status poller and its three command slots, each with its queue (see
-// DgxModel's submit): one for a start, which returns only once its model has loaded (minutes), one for a share, and one
-// for a stop, set up or removal, so a Stop never waits for a load to end, nor a share for a removal; and a machine that doesn't answer (an SSH timeout)
+// One machine's link to bin/startdgx: its status poller and its four command slots, each with its queue (see
+// DgxModel's submit): one for a start, which returns only once its model has loaded (minutes), one for a share, one for a move (minutes of copying) or a change of the model store, and one
+// for a stop, set up or removal, so a Stop never waits for a load or a copy to end, nor a share for a removal; and a machine that doesn't answer (an SSH timeout)
 // never holds up another machine. DgxService makes one per added host and keeps what it learns; this file only
 // runs the commands, and tells the service each model's mark (DgxModel.marks) whenever it changes.
 import QtQuick
@@ -15,7 +15,7 @@ Item {
 
   // As drawn, with the setups just asked for: one of those makes the machine busy, so it is polled quickly.
   readonly property var hostState: poller.owner.shownState[poller.host]
-  // The three slots (a start, a share, anything else) and their queues (DgxModel.newQueue).
+  // The four slots (a start, a share, a move or store change, anything else) and their queues (DgxModel.newQueue).
   property var queue: Model.newQueue()
   property int lastOp: 0
   // Finished actions whose mark stays until a status read after them: "host/model" -> { shows, op }.
@@ -28,7 +28,18 @@ Item {
   function poll() { if (!statusProc.running) statusProc.running = true }
   // Where the models' files are changes only on a move or a store change, so it is read while the window is open
   // (and a machine answers), and once more right after one of those ends.
-  function pollStorage() { if (!storageProc.running && !Model.isAway(poller.hostState)) storageProc.running = true }
+  // Never for a machine that hasn't answered yet or isn't answering now.
+  readonly property bool answering: !!poller.hostState && poller.hostState.loaded && poller.hostState.online
+  property bool storageAsked: false
+  // Finished moves and store changes, [{ key, op }], settled by the storage read running now (`storageSettled`) or by the
+  // next one (`storageWaiting`, for a read that began before they finished): their mark stays until a read after them.
+  property var storageSettled: []
+  property var storageWaiting: []
+  function pollStorage() {
+    if (!poller.answering) return
+    poller.storageAsked = true
+    if (!storageProc.running) storageProc.running = true
+  }
 
   function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
 
@@ -45,7 +56,7 @@ Item {
     const l = Model.launch(poller.queue)
     poller.queue = l.queue
     for (let i = 0; i < l.run.length; i++) {
-      const proc = l.run[i] === l.queue.starting ? startProc : l.run[i] === l.queue.sharing ? shareProc : otherProc
+      const proc = l.run[i] === l.queue.starting ? startProc : l.run[i] === l.queue.sharing ? shareProc : l.run[i] === l.queue.moving ? moveProc : otherProc
       proc.command = [poller.owner.script].concat(Model.commandFor(poller.host, l.run[i]))
       proc.running = true
     }
@@ -57,21 +68,25 @@ Item {
     const f = Model.finish(poller.queue, slot)
     poller.queue = f.queue
     const a = f.action
-    if (a && (a.kind === "move" || a.kind === "storageSet" || a.kind === "storageUnset")) poller.pollStorage()
+    const storageKind = !!a && Model.MOVE_KINDS.indexOf(a.kind) >= 0
     if (a && !a.superseded) {
       if (code !== 0) {
         poller.owner.error = Model.actionError(err, poller.host)
         poller.owner.actionFailed(a.key, a.kind, Model.errorLine(err, ""))
       } else poller.owner.notice = Model.actionNotice(a.kind, out)
       // A removal's own stop leaves its mark to the removal; a setup has its row instead of a mark.
-      if (a.kind === a.shows && a.kind !== "use") {
+      if (storageKind || (a.kind === a.shows && a.kind !== "use")) {
         const next = Object.assign({}, poller.done)
         next[a.key] = { shows: a.shows, op: a.op }
         poller.done = next
       }
-      // Read the machine at once so the row moves on; a poll already on its way began too early to settle it.
+      // Read the machine at once so the row moves on; a poll already on its way began too early to settle it. A move or
+      // store change changes what storage says, not the status, so its mark waits for the storage read.
       const mark = { key: a.key, op: a.op }
-      if (statusProc.running) poller.waiting = poller.waiting.concat([mark])
+      if (storageKind) {
+        if (storageProc.running) poller.storageWaiting = poller.storageWaiting.concat([mark])
+        else { poller.storageSettled = poller.storageSettled.concat([mark]); poller.storageAsked = true; storageProc.running = true }
+      } else if (statusProc.running) poller.waiting = poller.waiting.concat([mark])
       else { poller.settled = poller.settled.concat([mark]); statusProc.running = true }
     }
     poller.launchNext()
@@ -86,7 +101,10 @@ Item {
   // Also once the machine first answers while the window is open.
   Connections {
     target: poller
-    function onHostStateChanged() { if (poller.owner.windowOpen && poller.owner.storage[poller.host] === undefined) poller.pollStorage() }
+    function onHostStateChanged() {
+      if (!poller.answering) poller.storageAsked = false
+      else if (poller.owner.windowOpen && !poller.storageAsked) poller.pollStorage()
+    }
   }
   Timer {
     interval: 30000
@@ -128,9 +146,22 @@ Item {
     stdout: StdioCollector { id: storageOut; waitForEnd: true }
     stderr: StdioCollector { id: storageErr; waitForEnd: true }
     onExited: function (code) {
+      const answered = poller.storageSettled
+      poller.storageSettled = poller.storageWaiting
+      poller.storageWaiting = []
+      if (poller.storageSettled.length > 0) Qt.callLater(poller.pollStorage)
       const answer = Model.storageAnswer(code, storageOut.text, storageErr.text, poller.host)
       poller.owner.storageRead(poller.host, answer.storage, answer.error || "")
+      poller.done = Model.settle(poller.done, answered)
+      poller.publish()
     }
+  }
+
+  Process {
+    id: moveProc
+    stdout: StdioCollector { id: moveOut; waitForEnd: true }
+    stderr: StdioCollector { id: moveErr; waitForEnd: true }
+    onExited: function (code) { poller.ended("move", code, moveOut.text, moveErr.text) }
   }
 
   Process {

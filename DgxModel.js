@@ -263,7 +263,8 @@ function hostBusy(hs) {
 
 // Counts for the count line, and the bar icon's state: alert (a machine away or a model failed), busy (a model
 // loading, stopping, being removed or set up), running, or idle.
-function summarize(hostList, hostStates) {
+// `pending` (optional): the models' marks, so a model being moved counts as busy.
+function summarize(hostList, hostStates, pending) {
   const s = { machines: hostList.length, offline: 0, models: 0, running: 0, busy: 0, failed: 0, kind: "idle" }
   for (let i = 0; i < hostList.length; i++) {
     const hs = hostStates[hostList[i]]
@@ -272,7 +273,7 @@ function summarize(hostList, hostStates) {
     const list = modelList(hs.status)
     s.models += list.length
     for (let j = 0; j < list.length; j++) {
-      const kind = modelState(list[j]).kind
+      const kind = modelState(list[j], pending ? pending[modelKey(hostList[i], list[j].recipe)] : "").kind
       if (kind === "running") s.running++
       else if (kind === "failed") s.failed++
       else if (BUSY_KINDS.indexOf(kind) >= 0) s.busy++
@@ -411,9 +412,9 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
 // An action is { op, key, kind, shows }: op numbers the click it comes from, key is "host/model", kind is the command
 // (start, stop, use, delete, share, unshare; a share's key is shareKey) and shows the mark its row gets while it runs (a removal's stop shows as the removal).
 
-function newQueue() { return { starting: null, other: null, sharing: null, starts: [], others: [], shares: [] } }
+function newQueue() { return { starting: null, other: null, sharing: null, moving: null, starts: [], others: [], shares: [], moves: [] } }
 
-function copyQueue(q) { return { starting: q.starting, other: q.other, sharing: q.sharing, starts: q.starts.slice(), others: q.others.slice(), shares: q.shares.slice() } }
+function copyQueue(q) { return { starting: q.starting, other: q.other, sharing: q.sharing, moving: q.moving, starts: q.starts.slice(), others: q.others.slice(), shares: q.shares.slice(), moves: q.moves.slice() } }
 
 function sameKey(key) { return function (a) { return a.key === key } }
 
@@ -424,7 +425,7 @@ function sameKey(key) { return function (a) { return a.key === key } }
 function submit(q, action, entry) {
   const key = action.key
   const out = copyQueue(q)
-  const busy = [out.other].concat(out.others).some(function (a) { return a && a.key === key && (a.kind === "stop" || a.kind === "delete" || a.kind === "move") })
+  const busy = [out.other, out.moving].concat(out.others, out.moves).some(function (a) { return a && a.key === key && (a.kind === "stop" || a.kind === "delete" || a.kind === "move") })
   if (action.kind === "start") {
     if (busy) return { queue: out, dropped: [action] }
     out.starts.push(action)
@@ -445,9 +446,14 @@ function submit(q, action, entry) {
     return { queue: out, dropped: dropped }
   }
   if (action.kind === "share" || action.kind === "unshare") out.shares.push(action)
+  else if (MOVE_KINDS.indexOf(action.kind) >= 0) out.moves.push(action)
   else out.others.push(action)
   return { queue: out, dropped: [] }
 }
+
+// A move copies tens of GB (minutes to an hour), so it has a slot of its own: another model's stop or removal never waits
+// for it. A change of the model store goes on the same slot, behind the moves it must not overtake.
+var MOVE_KINDS = ["move", "storageSet", "storageUnset"]
 
 // What can begin now, on each free slot: { queue, run }.
 function launch(q) {
@@ -456,12 +462,13 @@ function launch(q) {
   if (!out.starting && out.starts.length) { out.starting = out.starts.shift(); run.push(out.starting) }
   if (!out.other && out.others.length) { out.other = out.others.shift(); run.push(out.other) }
   if (!out.sharing && out.shares.length) { out.sharing = out.shares.shift(); run.push(out.sharing) }
+  if (!out.moving && out.moves.length) { out.moving = out.moves.shift(); run.push(out.moving) }
   return { queue: out, run: run }
 }
 
-// A slot's command ended ("start", "share" or "other"): { queue, action } with the action that ran there, or null.
+// A slot's command ended ("start", "share", "move" or "other"): { queue, action } with the action that ran there, or null.
 function finish(q, slot) {
-  const field = slot === "start" ? "starting" : slot === "share" ? "sharing" : "other"
+  const field = slot === "start" ? "starting" : slot === "share" ? "sharing" : slot === "move" ? "moving" : "other"
   const out = Object.assign({}, q)
   const action = q[field] || null
   out[field] = null
@@ -476,10 +483,10 @@ function marks(q, done) {
   const out = {}
   const runningOp = {}
   for (const key in done) out[key] = done[key].shows
-  ;[q.starting, q.other, q.sharing].forEach(function (a) {
+  ;[q.starting, q.other, q.sharing, q.moving].forEach(function (a) {
     if (a && !a.superseded) { out[a.key] = a.shows; runningOp[a.key] = a.op }
   })
-  q.starts.concat(q.others, q.shares).forEach(function (a) {
+  q.starts.concat(q.others, q.shares, q.moves).forEach(function (a) {
     if (a.shows === "use" || runningOp[a.key] === a.op) return
     out[a.key] = "queued " + a.shows
   })

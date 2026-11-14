@@ -154,7 +154,7 @@ ColumnLayout {
 
       TextLink {
         Layout.alignment: Qt.AlignVCenter
-        visible: section.loaded && !section.away && section.storage !== null
+        visible: section.loaded && !section.away
         text: "Storage…"
         tooltip: "Where " + section.machine + " keeps its model files: its internal disk, or an external disk as a model store"
         onClicked: section.actionRequested({ type: "storage", host: section.host })

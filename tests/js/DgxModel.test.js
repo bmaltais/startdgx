@@ -1233,17 +1233,46 @@ test("hostBusy: a host moving a model polls quickly", () => {
   assert.ok(M.BUSY_KINDS.indexOf("moving") >= 0)
 })
 
-test("submit: a start of a model that is being moved is dropped; a move goes behind the others", () => {
+test("submit: a move has a slot of its own, so another model's stop never waits for the copy", () => {
   const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
-  let s = M.submit(M.newQueue(), move, row())
-  assert.deepStrictEqual(s.queue.others, [move])
+  const s = M.submit(M.newQueue(), move, row())
+  assert.deepStrictEqual(s.queue.moves, [move])
   const l = M.launch(s.queue)
   assert.deepStrictEqual(l.run, [move])
-  const start = { op: 2, key: "h/m", kind: "start", shows: "start" }
-  const t = M.submit(l.queue, start, row())
-  assert.deepStrictEqual(t.dropped, [start])
-  assert.deepStrictEqual(t.queue.starts, [])
+  assert.strictEqual(l.queue.moving, move)
+  const stop = { op: 2, key: "h/other", kind: "stop", shows: "stop" }
+  const t = M.submit(l.queue, stop, row({ recipe: "other", unit: "active" }))
+  assert.deepStrictEqual(M.launch(t.queue).run, [stop], "the stop runs while the move copies")
   assert.deepStrictEqual(M.marks(l.queue, {}), { "h/m": "move-usb" })
+  assert.strictEqual(M.finish(l.queue, "move").action, move)
+  assert.strictEqual(M.finish(l.queue, "move").queue.moving, null)
+})
+
+test("submit: a start of a model that is being moved is dropped", () => {
+  const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
+  const start = { op: 2, key: "h/m", kind: "start", shows: "start" }
+  const queued = M.submit(M.submit(M.newQueue(), move, row()).queue, start, row())
+  assert.deepStrictEqual(queued.dropped, [start], "behind a queued move")
+  const running = M.submit(M.launch(M.submit(M.newQueue(), move, row()).queue).queue, start, row())
+  assert.deepStrictEqual(running.dropped, [start], "behind a running one")
+  assert.deepStrictEqual(running.queue.starts, [])
+})
+
+test("submit: store changes wait behind moves, on the same slot", () => {
+  const move = { op: 1, key: "h/m", kind: "move", to: "usb", shows: "move-usb" }
+  const unset = { op: 2, key: "h/", kind: "storageUnset", shows: "storage" }
+  const q = M.submit(M.launch(M.submit(M.newQueue(), move, row()).queue).queue, unset, null).queue
+  assert.deepStrictEqual(q.moves, [unset])
+  assert.deepStrictEqual(M.launch(q).run, [])
+  assert.strictEqual(M.marks(q, {})["h/"], "queued storage")
+})
+
+test("summarize: a model being moved counts as busy, from its mark", () => {
+  const hs = up(models(row({ recipe: "m", unit: "inactive" })))
+  assert.strictEqual(M.summarize(["h"], { h: hs }, { "h/m": "move-usb" }).busy, 1)
+  assert.strictEqual(M.summarize(["h"], { h: hs }, { "h/m": "move-usb" }).kind, "busy")
+  assert.strictEqual(M.summarize(["h"], { h: hs }, {}).busy, 0)
+  assert.strictEqual(M.summarize(["h"], { h: hs }).busy, 0, "marks are optional")
 })
 
 test("commandFor: storage set and unset", () => {

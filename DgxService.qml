@@ -1,5 +1,5 @@
 // Everything the manager knows about the machines, and the only thing that runs bin/startdgx. Each added
-// machine has its own HostPoller (status poll, and its three command slots: a start, a share, and a stop, use or delete); the machine list,
+// machine has its own HostPoller (status poll, and its four command slots: a start, a share, a move or store change, and a stop, use or delete); the machine list,
 // adding, forgetting, discovery, a machine's catalog for the model picker, the Add recipe card's check, add and remove, the uninstall and remove plans and the
 // terminal launches run here. Results come back through `notice` and
 // `error`, and new failures as desktop notifications.
@@ -128,7 +128,7 @@ Item {
   property string removeError: ""
   readonly property bool removePlanning: removeQuery.busy
 
-  readonly property var summary: Model.summarize(service.hostList, service.shownState)
+  readonly property var summary: Model.summarize(service.hostList, service.shownState, service.pending)
   readonly property var rows: Model.rows(service.hostList, service.shownState)
 
   function entry(host, id) {
@@ -470,6 +470,14 @@ Item {
     const setups = ({})
     for (const key in service.setups) if (want.indexOf(Model.keyHost(key)) >= 0) setups[key] = service.setups[key]
     service.setups = setups
+    // What a forgotten machine's storage said goes with it, so one added again starts clean.
+    const storage = ({}), storageErrors = ({})
+    for (let m = 0; m < want.length; m++) {
+      if (service.storage[want[m]]) storage[want[m]] = service.storage[want[m]]
+      if (service.storageErrors[want[m]]) storageErrors[want[m]] = service.storageErrors[want[m]]
+    }
+    service.storage = storage
+    service.storageErrors = storageErrors
   }
 
   Component.onCompleted: service.refreshHosts()
