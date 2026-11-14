@@ -326,9 +326,10 @@ Item {
     // The manager at a given size, centred (IPC `size`, for the test session; 0 0 is the default size).
     function resizeTo(w, h) {
       win.resetWindow()
-      if (w > 0 && h > 0) win.resizeBy(w - frame.width, h - frame.height)
-      win.dragX = 0
-      win.dragY = 0
+      if (!(w > 0 && h > 0)) return
+      // By the screen's size, not the window's: a manager just asked to open is not mapped yet.
+      win.sizeW = Math.max(Style.space(480), win.screen ? Math.min(win.screen.width - Style.space(40), w) : w)
+      win.sizeH = Math.max(Style.space(300), win.screen ? Math.min(win.screen.height - Style.space(40), h) : h)
     }
     // Keeps the card on the screen: at least the top strip stays reachable.
     function moveBy(dx, dy) {

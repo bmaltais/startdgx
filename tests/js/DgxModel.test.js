@@ -964,8 +964,9 @@ test("parseVariants keeps a variant's source; contextChoices marks drafted as no
     { ctx: 16384, peak_ram_gib: 10, peak_gpu_gib: 8 }]))
   const c = M.contextChoices(v, 0, 128)
   assert.deepStrictEqual(c.map((x) => x.source), ["measured", "drafted", "estimated", "measured"])
-  assert.deepStrictEqual(c.map((x) => x.fits), [true, false, true, true])
+  assert.deepStrictEqual(c.map((x) => x.fits), [true, false, false, true], "an estimated variant fits only once confirmed, as the engine says")
   assert.match(c[1].text, /not yet fitting/)
+  assert.match(c[2].text, /Confirm it before it can run/)
   assert.match(c[2].text, /Estimated/)
 })
 
@@ -1037,8 +1038,10 @@ test("a confirmed estimated variant says so, and offers only Measure", () => {
   assert.deepStrictEqual(M.variantActions({ source: "estimated", confirmed: false }), ["confirm", "measure"])
   const c = M.contextChoices([{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true },
     { ctx: 32768, peak_ram_gib: 10, peak_gpu_gib: 9, source: "estimated" }], 0, 128)
-  assert.match(c[0].text, /confirmed/)
-  assert.doesNotMatch(c[1].text, /confirmed/)
+  assert.match(c[0].text, /you confirmed it/)
+  assert.doesNotMatch(c[1].text, /you confirmed it/)
+  assert.deepStrictEqual(c.map((x) => x.fits + " " + x.confirmed), ["true true", "false false"])
+  assert.deepStrictEqual(M.variantRows([{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true }]).map(M.variantActions), [["measure"]], "the recipe's list offers no Confirm on a confirmed one")
 })
 
 test("recipeSendCommand: the typed path comes after --, so one that starts with - is a path, not an option", () => {
@@ -1447,14 +1450,14 @@ test("modelPages: the Context page offers a choice only when there is one to mak
   assert.strictEqual(one.type, "info")
   assert.strictEqual(one.hint, "256K, which needs 54 GiB of memory. It is the only size the recipe has measured, so there is nothing to choose.")
   assert.strictEqual(one.note, undefined)
-  const many = page(twice.concat([{ ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30, source: "estimated" }]), 121.6)
+  const many = page(twice.concat([{ ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30, source: "estimated", confirmed: true }]), 121.6)
   assert.strictEqual(many.type, "choice")
   assert.deepStrictEqual(many.options, [{ value: 262144, label: "256K · 54 GiB" }, { value: 65536, label: "64K · about 30 GiB" }], "each once, with what it needs")
   assert.strictEqual(M.modelValues(entry).ctx, many.options[0].value, "the size in use is the option that is lit")
   const none = page(twice, 32)
   assert.strictEqual(none.type, "info")
   assert.strictEqual(none.hint, "None of the sizes the recipe has measured fits this machine.")
-  assert.match(none.note.text, /^Not offered\. 256K: Needs 40 GiB/)
+  assert.match(none.note.text, /^It runs with 256K now, which is not offered\. Not offered\. 256K: Needs 40 GiB/)
   assert.strictEqual(page([], 121.6, { variantsLoading: true }).type, "info", "nothing to choose from while the machine is asked")
 })
 
@@ -1468,4 +1471,28 @@ test("modelLine: state first, then context and memory, where the files are and S
   assert.strictEqual(line(row({ unit: "installing", ctx: null, observed: null, install: { phase: "failed" }, error: "x" }), "", ""), "Setup failed")
   assert.strictEqual(line(row({ unit: "inactive" }), "move-usb", "nvme"), "Moving to USB · 128K_context · 28_GiB · On_NVMe")
   assert.strictEqual(line(row({ unit: "active" }), "queued stop", ""), "Running · stop queued · 128K_context")
+})
+
+test("the Context page: the size in use asks for nothing, and a model on a size no longer offered can still choose", () => {
+  const h = "me@spark-a", id = "a"
+  assert.strictEqual(M.modelChange(h, id, "ctx", 131072, row({ ctx: 131072 })), null, "the lit segment restarts nothing")
+  assert.deepStrictEqual(M.modelChange(h, id, "ctx", 65536, row({ ctx: 131072 })), { type: "setContext", host: h, id: id, ctx: 65536 })
+  const page = (entry, variants, ram, over) => M.modelPages(Object.assign({ entry: entry, pending: "", sharing: "", store: null, location: "",
+    choices: M.contextChoices(variants, entry.ctx, ram), variantsLoading: false, variantsError: "", away: false }, over))
+  // It runs 256K, which no longer fits; 64K does: one segment, not lit, and a note that says what runs now.
+  const v = [{ ctx: 262144, peak_ram_gib: 200, peak_gpu_gib: 200 }, { ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30 }]
+  const stray = page(row({ unit: "active", ctx: 262144 }), v, 121.6)[1].fields[0]
+  assert.strictEqual(stray.type, "choice")
+  assert.deepStrictEqual(stray.options, [{ value: 65536, label: "64K · 30 GiB" }])
+  assert.match(stray.note.text, /^It runs with 256K now, which is not offered\. Not offered\. 256K: /)
+  // An unconfirmed estimate is not offered, and a measured variant at the same context is the one that runs.
+  const est = M.contextChoices([{ ctx: 65536, peak_ram_gib: 50, peak_gpu_gib: 50, source: "estimated" }, { ctx: 65536, peak_ram_gib: 30, peak_gpu_gib: 30 }], 0, 121.6)
+  assert.deepStrictEqual(est.map((x) => x.need + " " + x.source), ["30 measured"])
+  // The page stays while the model restarts with the new size, dimmed; and is dimmed on a machine that isn't answering.
+  const loading = page(row({ unit: "activating", ctx: 65536 }), v, 121.6)
+  assert.strictEqual(loading[1].title, "Context")
+  assert.strictEqual(loading[1].fields[0].disabled, true)
+  assert.strictEqual(page(row({ unit: "inactive", ctx: 65536 }), v, 121.6, { away: true })[1].fields[0].disabled, true)
+  assert.strictEqual(page(row({ unit: "installing", ctx: null }), v, 121.6).length, 1, "a setup has no Context page yet")
+  assert.strictEqual(page(row({ unit: "inactive" }), [], 121.6, { variantsError: "no recipe" })[1].fields[0].hint, "The sizes the recipe has measured.")
 })

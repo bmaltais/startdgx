@@ -175,7 +175,8 @@ Rectangle {
         opacity: row.removal !== "" ? 1 : 0
         enabled: row.removal !== ""
         iconText: row.removal === "cancel" ? "\uf00d" : "\uf1f8"
-        tooltipText: row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
+        // No tooltip while it is hidden: one already open would stay, over a button that isn't there.
+        tooltipText: row.removal === "" ? "" : row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
         // Quiet: a destructive action is never the loudest thing on the row.
         foreground: Color.muted
         onClicked: row.removeRequested()
@@ -189,7 +190,7 @@ Rectangle {
         enabled: row.toggle !== "" || row.blocked
         iconText: row.toggle === "stop" ? "\udb80\udfe4" : "\udb81\udc0a"
         tooltipText: row.blocked ? String(row.entry.fit_reason || "") || "Not enough memory"
-          : row.toggle === "stop" ? "Stop  (s)" : "Start  (s)"
+          : row.toggle === "stop" ? "Stop  (s)" : row.toggle === "start" ? "Start  (s)" : ""
         foreground: row.blocked ? Color.muted : Color.foreground
         opacity: !enabled ? 0 : row.blocked ? 0.5 : 1
         onClicked: if (!row.blocked) row.toggleRequested()

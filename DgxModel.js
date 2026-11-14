@@ -706,28 +706,37 @@ function modelPages(c) {
   if (c.entry.unit !== "installing") general.push({ key: "logs", type: "action", label: "Logs", button: "Open…", hint: "Open this model's logs in a terminal." })
   const pages = [{ title: "General", fields: general }]
 
-  if (contextAction(c.entry, "")) {
+  // The page is there for any model that is set up, also while it restarts with a new size (dimmed then), so the
+  // window doesn't change pages under the person who just chose one.
+  if (CONTEXT_UNITS[c.entry.unit]) {
     const fitting = c.choices.filter(function (x) { return x.fits })
     const skipped = c.choices.filter(function (x) { return !x.fits }).map(function (x) { return x.label + ": " + x.text + "." })
+    const now = Number(c.entry.ctx) > 0 ? Math.round(Number(c.entry.ctx) / 1024) + "K" : ""
+    const offered = fitting.some(function (x) { return x.current })
     const restart = "Choosing one restarts the model with it, which interrupts requests in flight (a stopped model starts)."
+    const needs = function (x) { return (x.source === "estimated" ? "about " : "") + x.need + " GiB" }
     let ctx
-    if (fitting.length > 1) {
+    if (fitting.length > 1 || (fitting.length === 1 && !offered)) {
       ctx = { key: "ctx", type: "choice", stacked: true, label: "Context size",
         hint: "The sizes the recipe has measured, each with the memory it needs. " + restart,
-        options: fitting.map(function (x) { return { value: x.ctx, label: x.label + " · " + (x.source === "estimated" ? "about " : "") + x.need + " GiB" } }) }
+        options: fitting.map(function (x) { return { value: x.ctx, label: x.label + " · " + needs(x) } }) }
     } else {
-      // One size is not a choice, and none is nothing to choose from: say so instead of a lone button.
-      // (Stacked like the choice it may turn into once the machine has answered, so the row keeps its layout.)
+      // The one size it already runs with is not a choice, and none is nothing to choose from: say so instead of a
+      // lone button. (Stacked like the choice it may turn into once the machine has answered, so the row keeps its layout.)
       ctx = { key: "ctx", type: "info", stacked: true, label: "Context size", hint: fitting.length === 1
-        ? fitting[0].label + ", which needs " + (fitting[0].source === "estimated" ? "about " : "") + fitting[0].need + " GiB of memory. It is the only size "
+        ? fitting[0].label + ", which needs " + needs(fitting[0]) + " of memory. It is the only size "
           + (skipped.length ? "that fits this machine" : "the recipe has measured") + ", so there is nothing to choose."
         : c.choices.length ? "None of the sizes the recipe has measured fits this machine."
-        : "The sizes the recipe has measured. " + restart }
+        : "The sizes the recipe has measured." }
     }
+    const notes = []
+    // The size in use is not among the segments (it no longer fits, or the recipe dropped it): say which it is.
+    if (c.choices.length && !offered && now !== "") notes.push("It runs with " + now + " now, which is not offered.")
+    if (skipped.length) notes.push("Not offered. " + skipped.join(" "))
     if (c.variantsError !== "" && c.choices.length === 0) ctx.note = { kind: "bad", text: c.variantsError }
     else if (c.variantsLoading && c.choices.length === 0) ctx.note = { kind: "muted", text: "Asking the machine which sizes it has measured…" }
-    else if (skipped.length) ctx.note = { kind: "muted", text: "Not offered. " + skipped.join(" ") }
-    if (!contextAction(c.entry, c.pending)) ctx.disabled = true
+    else if (notes.length) ctx.note = { kind: "muted", text: notes.join(" ") }
+    if (c.away || !contextAction(c.entry, c.pending)) ctx.disabled = true
     pages.push({ title: "Context", fields: [ctx] })
   }
 
@@ -744,6 +753,9 @@ function modelPages(c) {
   return pages
 }
 
+// A model that is set up: at rest, or between two states of a start or stop.
+var CONTEXT_UNITS = { active: 1, inactive: 1, failed: 1, activating: 1, deactivating: 1 }
+
 var MOVE_HINTS = {
   usb: "Copy the weights to the model store, check them, and free the internal disk.",
   nvme: "Copy the weights back to the internal disk and leave the model store.",
@@ -754,8 +766,10 @@ function modelValues(entry) {
   return { share: !!entry && entry.shared === true, ctx: entry ? Number(entry.ctx) : 0 }
 }
 
-// What a click in a model's panel asks for, as a dispatch action, or null.
-function modelChange(host, id, key, value) {
+// What a click in a model's panel asks for, as a dispatch action, or null. `entry` is the model's row.
+function modelChange(host, id, key, value, entry) {
+  // The size already in use asks for nothing: sending it again would restart the model for no change.
+  if (key === "ctx" && entry && Number(value) === Number(entry.ctx)) return null
   switch (key) {
   case "share": return { type: value ? "share" : "unshare", host: host, id: id }
   case "logs": return { type: "logs", host: host, id: id }
@@ -989,18 +1003,21 @@ function parseVariants(text) {
   return parsed.slice().sort(function (a, b) { return b.ctx - a.ctx || b.peak_ram_gib - a.peak_ram_gib })
 }
 
-// One variant as a row: { ctx, label, need, text, fits, current, source }. It fits when its memory and the desktop's
-// reserve are within the machine's (ramTotalGib; 0 when unknown, which leaves it to the engine, whose own check refuses
-// what doesn't fit and keeps the old setup).
+// One variant as a row: { ctx, label, need, text, fits, current, source, confirmed }. It fits as the engine's `fits`
+// says: its memory and the desktop's reserve are within the machine's (ramTotalGib; 0 when unknown, which leaves it to
+// the engine, whose own check refuses what doesn't fit and keeps the old setup), its numbers are not a draft, and an
+// estimated one has been confirmed. (The engine also checks GPU-addressable memory, which the status doesn't carry.)
 function variantChoice(v, currentCtx, ramTotalGib) {
   const need = Number(v.peak_ram_gib)
   const source = recipeSource(v)
+  const confirmed = v.confirmed === true
   const room = !(ramTotalGib > 0) || need + RESERVE_GIB <= ramTotalGib
   return {
-    ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", need: need, fits: room && source !== "drafted", current: v.ctx === Number(currentCtx), source: source,
+    ctx: v.ctx, label: Math.round(v.ctx / 1024) + "K", need: need, fits: room && source !== "drafted" && (source !== "estimated" || confirmed),
+    current: v.ctx === Number(currentCtx), source: source, confirmed: confirmed,
     text: source === "drafted" ? "Needs about " + need + " GiB of memory. " + DRAFTED_TEXT
       : !room ? "Needs " + need + " GiB of memory and " + RESERVE_GIB + " GiB for the desktop; this machine has " + Math.round(ramTotalGib)
-      : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (v.confirmed === true ? "; you confirmed it" : "")
+      : source === "estimated" ? "Estimated to need " + need + " GiB of memory, not measured" + (confirmed ? "; you confirmed it" : "; Confirm it before it can run")
       : "Needs " + need + " GiB of memory"
   }
 }
