@@ -22,6 +22,10 @@ Item {
   readonly property var hostList: Object.keys(service.hosts).sort()
   // target -> { loaded, online, error, status, lastSeenMs }; see DgxModel.
   property var hostState: ({})
+  // `startdgx storage` per machine, as last read ("target" -> DgxModel.parseStorage), and why a read failed. A machine whose
+  // read fails keeps its last good one.
+  property var storage: ({})
+  property var storageErrors: ({})
   // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
   // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
   property var marks: ({})
@@ -147,6 +151,16 @@ Item {
     service.setups = Model.settleSetups(service.setups, host, status)
     service.notifyChanges()
   }
+  function storageRead(host, storage, error) {
+    const errors = Object.assign({}, service.storageErrors)
+    if (storage) {
+      const next = Object.assign({}, service.storage)
+      next[host] = storage
+      service.storage = next
+      delete errors[host]
+    } else errors[host] = error
+    service.storageErrors = errors
+  }
   function statusFailed(host, why) {
     const old = service.hostState[host] || {}
     service.setHostState(host, { loaded: true, online: false, error: why, status: old.status || null, lastSeenMs: old.lastSeenMs || 0 })
@@ -197,6 +211,20 @@ Item {
   function share(host, id, kind) { service.act(host, kind, id) }
   // A removal (or a setup's cancel) returns once the model is gone, after its stop and the deletion of its weights.
   function remove(host, id) { service.act(host, "delete", id) }
+  // Copies a stopped model's files to the machine's model store ("usb") or back to its internal disk ("nvme"), which takes minutes.
+  function move(host, id, to) {
+    const p = service.poller(host)
+    if (p) p.run("move", id, service.entry(host, id), { to: to, shows: "move-" + to })
+  }
+  // The machine's model store: a folder on an external disk, or none. Marked "storage" under "host/" while it runs.
+  function setStore(host, path) {
+    const p = service.poller(host)
+    if (p) p.run("storageSet", "", null, { path: path, shows: "storage" })
+  }
+  function unsetStore(host) {
+    const p = service.poller(host)
+    if (p) p.run("storageUnset", "", null, { shows: "storage" })
+  }
   function act(host, kind, id) {
     const p = service.poller(host)
     if (p) p.run(kind, id, service.entry(host, id))

@@ -17,6 +17,7 @@ ColumnLayout {
   property var pending: ({})          // "host/model" -> "start" | "stop" | "delete", "host/model#share" -> "share" | "unshare"
   property real nowMs: 0
   property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model" or "host#add"
+  property var storage: null          // `startdgx storage` (DgxModel.parseStorage), or null until read
   property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
 
   signal selectRequested(string key)
@@ -153,6 +154,13 @@ ColumnLayout {
 
       TextLink {
         Layout.alignment: Qt.AlignVCenter
+        visible: section.loaded && !section.away && section.storage !== null
+        text: "Storage…"
+        tooltip: "Where " + section.machine + " keeps its model files: its internal disk, or an external disk as a model store"
+        onClicked: section.actionRequested({ type: "storage", host: section.host })
+      }
+      TextLink {
+        Layout.alignment: Qt.AlignVCenter
         visible: section.loaded && !section.away
         text: "Logs…"
         tooltip: "Open the logs of the model started last, in a terminal  (l)"
@@ -186,6 +194,8 @@ ColumnLayout {
       sharing: section.pending[Model.shareKey(section.host, modelData)] || ""
       nowMs: section.nowMs
       away: section.away
+      location: Model.locationOf(section.storage, modelData)
+      store: section.storage ? section.storage.store : null
       current: section.cursorKey === Model.modelKey(section.host, modelData)
       onCurrentChanged: if (current) section.revealRequested(modelRow)
       onSelectRequested: section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
@@ -205,6 +215,7 @@ ColumnLayout {
         if (action) section.actionRequested(action)
       }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
+      onMoveRequested: to => section.actionRequested({ type: "move", host: section.host, id: modelRow.modelData, to: to })
       onRemoveRequested: {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         section.actionRequested({ type: "removeModel", host: section.host, id: modelRow.modelData })

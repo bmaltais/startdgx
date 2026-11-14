@@ -26,10 +26,13 @@ Item {
   property var waiting: []
 
   function poll() { if (!statusProc.running) statusProc.running = true }
+  // Where the models' files are changes only on a move or a store change, so it is read while the window is open
+  // (and a machine answers), and once more right after one of those ends.
+  function pollStorage() { if (!storageProc.running && !Model.isAway(poller.hostState)) storageProc.running = true }
 
   function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
 
-  // A click: kind is start, stop, use, delete, share or unshare; entry the model's row as drawn.
+  // A click: kind is start, stop, use, delete, share, unshare, move, storageSet or storageUnset; entry the model's row as drawn.
   // `extra` is what the command needs besides (a context's size). A context change shows as a setup does: no mark of its own.
   function run(kind, id, entry, extra) {
     poller.lastOp += 1
@@ -54,6 +57,7 @@ Item {
     const f = Model.finish(poller.queue, slot)
     poller.queue = f.queue
     const a = f.action
+    if (a && (a.kind === "move" || a.kind === "storageSet" || a.kind === "storageUnset")) poller.pollStorage()
     if (a && !a.superseded) {
       if (code !== 0) {
         poller.owner.error = Model.actionError(err, poller.host)
@@ -74,6 +78,22 @@ Item {
   }
 
   Component.onCompleted: poller.poll()
+
+  Connections {
+    target: poller.owner
+    function onWindowOpenChanged() { if (poller.owner.windowOpen) poller.pollStorage() }
+  }
+  // Also once the machine first answers while the window is open.
+  Connections {
+    target: poller
+    function onHostStateChanged() { if (poller.owner.windowOpen && poller.owner.storage[poller.host] === undefined) poller.pollStorage() }
+  }
+  Timer {
+    interval: 30000
+    running: poller.owner.windowOpen
+    repeat: true
+    onTriggered: poller.pollStorage()
+  }
 
   Timer {
     interval: Model.pollInterval(poller.owner.windowOpen, poller.hostState)
@@ -99,6 +119,17 @@ Item {
       else poller.owner.statusFailed(poller.host, answer.error)
       poller.done = Model.settle(poller.done, answered)
       poller.publish()
+    }
+  }
+
+  Process {
+    id: storageProc
+    command: [poller.owner.script, "storage", poller.host, "--json", "--timeout", "30"]
+    stdout: StdioCollector { id: storageOut; waitForEnd: true }
+    stderr: StdioCollector { id: storageErr; waitForEnd: true }
+    onExited: function (code) {
+      const answer = Model.storageAnswer(code, storageOut.text, storageErr.text, poller.host)
+      poller.owner.storageRead(poller.host, answer.storage, answer.error || "")
     }
   }
 

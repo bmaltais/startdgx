@@ -4,6 +4,7 @@
 // removing, memory) that fills to the end before it changes over, and the error that links to the logs.
 // One model on one machine. The manager owns the cursor and every decision; this file only paints and says
 // what was asked for. Names and errors come from the host and are drawn as plain text.
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
@@ -19,12 +20,15 @@ Rectangle {
   property real nowMs: 0             // the manager's clock, for the progress bars
   property bool current: false       // under the keyboard cursor
   property bool away: false          // the machine isn't answering: its last known state, dimmed, no actions
+  property string location: ""       // where its files are (nvme, usb, both, usb-missing, mixed), "" until the host's storage is read
+  property var store: null           // the host's model store ({ path, present }) or null: no store, no location and no move
 
   signal toggleRequested()
   signal logsRequested()
   signal removeRequested()
   signal shareRequested()
   signal contextRequested()
+  signal moveRequested(string to)
   signal selectRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
@@ -37,6 +41,9 @@ Rectangle {
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
   readonly property string facts: Model.modelFacts(row.entry)
+  // Only a host with a store says where a model is, and only a model that nothing waits on is offered a move.
+  readonly property string whereText: row.store ? Model.locationText(row.location) : ""
+  readonly property var moves: row.away || row.pending !== "" || row.sharing !== "" ? [] : Model.moveOffers(row.location, row.entry.unit, row.store)
   readonly property bool hot: hover.hovered || row.current
 
   // When a load or stop ends, its bar fills to the end before the row changes over, rather than vanishing near 90%.
@@ -116,10 +123,10 @@ Rectangle {
             Layout.preferredHeight: Style.space(7)
             radius: width / 2
             color: row.kind === "failed" ? Color.urgent
-              : row.kind === "running" || row.kind === "loading" || row.kind === "installing" ? Color.accent
+              : row.kind === "running" || row.kind === "loading" || row.kind === "installing" || row.kind === "moving" ? Color.accent
               : Util.alpha(Color.foreground, 0.35)
             SequentialAnimation on opacity {
-              running: !row.away && (row.kind === "loading" || row.kind === "stopping" || row.kind === "removing" || row.kind === "installing")
+              running: !row.away && (row.kind === "loading" || row.kind === "stopping" || row.kind === "removing" || row.kind === "installing" || row.kind === "moving")
               loops: Animation.Infinite
               onRunningChanged: if (!running) dot.opacity = 1
               NumberAnimation { to: 0.25; duration: 500 }
@@ -131,12 +138,26 @@ Rectangle {
             textFormat: Text.PlainText
             // A failure's reason has its own line, which links to the logs.
             text: (row.kind === "failed" ? (row.entry.unit === "installing" ? "Setup failed" : "Failed") : row.modelState.text)
+              + (row.whereText !== "" && row.kind !== "failed" ? "  ·  " + row.whereText : "")
               + (row.facts !== "" ? "  ·  " + row.facts : "")
             color: row.kind === "failed" ? Color.urgent : Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
           }
+        }
+      }
+
+      // Moves the model's files between the machine's internal disk and its model store (stopped models only).
+      Repeater {
+        model: row.moves
+        delegate: TextLink {
+          required property var modelData
+          Layout.alignment: Qt.AlignVCenter
+          text: modelData.label
+          tooltip: modelData.to === "usb" ? "Copy the weights to the model store, check them, and free the internal disk"
+            : "Copy the weights back to the internal disk and leave the model store"
+          onClicked: row.moveRequested(modelData.to)
         }
       }
 

@@ -174,6 +174,7 @@ FocusScope {
               pending: view.dgx.pending
               nowMs: view.nowMs
               cursorKey: view.cursorKey
+              storage: view.dgx.storage[modelData] || null
               needsSetup: !!view.dgx.setupNeeded[modelData]
               onSelectRequested: key => view.select(key)
               onActionRequested: action => view.svc.dispatch(action)

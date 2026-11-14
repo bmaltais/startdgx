@@ -35,7 +35,7 @@ Item {
 
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
-  // A card floats over the manager: "add" (Add machine), "uninstall" or "forget" (one machine's), "addModel" (a
+  // A card floats over the manager: "add" (Add machine), "uninstall", "forget" or "storage" (one machine's), "addModel" (a
   // machine's model picker, Add recipe or Find on Hugging Face card), "remove", "context" or "recipeRun" (one model's or recipe's), or "" for none.
   property string card: ""
   // The path the Add recipe card opens with (IPC addRecipe's second argument).
@@ -117,6 +117,15 @@ Item {
     root.card = "forget"
   }
 
+  function showStorage(host) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.card = "storage"
+    const p = core.poller(host)
+    if (p) p.pollStorage()
+  }
+
   function showAddModel(host) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -185,6 +194,10 @@ Item {
     case "start": core.start(action.host, action.id); break
     case "stop": core.stop(action.host, action.id); break
     case "share": case "unshare": core.share(action.host, action.id, action.type); break
+    case "move": core.move(action.host, action.id, action.to); break
+    case "storage": root.showStorage(action.host); break
+    case "storageSet": core.setStore(action.host, action.path); break
+    case "storageUnset": core.unsetStore(action.host); break
     case "logs": core.launch("logs", action.host, action.id); root.close(); break
     case "uninstall": root.showUninstall(action.host); break
     case "forget": root.showForget(action.host); break
@@ -445,13 +458,14 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "storage" ? storageCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
           : root.card === "context" ? contextCard : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: storageCard; StorageView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }

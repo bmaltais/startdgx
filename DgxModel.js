@@ -56,7 +56,10 @@ function pendingOf(pending) {
   return { kind: queued ? s.substring(7) : s, queued: queued }
 }
 
-var QUEUED_WORDS = { start: "start queued", stop: "stop queued", delete: "removal queued" }
+var QUEUED_WORDS = { start: "start queued", stop: "stop queued", delete: "removal queued", "move-usb": "move queued", "move-nvme": "move queued" }
+
+// What a move shows while it runs, by its mark.
+var MOVE_WORDS = { "move-usb": "Moving to USB", "move-nvme": "Moving to NVMe" }
 
 // What a model is doing, as one word for the row's colour and dot (`kind`) and the words under its name:
 // running, loading, stopping, removing, installing, failed, doesNotFit or stopped. `pending` is a start, stop
@@ -76,6 +79,7 @@ function modelState(entry, pending) {
   if (pending === "delete" && unit !== "removing") return { kind: "removing", text: unit === "installing" ? "Cancelling" : "Removing" }
   if (pending === "start" && (unit === "inactive" || unit === "failed")) return { kind: "loading", text: "Loading" }
   if (pending === "stop" && (unit === "active" || unit === "activating")) return { kind: "stopping", text: "Stopping" }
+  if (MOVE_WORDS[pending] && (unit === "inactive" || unit === "failed")) return { kind: "moving", text: MOVE_WORDS[pending] }
   switch (unit) {
   case "installing":
     if (phase === "failed") return { kind: "failed", text: error || "Setup failed" }
@@ -251,7 +255,7 @@ function modelList(status) {
 // A host's state, as the service keeps it: { loaded, online, error, status, lastSeenMs }. Not loaded is a
 // machine not heard from yet; an away one keeps its last good status, drawn dimmed.
 
-var BUSY_KINDS = ["loading", "stopping", "removing", "installing"]
+var BUSY_KINDS = ["loading", "stopping", "removing", "installing", "moving"]
 
 function hostBusy(hs) {
   return !!hs && modelList(hs.status).some(function (e) { return BUSY_KINDS.indexOf(modelState(e).kind) >= 0 })
@@ -420,7 +424,7 @@ function sameKey(key) { return function (a) { return a.key === key } }
 function submit(q, action, entry) {
   const key = action.key
   const out = copyQueue(q)
-  const busy = [out.other].concat(out.others).some(function (a) { return a && a.key === key && (a.kind === "stop" || a.kind === "delete") })
+  const busy = [out.other].concat(out.others).some(function (a) { return a && a.key === key && (a.kind === "stop" || a.kind === "delete" || a.kind === "move") })
   if (action.kind === "start") {
     if (busy) return { queue: out, dropped: [action] }
     out.starts.push(action)
@@ -510,6 +514,8 @@ function commandFor(host, action) {
   case "unshare": return ["share", host, id, "--off", "--timeout", "120"]
   // Copying a big model over USB takes minutes: 35 GB is about 25 s each way at the disk's speed, plus checking it.
   case "move": return ["move", host, id, "--to", action.to, "--timeout", "3600"]
+  case "storageSet": return ["storage", host, "--set", action.path, "--timeout", "60"]
+  case "storageUnset": return ["storage", host, "--unset", "--timeout", "60"]
   }
   return null
 }
@@ -521,6 +527,42 @@ function commandFor(host, action) {
 function parseStorage(text) {
   const storage = parseJson(text)
   return isPlainObject(storage) && Array.isArray(storage.disks) && Array.isArray(storage.models) && "store" in storage ? storage : null
+}
+
+// What a storage read says: { storage } or { storage: null, error }.
+function storageAnswer(code, stdout, stderr, host) {
+  if (code !== 0) return { storage: null, error: errorLine(stderr, host + " didn't answer") }
+  const storage = parseStorage(stdout)
+  return storage ? { storage: storage } : { storage: null, error: host + " sent an unreadable storage answer" }
+}
+
+// The card's disk list: each disk the host could keep a store on, with room and, when it can't, why.
+function diskRows(storage) {
+  if (!storage) return []
+  const store = storage.store ? String(storage.store.path) : ""
+  return storage.disks.map(function (d) {
+    const bus = d.bus ? String(d.bus).toUpperCase() + " " : ""
+    const mount = String(d.mount)
+    return {
+      mount: mount, usable: !!d.usable, reason: String(d.reason || ""),
+      text: mount + " · " + bus + d.fstype + " · " + sizeText(d.free) + " free of " + sizeText(d.size),
+      inUse: store !== "" && (store === mount || store.indexOf(mount + "/") === 0)
+    }
+  })
+}
+
+function storageSummary(storage) {
+  if (!storage) return ""
+  if (!storage.store) return "Models stay on the internal disk"
+  return "Store: " + storage.store.path + (storage.store.present ? "" : " (disk not mounted)")
+}
+
+function storagePathProblem(path) {
+  const p = String(path).trim()
+  if (p === "") return "Type the folder on the machine"
+  if (/[\r\n]/.test(p)) return "The path must be one line"
+  if (p.charAt(0) !== "/") return "The path must start with /"
+  return ""
 }
 
 function locationOf(storage, id) {
