@@ -144,6 +144,18 @@ Item {
     if (p) p.pollStorage()
   }
 
+  // A recipe's settings, behind the gear on a picker row: its context sizes and what can be done with them.
+  function showRecipeSettings(host, r, page) {
+    if (!core.hosts[host] || !r) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardRecipe = r
+    root.cardModel = r.id
+    root.cardPage = page || ""
+    root.card = "recipeSettings"
+    core.planContext(host, r.id)
+  }
+
   function showAddModel(host) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -207,6 +219,9 @@ Item {
     case "move": core.move(action.host, action.id, action.to); break
     case "hostSettings": root.showHostSettings(action.host, action.page); break
     case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
+    case "recipeSettings": root.showRecipeSettings(action.host, action.recipe, action.page); break
+    case "addContext": core.addContext(action.host, action.id, action.ctx); break
+    case "removeRecipeNow": core.removeRecipe(action.host, action.id); root.closeCard(); break
     case "setContext": core.setContext(action.host, action.id, action.ctx); break
     case "storageSet": core.setStore(action.host, action.path); break
     case "storageUnset": core.unsetStore(action.host); break
@@ -464,7 +479,7 @@ Item {
       visible: root.card !== ""
       anchors.centerIn: frame
       // The settings windows are wider than the other cards: pages on the left, a page on the right.
-      width: Math.min(Style.space(root.card === "hostSettings" || root.card === "modelSettings" ? 760 : 560), win.width - Style.space(40))
+      width: Math.min(Style.space(root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" ? 760 : 560), win.width - Style.space(40))
       height: Math.min(Math.max(Style.space(260), cardLoader.item ? (cardLoader.item as Item).implicitHeight : 0), win.height - Style.space(80))
       radius: root.radius
       color: Color.menu.background
@@ -481,14 +496,14 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" ? settingsCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
           : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
-      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : "model"; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
+      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : "model"; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }

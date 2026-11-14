@@ -10,9 +10,10 @@ FocusScope {
   id: card
 
   property var svc
-  property string kind: "host"          // "host" or "model"
+  property string kind: "host"          // "host", "model" or "recipe" (a row of the model picker)
   property string host: ""
   property string model: ""
+  property var recipeRow: ({})          // the picker row a "recipe" window was opened from, until the list says better
   property string startPage: ""         // the title of the page to open on ("" is the first)
 
   readonly property var dgx: card.svc.dgx
@@ -29,7 +30,16 @@ FocusScope {
   // What was typed that won't do, until the next change.
   property string problem: ""
 
-  readonly property var pages: card.kind === "host"
+  readonly property var recipeNow: {
+    if (card.kind !== "recipe") return null
+    const list = card.dgx.listHost === card.host && Array.isArray(card.dgx.recipes) ? card.dgx.recipes : []
+    return list.find(function (r) { return r.id === card.model }) || card.recipeRow
+  }
+
+  readonly property var pages: card.kind === "recipe"
+    ? Model.recipePages({ recipe: card.recipeNow, variants: card.mine ? card.dgx.variants : null, loading: card.mine && card.dgx.variantsLoading,
+        error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "" })
+    : card.kind === "host"
     ? Model.hostPages({
         machine: card.machine, update: Model.engineUpdate(card.status), needsSetup: !!card.dgx.setupNeeded[card.host],
         storage: card.storage, readError: card.dgx.storageErrors[card.host] || "", busy: (card.dgx.pending[card.host + "/"] || "") !== "" })
@@ -38,7 +48,7 @@ FocusScope {
         location: Model.locationOf(card.storage, card.model), choices: card.choices,
         variantsLoading: card.mine && card.dgx.variantsLoading, variantsError: card.mine ? card.dgx.variantsError : "",
         away: Model.isAway(card.dgx.shownState[card.host]) }) : []
-  readonly property var values: card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
+  readonly property var values: card.kind === "recipe" ? ({}) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
 
   // The model went (a removal finished): nothing left to set.
   readonly property bool gone: card.kind === "model" && !card.entry
@@ -67,8 +77,8 @@ FocusScope {
   SettingsWindow {
     id: win
     anchors.fill: parent
-    title: card.kind === "host" ? card.machine : String(card.entry ? card.entry.name || card.model : card.model)
-    subtitle: card.kind === "host" ? "SETTINGS" : "SETTINGS  ·  ON " + card.machine.toUpperCase()
+    title: card.kind === "recipe" ? String(card.recipeNow.name || card.model) : card.kind === "host" ? card.machine : String(card.entry ? card.entry.name || card.model : card.model)
+    subtitle: card.kind === "recipe" ? "RECIPE  ·  ON " + card.machine.toUpperCase() : card.kind === "host" ? "SETTINGS" : "SETTINGS  ·  ON " + card.machine.toUpperCase()
     pages: card.pages
     values: card.values
     footerText: card.problem !== "" ? card.problem : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
@@ -76,7 +86,10 @@ FocusScope {
 
     onChanged: function (key, value) {
       card.problem = ""
-      if (card.kind === "host") {
+      if (card.kind === "recipe") {
+        const action = Model.recipeChange(card.host, card.recipeNow, key, value)
+        if (action) card.svc.dispatch(action)
+      } else if (card.kind === "host") {
         const r = Model.hostChange(card.host, key, value, card.storage)
         if (r.error) card.problem = r.error
         if (r.action) card.svc.dispatch(r.action)

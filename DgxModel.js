@@ -780,6 +780,58 @@ function modelChange(host, id, key, value, entry) {
   return null
 }
 
+// ---- a recipe's settings -----------------------------------------------------------------------------------
+// The gear on a row of the model picker: the pages of its window. A recipe of yours can be changed (a context size added,
+// a variant measured or confirmed, the recipe removed); a curated one only shown. `c`: { recipe (the listing's row), variants
+// (`variants --json`, null until read), loading, error, busy (another recipe write is running) }.
+
+// The context sizes a recipe can be given, by the choice that adds one.
+var CONTEXT_SIZES = [32768, 65536, 131072, 196608, 262144]
+
+function recipePages(c) {
+  const r = c.recipe
+  const mine = isUserRecipe(r)
+  const fields = []
+  const rows = c.variants ? variantRows(c.variants) : []
+  if (!c.variants) fields.push({ key: "loading", type: "info", label: "Context sizes", hint: "The sizes the recipe has, and where each one's numbers come from.",
+    note: c.error ? { kind: "bad", text: c.error } : { kind: "muted", text: c.loading ? "Asking the machine for its context sizes…" : "Not read yet." } })
+  for (let i = 0; i < rows.length; i++) {
+    const v = rows[i]
+    const label = v.label + " · " + v.source
+    if (mine && v.source !== "measured") fields.push({ key: "measure-" + v.ctx, type: "action", label: label, hint: v.text, button: "Measure…", disabled: c.busy })
+    else fields.push({ key: "size-" + i, type: "info", label: label, hint: v.text })
+  }
+  const unconfirmed = rows.some(function (v) { return v.source === "estimated" && !v.confirmed })
+  if (mine && unconfirmed) fields.push({ key: "confirm", type: "action", label: "Confirm the estimated numbers", button: "Confirm", disabled: c.busy,
+    hint: "Accept the numbers you gave as they are: the estimated sizes then count as fitting, without being measured." })
+  if (mine && c.variants) {
+    const have = rows.map(function (v) { return v.ctx })
+    const options = CONTEXT_SIZES.filter(function (n) { return have.indexOf(n) < 0 }).map(function (n) { return { value: n, label: Math.round(n / 1024) + "K" } })
+    if (options.length) fields.push({ key: "add-ctx", type: "choice", stacked: true, label: "Add a context size", options: options, disabled: c.busy,
+      hint: "A new size starts drafted, with the numbers of the biggest one as placeholders, and never counts as fitting until Measure… has loaded the model with it and written the real ones." })
+  }
+
+  const general = [
+    { key: "name", type: "info", label: "Name", hint: String(r.name || r.id) },
+    { key: "what", type: "info", label: "Runtime", hint: String(r.runtime || "") + (r.vendor ? " · " + r.vendor : "") + (mine ? " · yours" : " · ships with the engine") },
+    { key: "summary", type: "info", label: "About", hint: String(r.summary || "") }
+  ]
+  if (mine && r.installed !== true) general.push({ key: "remove", type: "action", label: "Remove recipe", button: "Remove", danger: true, disabled: c.busy,
+    hint: "Take it off this machine's list. Nothing else is deleted: its file is still on this computer." })
+  else if (mine) general.push({ key: "remove-note", type: "info", label: "Remove recipe", hint: "A model is set up from it on this machine: remove the model first." })
+  return [{ title: "Contexts", fields: fields }, { title: "General", fields: general }]
+}
+
+// What a click in a recipe's window asks for, as a dispatch action, or null. Curated recipes ask for nothing.
+function recipeChange(host, r, key, value) {
+  if (!isUserRecipe(r)) return null
+  if (key.indexOf("measure-") === 0) return { type: "measureRecipe", host: host, recipe: r, ctx: Number(key.substring(8)) }
+  if (key === "confirm") return { type: "confirmRecipe", host: host, id: r.id }
+  if (key === "add-ctx") return { type: "addContext", host: host, id: r.id, ctx: Number(value) }
+  if (key === "remove") return { type: "removeRecipeNow", host: host, id: r.id }
+  return null
+}
+
 // ---- notifications -------------------------------------------------------------------------------------
 
 // New failures to tell the desktop about, each once: a model that failed or a setup that did, keyed by its

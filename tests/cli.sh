@@ -305,6 +305,26 @@ out=$(s recipe confirm me@dgx mine); same "$out" "Confirmed 1 estimated variant(
 tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe confirm mine$'; ok $? "through the engine's recipe confirm"
 out=$(s recipe confirm me@dgx none 2>&1); ok $((!$?)) "recipe confirm of a recipe with nothing to confirm fails"
 same "$out" "Error: Recipe none has no estimated variant to confirm"; ok $? "with the engine's message"
+# recipe context: a drafted variant added to the host's copy of a recipe of yours, put back through the engine's recipe add.
+st=$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes; mkdir -p "$st"
+printf 'name = "Mine"\nsummary = "s"\nruntime = "tensorfold"\n\n[[variant]]\nctx = 8192\npeak_ram_gib = 6.4\npeak_gpu_gib = 6.0\nsource = "drafted"\n' >"$st/ctxr.toml"
+rm -f "$FAKE_HOST/home/added.toml"
+out=$(s recipe context me@dgx ctxr --ctx 262144); same "$out" "Added a 256K context to ctxr, drafted: measure it before it counts as fitting"; ok $? "recipe context adds a drafted context"
+python3 - "$FAKE_HOST/home/added.toml" <<'PY'
+import sys, tomllib
+v = tomllib.load(open(sys.argv[1], "rb"))["variant"]
+sys.exit(not (len(v) == 2 and v[0]["ctx"] == 8192 and v[1] == {"ctx": 262144, "peak_ram_gib": 6.4, "peak_gpu_gib": 6.0, "source": "drafted"}))
+PY
+ok $? "through the engine's recipe add: the old variant kept, the new one drafted with the biggest one's numbers"
+same "$(cat "$FAKE_HOST/home/added.name")" ctxr.toml; ok $? "named for the recipe's id"
+rm -f "$FAKE_HOST/home/added.toml"
+out=$(s recipe context me@dgx ctxr --ctx 8192 2>&1); ok $((!$?)) "a context the recipe has already is refused"
+same "$out" "Error: ctxr: it has a 8K context already"; ok $? "saying so"
+none_of "$FAKE_HOST/home/added.toml"; ok $? "and nothing is written"
+s recipe context me@dgx nosuch --ctx 65536 >/dev/null 2>&1; ok $((!$?)) "a recipe of yours that isn't there is refused"
+s recipe context me@dgx ctxr --ctx 12 >/dev/null 2>&1; ok $((!$?)) "a context under 1024 is refused"
+s recipe context me@dgx ctxr >/dev/null 2>&1; ok $((!$?)) "recipe context needs --ctx"
+s recipe context me@dgx '../x' --ctx 65536 >/dev/null 2>&1; ok $((!$?)) "recipe context refuses what is no recipe id"
 # use of a recipe of yours: the engine wants --yes, which is sent only when asked for.
 s use me@dgx mine --detach --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --yes --detach$'; ok $? "use --yes passes the confirmation to the engine"
 s use me@dgx mine --detach --ctx 65536 --yes >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use mine --ctx 65536 --yes --detach$'; ok $? "with a context too"
@@ -1197,6 +1217,9 @@ ds recipe measure $a $draft --ctx 12345 --yes >/dev/null 2>&1; ok $((!$?)) "demo
 ds recipe measure $a $qwen --ctx 262144 --yes >/dev/null 2>&1; ok $((!$?)) "and a curated recipe"
 out=$(ds recipe measure $a $draft --ctx 65536 --yes); ok $? "demo recipe measure --yes measures it"
 dj '[v["source"] for v in d] == ["measured"] and d[0]["peak_ram_gib"] != 90' variants $a $draft --json; ok $? "its variant is now measured, with the numbers it showed"
+out=$(ds recipe context $a $draft --ctx 262144); same "$out" "Added a 256K context to $draft, drafted: measure it before it counts as fitting"; ok $? "demo recipe context adds a drafted context"
+dj '[(v["ctx"], v["source"]) for v in d] == [(262144, "drafted"), (65536, "measured")]' variants $a $draft --json; ok $? "which variants then lists, largest first"
+ds recipe context $a $draft --ctx 262144 >/dev/null 2>&1; ok $((!$?)) "demo recipe context refuses one it has"
 dj '{r["id"]: r for r in d}["'$draft'"]["source"] == "measured" and {r["id"]: r for r in d}["'$draft'"]["available"]' recipe list $a --json; ok $? "and the recipe fits"
 est=my-estimate-14b
 ds recipe add $a "$rdir/$est.toml" >/dev/null; ok $? "demo recipe add adds an estimated recipe"

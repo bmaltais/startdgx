@@ -107,7 +107,7 @@ Item {
   property string recipeRemoveError: ""
   // A write (an add or a removal) is running: the card waits, and nothing kills it.
   readonly property bool recipeWriting: recipeAddProc.running || recipeRemoveProc.running
-  readonly property bool recipeBusy: service.draftStep !== "" || service.recipeStep !== "" || service.recipeWriting || service.recipeMeasuring !== "" || service.recipeConfirming !== ""
+  readonly property bool recipeBusy: service.draftStep !== "" || service.recipeStep !== "" || service.recipeWriting || service.recipeMeasuring !== "" || service.recipeConfirming !== "" || recipeContextProc.running
   // "host/id" of a measure running (minutes, on the machine; nothing ends it) and the id whose numbers are being confirmed.
   property string recipeMeasuring: ""
   property string recipeConfirming: ""
@@ -342,6 +342,15 @@ Item {
     recipeMeasureProc.host = host
     recipeMeasureProc.command = [service.script, "recipe", "measure", host, id, "--ctx", String(ctx), "--yes"]
     recipeMeasureProc.running = true
+  }
+
+  // Adds a context size to a recipe of yours (`recipe context`): a drafted variant, which Measure… then fills in.
+  function addContext(host, id, ctx) {
+    if (service.recipeBusy) return
+    service.error = ""
+    recipeContextProc.host = host
+    recipeContextProc.command = [service.script, "recipe", "context", host, id, "--ctx", String(ctx), "--timeout", "60"]
+    recipeContextProc.running = true
   }
 
   // Accepts an estimated recipe's numbers (`recipe confirm`): it then counts as fitting.
@@ -655,6 +664,20 @@ Item {
   }
 
   Process {
+    id: recipeContextProc
+    property string host: ""
+    stdout: StdioCollector { id: recipeContextOut; waitForEnd: true }
+    stderr: StdioCollector { id: recipeContextErr; waitForEnd: true }
+    onExited: function (code) {
+      if (code !== 0) service.error = Model.errorLine(recipeContextErr.text, "The context could not be added")
+      else service.notice = Model.lastLine(recipeContextOut.text)
+      if (service.listHost === recipeContextProc.host) service.listRecipes(recipeContextProc.host)
+      service.loadUserRecipes(recipeContextProc.host)
+      if (service.variantsId !== "") service.planContext(service.variantsHost, service.variantsId)
+    }
+  }
+
+  Process {
     id: recipeConfirmProc
     property string host: ""
     stdout: StdioCollector { id: recipeConfirmOut; waitForEnd: true }
@@ -663,8 +686,9 @@ Item {
       service.recipeConfirming = ""
       if (code !== 0) service.recipeRemoveError = Model.errorLine(recipeConfirmErr.text, "The numbers could not be confirmed")
       else service.notice = Model.lastLine(recipeConfirmOut.text)
-      if (service.listHost === recipeConfirmProc.host) service.recipes = null
+      if (service.listHost === recipeConfirmProc.host) service.listRecipes(recipeConfirmProc.host)
       service.loadUserRecipes(recipeConfirmProc.host)
+      if (service.variantsId !== "") service.planContext(service.variantsHost, service.variantsId)
     }
   }
 

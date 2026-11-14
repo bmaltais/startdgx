@@ -628,9 +628,62 @@ def cmd_recipe_confirm(args):
   sys.stdout.write(clean(ssh(target(args.host), "recipe", "confirm", recipe(args.id), timeout=args.timeout).stdout))
 
 
+# add-context: the text of a recipe of yours on the host (the engine has no edit call), printed as it is; exit 3 when
+# the host has none of that id among yours.
+RECIPE_TEXT_PROBE = f'''
+import os, sys
+try:
+  with open(os.path.expanduser("~/{ENGINE_STATE}/recipes/" + sys.argv[1] + ".toml"), encoding="utf-8") as handle:
+    sys.stdout.write(handle.read())
+except OSError:
+  sys.exit(3)
+'''
+
+
+def recipe_with_context(text, ctx):
+  """A recipe's text with one more drafted [[variant]] at `ctx`, its placeholder numbers those of the variant that needs
+  the most memory (a drafted variant never counts as fitting, so they only stand in until Measure… writes the real
+  ones). An Error when the recipe has that context already or no variant to take numbers from."""
+  try:
+    variants = tomllib.loads(text).get("variant", [])
+  except tomllib.TOMLDecodeError as error:
+    raise Error(f"the recipe on the machine isn't valid TOML: {error}") from error
+  if any(v.get("ctx") == ctx for v in variants):
+    raise Error(f"it has a {ctx // 1024}K context already")
+  if not variants:
+    raise Error("it has no [[variant]] to take placeholder numbers from")
+  top = max(variants, key=lambda v: (float(v["peak_ram_gib"]), float(v["peak_gpu_gib"])))
+  return (text.rstrip("\n") + f"\n\n[[variant]]\nctx = {ctx}\npeak_ram_gib = {float(top['peak_ram_gib'])!r}\n"
+          f"peak_gpu_gib = {float(top['peak_gpu_gib'])!r}\nsource = \"drafted\"\n")
+
+
+def cmd_recipe_context(args):
+  """Adds a context size to a recipe of yours: the host's copy plus a drafted variant, put back through the engine's own
+  recipe add (it validates, writes atomically, and refuses while a model uses the recipe)."""
+  host, rid = target(args.host), recipe(args.id)
+  if args.ctx < 1024:
+    raise Error("A context is a number of tokens, 1024 or more")
+  result = ssh_raw(host, f"python3 -I - {shlex.quote(rid)}", stdin=RECIPE_TEXT_PROBE, timeout=args.timeout, check=False, what="recipe context")
+  if result.returncode == 255:
+    raise_ssh_failure(host, result.stderr, "recipe context")
+  if result.returncode == 3:
+    raise Error(f"No recipe of yours named '{rid}' on {host}")
+  if result.returncode != 0:
+    raise Error(" ".join(engine_lines(result.stderr)) or f"recipe context failed on {host}")
+  try:
+    text = recipe_with_context(result.stdout, args.ctx)
+  except Error as error:
+    raise Error(f"{rid}: {error}") from error
+  answer = recipe_send(host, "add", rid, text, args.timeout)
+  if not answer["ok"]:
+    raise Error(" ".join(answer["errors"]))
+  print(f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
+
+
 def cmd_recipe(args):
   return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
-          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
+          "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "context": cmd_recipe_context,
+          "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 # For storage, run on the host with python3 -I - MODE [PATH]. The disks mounted there that could hold a model store, and
@@ -2592,9 +2645,29 @@ def demo_recipe_confirm(args):
   print(f"Confirmed {len(estimated)} estimated variant(s) of {rid}")
 
 
+def demo_recipe_context(args):
+  """The demo engine's add-context: a drafted variant at that context, its numbers those of the biggest variant."""
+  rid = recipe(args.id)
+  if args.ctx < 1024:
+    raise Error("A context is a number of tokens, 1024 or more")
+  with demo_state(write=True) as state:
+    machine = demo_host(state, args.host)
+    row = next((r for r in machine["list"] if r["id"] == rid and r.get("user")), None)
+    if row is None:
+      raise Error(f"No recipe of yours named '{rid}' on {args.host}")
+    if demo_recipe_in_use(machine, rid):
+      raise Error(demo_recipe_in_use(machine, rid))
+    if any(v["ctx"] == args.ctx for v in row["_variants"]):
+      raise Error(f"{rid}: it has a {args.ctx // 1024}K context already")
+    top = max(row["_variants"], key=lambda v: (v["peak_ram_gib"], v["peak_gpu_gib"]))
+    row["_variants"] = sorted(row["_variants"] + [{"ctx": args.ctx, "peak_ram_gib": top["peak_ram_gib"], "peak_gpu_gib": top["peak_gpu_gib"], "source": "drafted"}],
+                              key=lambda v: -v["ctx"])
+  print(f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
+
+
 def demo_recipe(args):
   return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
-          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "context": demo_recipe_context, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def demo_storage_of(machine):
@@ -2809,8 +2882,8 @@ def build_parser():
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|draft|author")
-  for verb in ("validate", "add", "list", "remove", "measure", "confirm"):
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|context|draft|author")
+  for verb in ("validate", "add", "list", "remove", "measure", "confirm", "context"):
     r = rv.add_parser(verb)
     r.add_argument("host")
     if verb in ("validate", "add"):
@@ -2818,8 +2891,10 @@ def build_parser():
       r.add_argument("--json", action="store_true", help="as {ok, id, errors, message}; a rejection is an answer, so it exits 0")
     if verb == "list":
       r.add_argument("--json", action="store_true")
-    if verb in ("remove", "measure", "confirm"):
+    if verb in ("remove", "measure", "confirm", "context"):
       r.add_argument("id")
+    if verb == "context":
+      r.add_argument("--ctx", type=int, required=True, help="the context size to add, in tokens (65536 for 64K); it starts drafted")
     if verb == "measure":
       r.add_argument("--ctx", type=int, required=True, help="the context of the variant to measure")
       r.add_argument("--yes", action="store_true", help="download and load it, bench it and record the result; without this nothing changes")

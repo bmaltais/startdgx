@@ -236,6 +236,16 @@ FocusScope {
               }
             }
 
+            // Its settings: the context sizes, what can be measured, and (for yours) adding a size or removing it.
+            Button {
+              Layout.alignment: Qt.AlignVCenter
+              Layout.preferredWidth: implicitHeight
+              iconText: "\uf013"
+              tooltipText: "Settings of " + String(recipeRow.r.name || recipeRow.r.id) + ": its context sizes" + (Model.isUserRecipe(recipeRow.r) ? ", measuring, adding a size, removing it" : "")
+              foreground: Color.muted
+              onClicked: card.svc.dispatch({ type: "recipeSettings", host: card.host, recipe: recipeRow.r })
+            }
+
             // A recipe of yours, not set up here: take it off the machine's list (its file stays on this computer, the engine
             // refuses while a model uses it).
             Button {

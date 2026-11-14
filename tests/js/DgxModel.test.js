@@ -1513,3 +1513,55 @@ test("pickerMeasureCtx: a user recipe the engine lists with no source (no varian
   assert.strictEqual(M.pickerMeasureCtx({ ...row, source: "measured", available: false }), null, "measured and too big is not for Measure…")
   assert.strictEqual(M.pickerMeasureCtx({ id: "c", source: null, available: false }), null, "a curated recipe")
 })
+
+// ---- a recipe's settings (the gear on a picker row) ----
+const mineRow = (over) => Object.assign({ id: "mine", name: "Mine", summary: "A model.", runtime: "tensorfold", vendor: "google", user: true, installed: false }, over)
+const vs = [{ ctx: 8192, peak_ram_gib: 6.4, peak_gpu_gib: 6, source: "drafted" }, { ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: false }]
+const field = (pages, title, key) => pages.find((p) => p.title === title).fields.find((f) => f.key === key)
+
+test("recipePages: a recipe of yours lists each context with Measure…, Confirm for an estimated one, and Add a context size", () => {
+  const pages = M.recipePages({ recipe: mineRow(), variants: vs, loading: false, error: "", busy: false })
+  assert.deepStrictEqual(pages.map((p) => p.title), ["Contexts", "General"])
+  assert.strictEqual(field(pages, "Contexts", "measure-8192").type, "action")
+  assert.strictEqual(field(pages, "Contexts", "measure-8192").button, "Measure…")
+  assert.strictEqual(field(pages, "Contexts", "measure-65536").type, "action")
+  assert.strictEqual(field(pages, "Contexts", "confirm").type, "action")
+  const add = field(pages, "Contexts", "add-ctx")
+  assert.strictEqual(add.type, "choice")
+  assert.deepStrictEqual(add.options.map((o) => o.value), [32768, 131072, 196608, 262144], "the sizes it doesn't have yet")
+  assert.strictEqual(field(pages, "General", "remove").danger, true)
+})
+
+test("recipePages: a confirmed estimated variant has no Confirm; a measured one no Measure…", () => {
+  const pages = M.recipePages({ recipe: mineRow(), variants: [{ ctx: 65536, peak_ram_gib: 20, peak_gpu_gib: 18, source: "estimated", confirmed: true }, { ctx: 8192, peak_ram_gib: 6, peak_gpu_gib: 5, source: "measured" }], busy: false })
+  assert.strictEqual(field(pages, "Contexts", "confirm"), undefined)
+  assert.strictEqual(field(pages, "Contexts", "measure-8192"), undefined)
+  assert.strictEqual(field(pages, "Contexts", "measure-65536").type, "action")
+})
+
+test("recipePages: a curated recipe is information only, and one that is set up can't be removed", () => {
+  const curated = M.recipePages({ recipe: mineRow({ user: false }), variants: [{ ctx: 262144, peak_ram_gib: 40, peak_gpu_gib: 38, source: "measured" }], busy: false })
+  assert.deepStrictEqual(curated.flatMap((p) => p.fields).filter((f) => f.type === "action" || f.type === "choice"), [])
+  const setUp = M.recipePages({ recipe: mineRow({ installed: true }), variants: vs, busy: false })
+  assert.strictEqual(field(setUp, "General", "remove"), undefined)
+  assert.ok(field(setUp, "General", "remove-note"), "says why")
+})
+
+test("recipePages: while the variants load or fail the page says so, and a busy machine dims the actions", () => {
+  assert.strictEqual(field(M.recipePages({ recipe: mineRow(), variants: null, loading: true, busy: false }), "Contexts", "loading").note.kind, "muted")
+  assert.strictEqual(field(M.recipePages({ recipe: mineRow(), variants: null, loading: false, error: "no", busy: false }), "Contexts", "loading").note.kind, "bad")
+  const busy = M.recipePages({ recipe: mineRow(), variants: vs, busy: true })
+  assert.strictEqual(field(busy, "Contexts", "measure-8192").disabled, true)
+  assert.strictEqual(field(busy, "Contexts", "add-ctx").disabled, true)
+  assert.strictEqual(field(busy, "General", "remove").disabled, true)
+})
+
+test("recipeChange: what a click in a recipe's window asks for", () => {
+  const r = mineRow()
+  assert.deepStrictEqual(M.recipeChange("h", r, "measure-8192", true), { type: "measureRecipe", host: "h", recipe: r, ctx: 8192 })
+  assert.deepStrictEqual(M.recipeChange("h", r, "confirm", true), { type: "confirmRecipe", host: "h", id: "mine" })
+  assert.deepStrictEqual(M.recipeChange("h", r, "add-ctx", 262144), { type: "addContext", host: "h", id: "mine", ctx: 262144 })
+  assert.deepStrictEqual(M.recipeChange("h", r, "remove", true), { type: "removeRecipeNow", host: "h", id: "mine" })
+  assert.strictEqual(M.recipeChange("h", r, "nothing", true), null)
+  assert.strictEqual(M.recipeChange("h", mineRow({ user: false }), "remove", true), null, "never for a curated recipe")
+})
