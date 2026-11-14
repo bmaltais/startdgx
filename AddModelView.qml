@@ -31,6 +31,11 @@ FocusScope {
     if (offer && offer.action === "use") card.svc.dispatch({ type: offer.confirm ? "setupYours" : "use", host: card.host, recipe: offer.recipe })
   }
 
+  function measure(r, ctx) {
+    if (ctx > 0) card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: r, ctx: ctx })
+    else card.svc.dispatch({ type: "addRecipe", host: card.host })
+  }
+
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
   onOffersChanged: card.cursor = Math.max(0, Math.min(card.cursor, card.offers.length - 1))
 
@@ -130,6 +135,7 @@ FocusScope {
           readonly property var r: modelData.recipe
           readonly property bool current: index === card.cursor
           readonly property bool can: modelData.action === "use"
+          readonly property var measureCtx: Model.pickerMeasureCtx(recipeRow.r)
           readonly property string facts: Model.recipeFacts(recipeRow.r)
           readonly property string marks: Model.recipeMarks(recipeRow.r).join(" · ")
           width: ListView.view.width
@@ -227,6 +233,17 @@ FocusScope {
                 maximumLineCount: 2
                 elide: Text.ElideRight
               }
+            }
+
+            // A recipe of yours whose numbers aren't measured: measure it from here (its context when the row has one,
+            // else Add recipe…, which lists its variants).
+            Button {
+              Layout.alignment: Qt.AlignVCenter
+              visible: recipeRow.measureCtx !== null
+              text: "Measure…"
+              bordered: true
+              tooltipText: "Download " + String(recipeRow.r.name || recipeRow.r.id) + ", load it and bench it on " + Model.hostName(card.host) + ", to replace its numbers with measured ones. Shows the download and asks first"
+              onClicked: card.measure(recipeRow.r, recipeRow.measureCtx)
             }
 
             Button {

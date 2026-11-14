@@ -1496,3 +1496,12 @@ test("the Context page: the size in use asks for nothing, and a model on a size 
   assert.strictEqual(page(row({ unit: "installing", ctx: null }), v, 121.6).length, 1, "a setup has no Context page yet")
   assert.strictEqual(page(row({ unit: "inactive" }), [], 121.6, { variantsError: "no recipe" })[1].fields[0].hint, "The sizes the recipe has measured.")
 })
+
+test("pickerMeasureCtx: a user recipe with unmeasured numbers can be measured from the picker", () => {
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "estimated", context: 262144 }), 262144)
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "drafted", context: 8192 }), 8192)
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "drafted", context: null }), 0, "no context in the row: go to the variants")
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "measured", context: 8192 }), null)
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", user: true, source: "drafted", installed: true }), null)
+  assert.strictEqual(M.pickerMeasureCtx({ id: "a", source: "drafted", context: 8192 }), null, "a curated recipe")
+})

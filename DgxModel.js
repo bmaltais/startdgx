@@ -906,6 +906,14 @@ function variantActions(v) {
   return source === "measured" ? [] : source === "estimated" ? (v.confirmed === true ? ["measure"] : ["confirm", "measure"]) : ["measure"]
 }
 
+// The picker's Measure… on a recipe of yours whose numbers aren't measured and that isn't on the machine yet: the context
+// to measure at (the listing row's own), or 0 when the row doesn't say, which sends the person to Add recipe…'s variants.
+// null when there is nothing to measure.
+function pickerMeasureCtx(r) {
+  if (!isUserRecipe(r) || recipeSource(r) === "measured" || r.installed === true) return null
+  return Number(r.context) > 0 ? Number(r.context) : 0
+}
+
 // `startdgx recipe measure HOST ID --ctx N` without --yes: the engine's dry run, as lines (what it would download and
 // load), without its closing "Nothing was changed", which the card says its own way; or null when it said nothing.
 function parseMeasurePlan(text) {
