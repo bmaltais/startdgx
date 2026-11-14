@@ -27,7 +27,7 @@ case "$cmd" in
     printf '%s\n' "$found" | grep -E '^file:.*=.'; printf '%s\n' "$found" | grep -qx link_kind=none || printf '%s\n' "$found" | grep '^link_';;
   "bash -s -- startdgx-"*) rooted | host bash -s;;
   # delete --dry-run's read-only probe, run against the fake home.
-  "python3 -I - "*) host bash -c "$cmd";;
+  "python3 -I -"*) host bash -c "$cmd";;
   "sudo bash -c "*" startdgx-uninstall") printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi
     script=$(printf '%s' "${cmd#sudo }" | rooted); FAKE_AS_ROOT=1 host eval "$script";;
   "sudo bash -c "*) printf '%s\n' "$@" >"$FAKE_HOST/root-call"; if [ -f "$FAKE_HOST/engine-root" ]; then root=$root bash "$FAKE_HOST/engine-root"; fi
@@ -367,6 +367,27 @@ out=$(s start me@dgx slow-load --timeout 1 2>&1); ok $((!$?)) "start gives up af
 echo "$out" | grep -qx "Error: me@dgx didn't answer in time"; ok $? "and says the host didn't answer in time"
 s start --help | grep -q 'default: 600'; ok $? "start waits 600 seconds by default, for the model to load"
 tail -1 "$FAKE_LOG.args" | grep -q -- '-o ServerAliveInterval=15 -o ServerAliveCountMax=3 '; ok $? "ssh sends keepalives, so a host that went away is noticed in 45 s"
+# storage: the disks a host could keep its models on, read from lsblk (stubbed here) and changing nothing. A disk
+# qualifies when it is mounted and isn't the root device, the efi partition or a snap's loop; it is usable when its
+# filesystem handles symlinks and permissions.
+cat >"$FAKE_HOSTBIN/lsblk" <<'F'
+#!/usr/bin/env bash
+cat <<'J'
+{"blockdevices":[
+ {"name":"loop0","type":"loop","tran":null,"fstype":"squashfs","mountpoint":"/snap/core22/1","fssize":"73400320","fsavail":"0"},
+ {"name":"nvme0n1","type":"disk","tran":"nvme","fstype":null,"mountpoint":null,"children":[
+  {"name":"nvme0n1p1","type":"part","tran":"nvme","fstype":"vfat","mountpoint":"/boot/efi","fssize":"535822336","fsavail":"528482304"},
+  {"name":"nvme0n1p2","type":"part","tran":"nvme","fstype":"ext4","mountpoint":"/","fssize":"982000000000","fsavail":"424000000000"}]},
+ {"name":"sda","type":"disk","tran":"usb","fstype":null,"mountpoint":null,"children":[
+  {"name":"sda1","type":"part","tran":"usb","fstype":null,"mountpoint":null},
+  {"name":"sda2","type":"part","tran":"usb","fstype":"ext4","mountpoint":"/media/usbdisk","fssize":"1966000000000","fsavail":"492000000000"}]},
+ {"name":"sdb","type":"disk","tran":"usb","fstype":"exfat","mountpoint":"/media/stick","fssize":"64000000000","fsavail":"60000000000"}
+]}
+J
+F
+chmod +x "$FAKE_HOSTBIN/lsblk"
+exp='{"store": null, "disks": [{"mount": "/media/usbdisk", "bus": "usb", "fstype": "ext4", "size": 1966000000000, "free": 492000000000, "usable": true, "reason": ""}, {"mount": "/media/stick", "bus": "usb", "fstype": "exfat", "size": 64000000000, "free": 60000000000, "usable": false, "reason": "exfat cannot hold symlinks and permissions; use ext4, xfs or btrfs"}]}'
+same "$(s storage me@dgx --json)" "$exp"; ok $? "storage lists the mounted disks other than the root device, and says which a model store can use"
 # startdgx stopped (a shell restart kills the panel's processes) takes its ssh with it.
 for sig in TERM INT HUP; do
   # startdgx itself in the background (a function there would be a subshell, which the signal wouldn't pass through).

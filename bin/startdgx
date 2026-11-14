@@ -630,6 +630,61 @@ def cmd_recipe(args):
           "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
+# Read-only, for storage: the disks mounted on the host that could hold a model store, and the store in use, if one is set
+# (STORE_CONFIG). A disk counts when it is mounted, isn't on the root device's physical disk (the efi partition too) and
+# isn't a loop or a snap; it is usable when its filesystem keeps symlinks and permissions. Prints one JSON line.
+STORE_CONFIG = ".local/share/startdgx/store.json"
+STORE_MARKER = ".startdgx-store"
+STORE_FILESYSTEMS = ("ext4", "xfs", "btrfs")
+STORAGE_PROBE = f'''
+import json, os, subprocess
+out = json.loads(subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,TYPE,TRAN,FSTYPE,MOUNTPOINT,FSSIZE,FSAVAIL"], capture_output=True, text=True, check=True).stdout)
+flat = []
+def walk(node, top):
+  for dev in node:
+    owner = top or dev
+    flat.append((owner, dev))
+    walk(dev.get("children") or [], owner)
+walk(out["blockdevices"], None)
+root = next((top["name"] for top, dev in flat if dev.get("mountpoint") == "/"), None)
+disks = []
+for top, dev in flat:
+  mount = dev.get("mountpoint")
+  if not mount or mount == "/" or top["name"] == root or dev.get("type") == "loop" or mount.startswith("/snap/"):
+    continue
+  fstype = dev.get("fstype") or ""
+  usable = fstype in {STORE_FILESYSTEMS!r}
+  disks.append({{"mount": mount, "bus": dev.get("tran") or top.get("tran") or "", "fstype": fstype, "size": int(dev.get("fssize") or 0),
+                "free": int(dev.get("fsavail") or 0), "usable": usable,
+                "reason": "" if usable else f"{{fstype or 'this filesystem'}} cannot hold symlinks and permissions; use ext4, xfs or btrfs"}})
+store = None
+try:
+  path = json.load(open(os.path.expanduser("~/{STORE_CONFIG}")))["path"]
+  store = {{"path": path, "present": os.path.exists(os.path.join(path, "{STORE_MARKER}"))}}
+except (OSError, ValueError, KeyError, TypeError):
+  pass
+print(json.dumps({{"store": store, "disks": disks}}))
+'''
+
+
+def cmd_storage(args):
+  host = target(args.host)
+  out = ssh_raw(host, "python3 -I -", stdin=STORAGE_PROBE, timeout=args.timeout, what="probe").stdout
+  try:
+    found = json.loads(out.strip().splitlines()[-1])
+    found["store"], found["disks"]
+  except (ValueError, IndexError, KeyError, TypeError) as error:
+    raise Error(f"{host} gave an answer startdgx can't read") from error
+  if args.json:
+    print(json.dumps(found))
+    return
+  store = found["store"]
+  print("Model store: " + (f"{store['path']}" + ("" if store["present"] else " (not mounted)") if store else "none (models stay on the internal disk)"))
+  for disk in found["disks"]:
+    note = "" if disk["usable"] else f"  not usable: {disk['reason']}"
+    print(f"  {disk['mount']}  {disk['bus'] or '?'} {disk['fstype']}  {size_text(disk['free'])} free of {size_text(disk['size'])}{note}")
+
+
 def cmd_delete(args):
   if args.dry_run:
     rid, host = recipe(args.model), target(args.host)
@@ -2362,6 +2417,7 @@ def build_parser():
     s.set_defaults(fn=fn)
     return s
 
+  add("storage", cmd_storage).add_argument("--json", action="store_true", help="as {store, disks}")
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
   i = add("install", cmd_install, timeout=3600)
