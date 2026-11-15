@@ -2,7 +2,8 @@
 // runs and deletes its weights (or, for a setup in progress, cancels it and deletes what it downloaded). It first
 // asks the machine how much space that frees (`delete HOST MODEL --dry-run --json`, which changes nothing); the
 // Remove pill waits for that answer, and goes ahead without the figure if the machine can't give it. Enter
-// removes, Esc, Keep it or a click outside close the card and nothing happens.
+// removes, as does y; Enter does not (weights are gone, and a download to get them back). Esc, Keep it or a click
+// outside close the card and nothing happens.
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
@@ -45,11 +46,13 @@ FocusScope {
 
   Keys.onPressed: event => {
     if (event.key === Qt.Key_Escape) { card.svc.closeCard(); event.accepted = true }
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-      // A held Enter must not answer the question.
+    else if (event.key === Qt.Key_Y) {
+      // A held key must not answer the question.
       if (!event.isAutoRepeat) card.confirm()
       event.accepted = true
     }
+    // Enter, the key that opened the card from the row, answers nothing here.
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) event.accepted = true
   }
 
   ColumnLayout {
@@ -113,7 +116,7 @@ FocusScope {
       spacing: Style.spacing.lg
       Text {
         Layout.fillWidth: true
-        text: "Enter to " + card.words.button.toLowerCase() + " · Esc to close"
+        text: "y to " + card.words.button.toLowerCase() + " · Esc to keep"
         color: Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall

@@ -99,13 +99,13 @@ Rectangle {
           font.family: Style.font.family
           font.pixelSize: Style.font.body
           font.bold: true
-          elide: Text.ElideRight
+          // The name is the person's to read whole (a recipe of yours is named by you): it wraps, never cuts.
+          wrapMode: Text.Wrap
           HoverHandler { id: nameHover }
           PanelToolTip {
-            // A name the row had to cut is whole here. A setup has no endpoint until its model first starts.
+            // A setup has no endpoint until its model first starts.
             visible: nameHover.hovered && text !== ""
-            text: [nameText.truncated ? row.title : "", String(row.entry.endpoint || "") !== "" ? String(row.entry.endpoint) + " · model " + String(row.entry.recipe || "") : ""]
-              .filter(function (s) { return s !== "" }).join("\n")
+            text: String(row.entry.endpoint || "") !== "" ? String(row.entry.endpoint) + " · model " + String(row.entry.recipe || "") : ""
           }
         }
 
@@ -137,7 +137,8 @@ Rectangle {
             textFormat: Text.PlainText
             // A failure's reason has its own line, which links to the logs. A row too narrow for the words takes a
             // second line rather than cut them short beside the buttons; a third is cut, and whole on hover.
-            text: row.line
+            // A break comes before a separator, never after one: the dot sticks to the fact that follows it.
+            text: row.line.replace(/ · /g, " \u00b7\u00a0")
             color: row.kind === "failed" ? Color.urgent : Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
