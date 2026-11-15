@@ -18,8 +18,6 @@ import QtQuick
 import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
-import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "DgxModel.js" as Model
@@ -52,7 +50,6 @@ Item {
   property string cardPage: ""
   property string cardHost: ""
   property string cardModel: ""
-  property var targetScreen: null
 
   // The window is only mapped once the machine list has loaded, so it never flashes empty.
   property bool slow: false
@@ -65,18 +62,8 @@ Item {
   Timer { id: slowTimer; interval: 700; onTriggered: root.slow = true }
 
   // ---- window control ---------------------------------------------------------
-  function focusedScreen() {
-    const monitor = Hyprland.focusedMonitor
-    const screens = Quickshell.screens
-    for (let i = 0; i < screens.length; i++) {
-      if (monitor && screens[i].name === monitor.name) return screens[i]
-    }
-    return screens.length ? screens[0] : null
-  }
-
   function showManager() {
     root.card = ""
-    root.targetScreen = root.focusedScreen()
     root.shown = true
     core.refreshAll()
     // Not when a card was opened with it (an IPC call for a card on a closed manager): the card keeps the keys.
@@ -308,102 +295,30 @@ Item {
   onStatusDirReadyChanged: root.writeStatus()
 
   // ---- the window ------------------------------------------------------------------------
-  PanelWindow {
+  // An ordinary window of the compositor (an xdg toplevel): the compositor moves, resizes, tiles and closes it, as for any
+  // application. A card (a question or a settings window) is drawn over the manager inside it, veiled behind.
+  FloatingWindow {
     id: win
     visible: root.shown && root.ready
-    screen: root.targetScreen
-    color: "transparent"
-    anchors.left: true
-    anchors.right: true
-    anchors.top: true
-    anchors.bottom: true
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omarchy-startdgx"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    title: "StartDGX"
+    color: Color.menu.background
+    implicitWidth: Style.space(640)
+    implicitHeight: Style.space(580)
+    minimumSize: Qt.size(Style.space(480), Style.space(300))
 
-    // The card opens centred; dragging its top strip moves it. The offsets are from the centre, so the card
-    // stays where it was put when its size changes. (Not remembered across restarts: see docs/ui-standards.md.)
-    property real dragX: 0
-    property real dragY: 0
-    property real sizeW: 0
-    property real sizeH: 0
-    onHeightChanged: if (visible) win.moveBy(0, 0)
+    // Closed by the compositor (its close key or button): the manager is closed too, so the next open starts one.
+    onVisibleChanged: if (!visible && root.shown && root.ready) root.close()
 
-    function resetWindow() { win.sizeW = 0; win.sizeH = 0; win.dragX = 0; win.dragY = 0 }
-    // The top-left corner stays put: the card is centred plus an offset, so a change of size moves the centre by half of it.
-    function resizeBy(dx, dy) {
-      const w = Math.max(Style.space(480), Math.min(win.width - Style.space(40), frame.width + dx))
-      const h = Math.max(Style.space(300), Math.min(win.height - Style.space(40), frame.height + dy))
-      win.dragX += (w - frame.width) / 2
-      win.dragY += (h - frame.height) / 2
-      win.sizeW = w
-      win.sizeH = h
-    }
-    // The manager at a given size, centred (IPC `size`, for the test session; 0 0 is the default size).
+    // The manager at a given size (IPC `size`, for the test session; 0 0 is the default size).
     function resizeTo(w, h) {
-      win.resetWindow()
-      if (!(w > 0 && h > 0)) return
-      // By the screen's size, not the window's: a manager just asked to open is not mapped yet.
-      win.sizeW = Math.max(Style.space(480), win.screen ? Math.min(win.screen.width - Style.space(40), w) : w)
-      win.sizeH = Math.max(Style.space(300), win.screen ? Math.min(win.screen.height - Style.space(40), h) : h)
-    }
-    // Keeps the card on the screen: at least the top strip stays reachable.
-    function moveBy(dx, dy) {
-      if (win.width <= 0 || win.height <= 0) return
-      const grab = Style.space(60)
-      const maxX = (win.width + frame.width) / 2 - grab
-      const minY = -(win.height - frame.height) / 2
-      const maxY = (win.height + frame.height) / 2 - grab
-      win.dragX = Math.max(-maxX, Math.min(maxX, win.dragX + dx))
-      win.dragY = Math.max(minY, Math.min(maxY, win.dragY + dy))
+      win.implicitWidth = w > 0 ? Math.max(Style.space(480), w) : Style.space(640)
+      win.implicitHeight = h > 0 ? Math.max(Style.space(300), h) : Style.space(580)
     }
 
-    // Click outside the card to dismiss it (the card over the manager first).
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.scrim
-      MouseArea { anchors.fill: parent; onClicked: { if (root.card !== "") root.closeCard(); else root.close() } }
-    }
-
-    RectangularShadow {
-      anchors.fill: frame
-      radius: frame.radius
-      blur: root.shadow
-      offset.y: Style.space(4)
-      color: Qt.rgba(0, 0, 0, 0.6)
-    }
-
-    Rectangle {
+    Item {
       id: frame
-      anchors.centerIn: parent
-      anchors.horizontalCenterOffset: win.dragX
-      anchors.verticalCenterOffset: win.dragY
-      width: win.sizeW > 0 ? win.sizeW : Style.space(640)
-      height: win.sizeH > 0 ? win.sizeH
-        : Math.max(Style.space(300), Math.min(managerView.implicitHeight, Style.space(580), (win.screen ? win.screen.height : 900) - Style.space(80)))
-      radius: root.radius
-      color: Color.menu.background
-      border.width: Style.normalBorderWidth
-      border.color: Util.alpha(Color.foreground, 0.14)
-
-      // Swallow clicks so they do not reach the dismiss area behind the card.
-      MouseArea { anchors.fill: parent }
-
-      // Drag the top strip to move the card. Declared before the view so its own buttons sit above it.
-      MouseArea {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: Style.space(60)
-        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-        property real pressX: 0
-        property real pressY: 0
-        onPressed: function (mouse) { pressX = mouse.x; pressY = mouse.y }
-        onPositionChanged: function (mouse) {
-          if (pressed) win.moveBy(mouse.x - pressX, mouse.y - pressY)
-        }
-      }
+      anchors.fill: parent
+      readonly property real radius: root.radius
 
       ManagerView {
         id: managerView
@@ -412,38 +327,7 @@ Item {
         onEscapePressed: root.close()
       }
 
-      // Resize handle in the bottom-right corner: a small grip and a resize pointer.
-      MouseArea {
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        width: Style.space(22)
-        height: Style.space(22)
-        z: 10
-        cursorShape: Qt.SizeFDiagCursor
-        property real pressX: 0
-        property real pressY: 0
-        onPressed: function (mouse) { pressX = mouse.x; pressY = mouse.y }
-        onPositionChanged: function (mouse) {
-          if (pressed) win.resizeBy(mouse.x - pressX, mouse.y - pressY)
-        }
-        onDoubleClicked: win.resetWindow()
-        Repeater {
-          model: [0, 1]
-          Rectangle {
-            required property int index
-            width: Style.space(10) - index * Style.space(5)
-            height: Math.max(1, Style.normalBorderWidth)
-            radius: height / 2
-            color: Util.alpha(Color.foreground, 0.30)
-            rotation: -45
-            x: parent.width - Style.space(14) + index * Style.space(5)
-            y: parent.height - Style.space(9) - index * Style.space(5) + Style.space(1)
-            transformOrigin: Item.Center
-          }
-        }
-      }
-
-      // Close button in the card's top-right corner.
+      // Close button in the top-right corner (the compositor's own close key works too).
       Button {
         anchors.top: parent.top
         anchors.right: parent.right
@@ -461,7 +345,6 @@ Item {
     Rectangle {
       visible: root.card !== ""
       anchors.fill: frame
-      radius: frame.radius
       color: Qt.rgba(0, 0, 0, 0.35)
       // Takes the pointer's hover too, so no row or button behind the veil shows its tooltip through it.
       MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: root.closeCard() }

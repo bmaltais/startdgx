@@ -27,7 +27,7 @@ scripts/dev models demo@spark-a      # a machine's model picker
 scripts/dev remove demo@spark-a qwen3.8-27b-tensorfold   # a model's remove card
 scripts/dev settings demo@gx10-demo                      # a machine's settings window
 scripts/dev settings demo@gx10-demo nemotron-3.5-bolt-tensorfold Context   # a model's, on a page (by its title)
-scripts/dev size 480 300    # the manager at a size, centred (0 0: the default); the smallest is 480 by 300
+scripts/dev size 480 300    # the manager at a size (0 0: the default); the smallest is 480 by 300. It is a window of the session's compositor, tiled there like any window
 scripts/dev recipe demo@spark-a $PWD/demo/recipes/broken-recipe.toml   # the Add recipe card, with a path typed in (Return checks and adds)
 scripts/dev shot FILE       # look at it; click PX PY, key j, key Return ...
 scripts/dev errors          # 0 = clean
