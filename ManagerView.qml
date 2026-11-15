@@ -163,8 +163,7 @@ FocusScope {
 
         ColumnLayout {
           id: hostColumn
-          // A wide window keeps a row readable: the buttons stay near the name they act on.
-          width: Math.min(flick.width, Style.space(720))
+          width: flick.width
           spacing: Style.spacing.xxl
 
           Repeater {
