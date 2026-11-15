@@ -124,7 +124,7 @@ Rectangle {
               : row.kind === "running" || row.kind === "loading" || row.kind === "installing" || row.kind === "moving" ? Color.accent
               : Util.alpha(Color.foreground, 0.35)
             SequentialAnimation on opacity {
-              running: !row.away && (row.kind === "loading" || row.kind === "stopping" || row.kind === "removing" || row.kind === "installing" || row.kind === "moving")
+              running: !Style.reduceMotion && !row.away && (row.kind === "loading" || row.kind === "stopping" || row.kind === "removing" || row.kind === "installing" || row.kind === "moving")
               loops: Animation.Infinite
               onRunningChanged: if (!running) dot.opacity = 1
               NumberAnimation { to: 0.25; duration: 500 }

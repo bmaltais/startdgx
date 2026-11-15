@@ -14,6 +14,8 @@ Rectangle {
   width: label.implicitWidth + Style.spacing.lg * 2
   height: Style.space(32)
   radius: Math.max(Style.cornerRadius, Style.space(5))
+  // A press shows at once, before the action runs.
+  opacity: press.pressed ? 0.8 : 1
   color: pill.danger ? Util.alpha(Color.urgent, 0.5)
     : pill.primary ? Color.accent
     : (hover.hovered ? Style.hoverFillFor(Color.foreground, Color.accent) : Util.alpha(Color.foreground, 0.08))
@@ -29,6 +31,7 @@ Rectangle {
   }
   HoverHandler { id: hover }
   MouseArea {
+    id: press
     anchors.fill: parent
     cursorShape: Qt.PointingHandCursor
     onClicked: pill.clicked()

@@ -13,6 +13,8 @@ Rectangle {
   implicitHeight: Style.space(24)
   radius: height / 2
   color: sw.checked ? Color.accent : Util.alpha(Color.foreground, 0.25)
+  // A press shows at once, before the action runs.
+  opacity: press.pressed ? 0.8 : 1
 
   // Animating only once the first value has settled keeps the knob from sliding into place when a card opens.
   property bool settled: false
@@ -25,9 +27,13 @@ Rectangle {
     y: 3
     x: sw.checked ? parent.width - width - 3 : 3
     color: Color.menu.background
-    Behavior on x { enabled: sw.settled; NumberAnimation { duration: 100 } }
+    Behavior on x {
+      enabled: sw.settled
+      NumberAnimation { duration: Style.duration(100); easing.type: Easing.BezierSpline; easing.bezierCurve: Style.easeOut }
+    }
   }
   MouseArea {
+    id: press
     anchors.fill: parent
     cursorShape: Qt.PointingHandCursor
     onClicked: sw.clicked()

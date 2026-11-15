@@ -52,7 +52,8 @@ ColumnLayout {
     Layout.fillWidth: true
     implicitHeight: headBody.implicitHeight + Style.spacing.md * 2
     radius: Math.max(Style.cornerRadius, Style.space(6))
-    color: headHover.hovered || section.headCurrent ? Util.alpha(Color.foreground, 0.06) : "transparent"
+    // Hover only: the current head has its accent border, and a tint behind it took the muted subtitle below 4.5:1.
+    color: headHover.hovered ? Util.alpha(Color.foreground, 0.03) : "transparent"
     border.width: Style.normalBorderWidth
     border.color: section.headCurrent ? Util.alpha(Color.accent, 0.7) : "transparent"
     HoverHandler { id: headHover }
@@ -103,6 +104,7 @@ ColumnLayout {
             // Takes what the name leaves.
             Layout.fillWidth: true
             Layout.preferredWidth: 0
+            id: subText
             textFormat: Text.PlainText
             // The SSH target, when it says more than the name (a user).
             text: [section.host !== section.machine ? section.host : "", Model.hostLine(section.profile)].filter(function (s) { return s !== "" }).join(" · ")
@@ -110,6 +112,11 @@ ColumnLayout {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
+            HoverHandler { id: subHover }
+            PanelToolTip {
+              visible: subHover.hovered && subText.truncated
+              text: subText.text
+            }
           }
         }
         Text {

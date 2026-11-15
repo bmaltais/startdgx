@@ -485,40 +485,18 @@ Item {
   // ---- editors: each is given `field` and `value` and emits commit(next) ----------------
   Component {
     id: switchEditor
-    Rectangle {
+    RoundSwitch {
       id: sw
       property var field: null
       property var value: false
       signal commit(var next)
-      implicitWidth: Style.space(42)
-      implicitHeight: Style.space(24)
       width: implicitWidth
       height: implicitHeight
-      radius: height / 2
-      color: sw.value ? Color.accent : Util.alpha(Color.foreground, 0.25)
-      // The Loader hands over the real value just after this is created; animating only
-      // once that has settled keeps the knob from sliding into place when the page opens.
-      property bool settled: false
-      Component.onCompleted: Qt.callLater(function () { sw.settled = true })
-
-      Rectangle {
-        width: parent.height - 6
-        height: width
-        radius: width / 2
-        y: 3
-        x: sw.value ? parent.width - width - 3 : 3
-        color: Color.menu.background
-        Behavior on x { enabled: sw.settled; NumberAnimation { duration: 100 } }
-      }
-      MouseArea {
-        anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: sw.commit(!sw.value)
-      }
+      checked: sw.value === true
+      onClicked: sw.commit(!sw.value)
     }
   }
 
-  // A button on the right of the setting, for something to do rather than to set.
   Component {
     id: actionEditor
     Item {

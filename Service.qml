@@ -334,6 +334,8 @@ Item {
         anchors.topMargin: Style.spacing.lg
         anchors.rightMargin: Style.spacing.lg
         z: 10
+        // A card has its own close button; two together read ambiguously.
+        visible: root.card === ""
         iconText: "\uf00d"
         tooltipText: "Close"
         onClicked: root.close()

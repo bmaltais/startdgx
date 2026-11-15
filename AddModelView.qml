@@ -214,6 +214,7 @@ FocusScope {
               }
               Text {
                 Layout.fillWidth: true
+                id: factsText
                 visible: recipeRow.facts !== ""
                 textFormat: Text.PlainText
                 text: recipeRow.facts
@@ -221,9 +222,15 @@ FocusScope {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
+                HoverHandler { id: factsHover }
+                PanelToolTip {
+                  visible: factsHover.hovered && factsText.truncated
+                  text: factsText.text
+                }
               }
               Text {
                 Layout.fillWidth: true
+                id: summaryText
                 visible: text !== ""
                 textFormat: Text.PlainText
                 text: String(recipeRow.r.summary || "")
@@ -233,6 +240,11 @@ FocusScope {
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
+                HoverHandler { id: summaryHover }
+                PanelToolTip {
+                  visible: summaryHover.hovered && summaryText.truncated
+                  text: summaryText.text
+                }
               }
             }
 
