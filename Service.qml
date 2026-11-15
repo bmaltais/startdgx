@@ -221,6 +221,8 @@ Item {
     case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
     case "recipeSettings": root.showRecipeSettings(action.host, action.recipe, action.page); break
     case "addContext": core.addContext(action.host, action.id, action.ctx); break
+    case "removeContext": core.addContext(action.host, action.id, action.ctx, true); break
+    case "fixRecipe": core.launch("fix", action.host, action.id); root.close(); break
     case "removeRecipeNow": core.removeRecipe(action.host, action.id); root.closeCard(); break
     case "setContext": core.setContext(action.host, action.id, action.ctx); break
     case "storageSet": core.setStore(action.host, action.path); break

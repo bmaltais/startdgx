@@ -344,12 +344,12 @@ Item {
     recipeMeasureProc.running = true
   }
 
-  // Adds a context size to a recipe of yours (`recipe context`): a drafted variant, which Measure… then fills in.
-  function addContext(host, id, ctx) {
+  // Adds a context size to a recipe of yours (`recipe context`): a drafted variant, which Measure… then fills in; or takes one away.
+  function addContext(host, id, ctx, remove) {
     if (service.recipeBusy) return
     service.error = ""
     recipeContextProc.host = host
-    recipeContextProc.command = [service.script, "recipe", "context", host, id, "--ctx", String(ctx), "--timeout", "60"]
+    recipeContextProc.command = [service.script, "recipe", "context", host, id, "--ctx", String(ctx), "--timeout", "60"].concat(remove ? ["--remove"] : [])
     recipeContextProc.running = true
   }
 
@@ -669,7 +669,7 @@ Item {
     stdout: StdioCollector { id: recipeContextOut; waitForEnd: true }
     stderr: StdioCollector { id: recipeContextErr; waitForEnd: true }
     onExited: function (code) {
-      if (code !== 0) service.error = Model.errorLine(recipeContextErr.text, "The context could not be added")
+      if (code !== 0) service.error = Model.errorLine(recipeContextErr.text, "The context could not be changed")
       else service.notice = Model.lastLine(recipeContextOut.text)
       if (service.listHost === recipeContextProc.host) service.listRecipes(recipeContextProc.host)
       service.loadUserRecipes(recipeContextProc.host)

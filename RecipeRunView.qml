@@ -123,6 +123,12 @@ FocusScope {
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
       }
+      // A recipe of yours the machine can't say anything about is often a fault in the file: an agent can look.
+      SettingsPill {
+        visible: card.failed && Model.isUserRecipe(card.recipe)
+        text: "Fix with an agent…"
+        onClicked: card.svc.dispatch({ type: "fixRecipe", host: card.host, id: card.recipe.id })
+      }
       SettingsPill {
         text: "Not now"
         onClicked: card.svc.closeCard()

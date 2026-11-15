@@ -1565,3 +1565,21 @@ test("recipeChange: what a click in a recipe's window asks for", () => {
   assert.strictEqual(M.recipeChange("h", r, "nothing", true), null)
   assert.strictEqual(M.recipeChange("h", mineRow({ user: false }), "remove", true), null, "never for a curated recipe")
 })
+
+test("recipePages: a context can be removed unless it is the only one or a model is set up from the recipe; Fix is offered for yours", () => {
+  const pages = M.recipePages({ recipe: mineRow(), variants: vs, busy: false })
+  assert.deepStrictEqual(field(pages, "Contexts", "remove-ctx").options.map((o) => o.value), [8192, 65536])
+  assert.strictEqual(field(pages, "General", "fix").button, "Fix…")
+  assert.strictEqual(field(M.recipePages({ recipe: mineRow(), variants: [vs[0]], busy: false }), "Contexts", "remove-ctx"), undefined, "the only size stays")
+  assert.strictEqual(field(M.recipePages({ recipe: mineRow({ installed: true }), variants: vs, busy: false }), "Contexts", "remove-ctx"), undefined)
+  const curated = M.recipePages({ recipe: mineRow({ user: false }), variants: vs, busy: false })
+  assert.strictEqual(field(curated, "General", "fix"), undefined)
+  assert.strictEqual(field(curated, "Contexts", "remove-ctx"), undefined)
+})
+
+test("recipeChange: removing a context size and fixing a recipe", () => {
+  const r = mineRow()
+  assert.deepStrictEqual(M.recipeChange("h", r, "remove-ctx", 8192), { type: "removeContext", host: "h", id: "mine", ctx: 8192 })
+  assert.deepStrictEqual(M.recipeChange("h", r, "fix", true), { type: "fixRecipe", host: "h", id: "mine" })
+  assert.strictEqual(M.recipeChange("h", mineRow({ user: false }), "fix", true), null)
+})

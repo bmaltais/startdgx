@@ -811,11 +811,19 @@ function recipePages(c) {
       hint: "A new size starts drafted, with the numbers of the biggest one as placeholders, and never counts as fitting until Measure… has loaded the model with it and written the real ones." })
   }
 
+  // Not the only size, and not while a model is set up from the recipe (the engine refuses then).
+  const sizes = rows.map(function (v) { return v.ctx }).filter(function (n, i, a) { return a.indexOf(n) === i })
+  if (mine && c.variants && sizes.length > 1 && c.recipe.installed !== true) fields.push({ key: "remove-ctx", type: "choice", stacked: true, label: "Remove a context size", disabled: c.busy,
+    options: sizes.map(function (n) { return { value: n, label: Math.round(n / 1024) + "K" } }),
+    hint: "Takes the size out of the recipe, with any numbers measured for it. The recipe keeps at least one size." })
+
   const general = [
     { key: "name", type: "info", label: "Name", hint: String(r.name || r.id) },
     { key: "what", type: "info", label: "Runtime", hint: String(r.runtime || "") + (r.vendor ? " · " + r.vendor : "") + (mine ? " · yours" : " · ships with the engine") },
     { key: "summary", type: "info", label: "About", hint: String(r.summary || "") }
   ]
+  if (mine) general.push({ key: "fix", type: "action", label: "Fix with an agent", button: "Fix…", disabled: c.busy,
+    hint: "Opens a terminal with an agent that finds what is wrong with this recipe (a file the repo doesn't have, say) and puts the fixed one back. It asks before any download or measuring run." })
   if (mine && r.installed !== true) general.push({ key: "remove", type: "action", label: "Remove recipe", button: "Remove", danger: true, disabled: c.busy,
     hint: "Take it off this machine's list. Nothing else is deleted: its file is still on this computer." })
   else if (mine) general.push({ key: "remove-note", type: "info", label: "Remove recipe", hint: "A model is set up from it on this machine: remove the model first." })
@@ -828,6 +836,8 @@ function recipeChange(host, r, key, value) {
   if (key.indexOf("measure-") === 0) return { type: "measureRecipe", host: host, recipe: r, ctx: Number(key.substring(8)) }
   if (key === "confirm") return { type: "confirmRecipe", host: host, id: r.id }
   if (key === "add-ctx") return { type: "addContext", host: host, id: r.id, ctx: Number(value) }
+  if (key === "remove-ctx") return { type: "removeContext", host: host, id: r.id, ctx: Number(value) }
+  if (key === "fix") return { type: "fixRecipe", host: host, id: r.id }
   if (key === "remove") return { type: "removeRecipeNow", host: host, id: r.id }
   return null
 }

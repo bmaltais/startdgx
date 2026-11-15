@@ -323,6 +323,21 @@ same "$out" "Error: ctxr: it has a 8K context already"; ok $? "saying so"
 none_of "$FAKE_HOST/home/added.toml"; ok $? "and nothing is written"
 s recipe context me@dgx nosuch --ctx 65536 >/dev/null 2>&1; ok $((!$?)) "a recipe of yours that isn't there is refused"
 s recipe context me@dgx ctxr --ctx 12 >/dev/null 2>&1; ok $((!$?)) "a context under 1024 is refused"
+printf 'name = "Mine"\nsummary = "s"\nruntime = "tensorfold"\n\n[[variant]]\nctx = 8192\npeak_ram_gib = 6.4\npeak_gpu_gib = 6.0\nsource = "drafted"\n\n[[variant]]\nctx = 65536\npeak_ram_gib = 20.0\npeak_gpu_gib = 18.0\nsource = "estimated"\n\n[[hardware]]\ngpu = "nvidia-gb10"\n' >"$st/ctxr.toml"
+rm -f "$FAKE_HOST/home/added.toml"
+out=$(s recipe context me@dgx ctxr --ctx 8192 --remove); same "$out" "Removed the 8K context from ctxr"; ok $? "recipe context --remove takes a context away"
+python3 - "$FAKE_HOST/home/added.toml" <<'PY'
+import sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+sys.exit(not ([v["ctx"] for v in d["variant"]] == [65536] and d["hardware"] == [{"gpu": "nvidia-gb10"}]))
+PY
+ok $? "through the engine's recipe add, the other variant and the other tables kept"
+rm -f "$FAKE_HOST/home/added.toml"
+out=$(s recipe context me@dgx ctxr --ctx 12288 --remove 2>&1); ok $((!$?)) "a context it hasn't can't be removed"
+same "$out" "Error: ctxr: it has no 12K context"; ok $? "saying so"
+printf 'name = "Mine"\nsummary = "s"\nruntime = "tensorfold"\n\n[[variant]]\nctx = 8192\npeak_ram_gib = 6.4\npeak_gpu_gib = 6.0\nsource = "drafted"\n' >"$st/ctxr1.toml"
+s recipe context me@dgx ctxr1 --ctx 8192 --remove >/dev/null 2>&1; ok $((!$?)) "the only context stays"
+none_of "$FAKE_HOST/home/added.toml"; ok $? "and nothing is written"
 s recipe context me@dgx ctxr >/dev/null 2>&1; ok $((!$?)) "recipe context needs --ctx"
 s recipe context me@dgx '../x' --ctx 65536 >/dev/null 2>&1; ok $((!$?)) "recipe context refuses what is no recipe id"
 # use of a recipe of yours: the engine wants --yes, which is sent only when asked for.
@@ -1570,8 +1585,23 @@ for refused in "author me@dgx" "author me@dgx notarepo" "author me@dgx ../x/y" "
   read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
   same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens nothing"
 done
+# recipe fix: the recipe copied from the machine, the agent told where it is; launch fix is the panel's way in.
+export XDG_STATE_HOME=$tmp/state
+st=$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes; mkdir -p "$st"; printf 'name = "Mine"\nruntime = "tensorfold"\n' >"$st/ctxr.toml"
+printf '{"agent_command": "stub-agent"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+PATH=$tmp/agentbin:$PATH FAKE_AGENT_OUT=$tmp/agent2.out s recipe fix me@dgx ctxr --here >/dev/null 2>&1 </dev/null
+same "$(cat "$tmp/agent2.out" 2>/dev/null)" 1; ok $? "recipe fix starts the agent with the brief and the task as one argument"
+cmp -s "$st/ctxr.toml" "$XDG_STATE_HOME/startdgx/fixes/ctxr.toml"; ok $? "on a copy of the machine's recipe in the fixes folder"
+rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
+s recipe fix me@dgx nosuch --here >/dev/null 2>&1 </dev/null; ok $((!$?)) "recipe fix of a recipe of yours the machine hasn't is refused"
+same "$(launched fix me@dgx ctxr)" "$(printf '1\n%s\n' "$cli recipe fix me@dgx --here -- ctxr")"; ok $? "launch fix opens a terminal running recipe fix --here"
+for refused in "fix me@dgx" "fix me@dgx ../x"; do
+  read -ra words <<<"$refused"; : >"$FAKE_LAUNCH"; s launch "${words[@]}" >/dev/null 2>&1; ok $((!$?)) "launch refuses: $refused"
+  same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and opens nothing"
+done
 # Demo mode: says what it would run, runs nothing.
 out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | grep -q "Demo: would run 'claude "; ok $? "demo author says what it would run in a terminal"
 out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
+out=$(ds launch fix $a $draft); printf '%s' "$out" | grep -q "Demo: would run 'recipe fix"; ok $? "demo launch fix says what it would run"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo author never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 echo "1..$n"; exit $bad

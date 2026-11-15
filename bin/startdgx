@@ -657,33 +657,103 @@ def recipe_with_context(text, ctx):
           f"peak_gpu_gib = {float(top['peak_gpu_gib'])!r}\nsource = \"drafted\"\n")
 
 
-def cmd_recipe_context(args):
-  """Adds a context size to a recipe of yours: the host's copy plus a drafted variant, put back through the engine's own
-  recipe add (it validates, writes atomically, and refuses while a model uses the recipe)."""
-  host, rid = target(args.host), recipe(args.id)
-  if args.ctx < 1024:
-    raise Error("A context is a number of tokens, 1024 or more")
-  result = ssh_raw(host, f"python3 -I - {shlex.quote(rid)}", stdin=RECIPE_TEXT_PROBE, timeout=args.timeout, check=False, what="recipe context")
+def recipe_without_context(text, ctx):
+  """A recipe's text without its [[variant]] blocks at `ctx`; an Error when it has none there or it would be left with no variant."""
+  lines = text.split("\n")
+  blocks, start = [], None
+  for n, line in enumerate(lines + ["[end]"]):
+    if start is not None and line.strip().startswith("["):
+      blocks.append((start, n))
+      start = None
+    if line.strip() == "[[variant]]":
+      start = n
+  doomed = []
+  for a, b in blocks:
+    try:
+      if tomllib.loads("[[variant]]\n" + "\n".join(lines[a + 1:b]).replace("\t", " ")).get("variant", [{}])[0].get("ctx") == ctx:
+        doomed.append((a, b))
+    except tomllib.TOMLDecodeError:
+      continue
+  if not doomed:
+    raise Error(f"it has no {ctx // 1024}K context")
+  if len(doomed) == len(blocks):
+    raise Error("that is its only context: a recipe needs at least one")
+  keep = [line for n, line in enumerate(lines) if not any(a <= n < b for a, b in doomed)]
+  return "\n".join(keep).rstrip("\n") + "\n"
+
+
+def fetch_recipe_text(host, rid, timeout, what):
+  """The text of a recipe of yours as the host has it (the engine has no show call)."""
+  result = ssh_raw(host, f"python3 -I - {shlex.quote(rid)}", stdin=RECIPE_TEXT_PROBE, timeout=timeout, check=False, what=what)
   if result.returncode == 255:
-    raise_ssh_failure(host, result.stderr, "recipe context")
+    raise_ssh_failure(host, result.stderr, what)
   if result.returncode == 3:
     raise Error(f"No recipe of yours named '{rid}' on {host}")
   if result.returncode != 0:
-    raise Error(" ".join(engine_lines(result.stderr)) or f"recipe context failed on {host}")
+    raise Error(" ".join(engine_lines(result.stderr)) or f"{what} failed on {host}")
+  return result.stdout
+
+
+def cmd_recipe_context(args):
+  """Adds a context size to a recipe of yours, or with --remove takes one away: the host's copy changed and put back
+  through the engine's own recipe add (it validates, writes atomically, and refuses while a model uses the recipe)."""
+  host, rid = target(args.host), recipe(args.id)
+  if args.ctx < 1024:
+    raise Error("A context is a number of tokens, 1024 or more")
+  text = fetch_recipe_text(host, rid, args.timeout, "recipe context")
   try:
-    text = recipe_with_context(result.stdout, args.ctx)
+    text = recipe_without_context(text, args.ctx) if args.remove else recipe_with_context(text, args.ctx)
   except Error as error:
     raise Error(f"{rid}: {error}") from error
   answer = recipe_send(host, "add", rid, text, args.timeout)
   if not answer["ok"]:
     raise Error(" ".join(answer["errors"]))
-  print(f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
+  print(f"Removed the {args.ctx // 1024}K context from {rid}" if args.remove
+        else f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
+
+
+def fix_prompt(host, rid, path):
+  try:
+    with open(AUTHOR_BRIEF, encoding="utf-8") as handle:
+      brief = handle.read()
+  except OSError as error:
+    raise Error(f"The authoring brief {os.path.normpath(AUTHOR_BRIEF)} can't be read: {error.strerror}") from error
+  return (f"{brief}\nTHIS TASK\nHost: {host}\nA recipe of the person's is already on the machine and something is wrong with it: fix it.\n"
+          f"File: {path} (a copy of recipe {rid} as the machine has it; edit this copy)\n"
+          f"Find the fault first: run startdgx recipe validate {host} {path}, then startdgx recipe measure {host} {rid} --ctx N without --yes "
+          f"for a context the recipe has (it prints what would be downloaded and fails with the engine's reason when the files don't match, "
+          f"for one). Fix the file, validate it again, then put it back with startdgx recipe add {host} {path} (it replaces the machine's copy; "
+          f"the engine refuses while a model is set up from the recipe, which the person must remove first). Say what you changed.\n")
+
+
+def cmd_recipe_fix(args):
+  host, rid = target(args.host), recipe(args.id)
+  agent = agent_command()
+  if DEMO:
+    path = os.path.join(demo_dir(), "fixes", f"{rid}.toml")
+  else:
+    path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "startdgx", "fixes", f"{rid}.toml")
+    text = fetch_recipe_text(host, rid, 60, "recipe fix")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+      handle.write(text)
+  argv = agent + [fix_prompt(host, rid, path)]
+  if DEMO:
+    print(f"Demo: would run '{shlex.join(argv)}' in a terminal")
+    return
+  sys.stdout.flush()
+  try:
+    if args.here:
+      os.execvp(argv[0], argv)
+    os.execvp(LAUNCHER, [LAUNCHER, shlex.join(argv)])
+  except OSError as error:
+    raise Error(f"Can't start {argv[0] if args.here else LAUNCHER}: {error.strerror}") from error
 
 
 def cmd_recipe(args):
   return {"validate": cmd_recipe_send, "add": cmd_recipe_send, "list": cmd_recipe_list, "remove": cmd_recipe_remove,
           "measure": cmd_recipe_measure, "confirm": cmd_recipe_confirm, "context": cmd_recipe_context,
-          "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
+          "fix": cmd_recipe_fix, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 # For storage, run on the host with python3 -I - MODE [PATH]. The disks mounted there that could hold a model store, and
@@ -1728,7 +1798,7 @@ def run_steps(host, phase, script, timeout):
 
 LAUNCHER = "omarchy-launch-floating-terminal-with-presentation"
 # The commands launch may open a terminal on, and whether each takes a model.
-LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True, "author": True}
+LAUNCH_VERBS = {"install": False, "uninstall": False, "logs": True, "author": True, "fix": True}
 
 
 def cmd_launch(args):
@@ -1747,6 +1817,10 @@ def cmd_launch(args):
     if not valid_repo(args.model):
       raise Error("launch author takes a repo as OWNER/NAME")
     argv = [os.path.realpath(__file__), "recipe", "author", ssh_target(args.host), "--agent", "--here", "--", args.model]
+    return open_terminal(argv)
+  if args.verb == "fix":
+    # The model slot holds the recipe's id; the terminal runs recipe fix, so what it finds and the agent show there.
+    argv = [os.path.realpath(__file__), "recipe", "fix", ssh_target(args.host), "--here", "--", recipe(args.model)]
     return open_terminal(argv)
   argv = [os.path.realpath(__file__), args.verb, ssh_target(args.host)]
   argv += [recipe(args.model)] if args.model else []
@@ -2646,7 +2720,8 @@ def demo_recipe_confirm(args):
 
 
 def demo_recipe_context(args):
-  """The demo engine's add-context: a drafted variant at that context, its numbers those of the biggest variant."""
+  """The demo engine's recipe context: a drafted variant at that context (its numbers those of the biggest variant), or with
+  --remove the variant(s) there away."""
   rid = recipe(args.id)
   if args.ctx < 1024:
     raise Error("A context is a number of tokens, 1024 or more")
@@ -2657,17 +2732,26 @@ def demo_recipe_context(args):
       raise Error(f"No recipe of yours named '{rid}' on {args.host}")
     if demo_recipe_in_use(machine, rid):
       raise Error(demo_recipe_in_use(machine, rid))
-    if any(v["ctx"] == args.ctx for v in row["_variants"]):
-      raise Error(f"{rid}: it has a {args.ctx // 1024}K context already")
-    top = max(row["_variants"], key=lambda v: (v["peak_ram_gib"], v["peak_gpu_gib"]))
-    row["_variants"] = sorted(row["_variants"] + [{"ctx": args.ctx, "peak_ram_gib": top["peak_ram_gib"], "peak_gpu_gib": top["peak_gpu_gib"], "source": "drafted"}],
-                              key=lambda v: -v["ctx"])
-  print(f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
+    there = [v for v in row["_variants"] if v["ctx"] == args.ctx]
+    if args.remove:
+      if not there:
+        raise Error(f"{rid}: it has no {args.ctx // 1024}K context")
+      if len(there) == len(row["_variants"]):
+        raise Error(f"{rid}: that is its only context: a recipe needs at least one")
+      row["_variants"] = [v for v in row["_variants"] if v["ctx"] != args.ctx]
+    else:
+      if there:
+        raise Error(f"{rid}: it has a {args.ctx // 1024}K context already")
+      top = max(row["_variants"], key=lambda v: (v["peak_ram_gib"], v["peak_gpu_gib"]))
+      row["_variants"] = sorted(row["_variants"] + [{"ctx": args.ctx, "peak_ram_gib": top["peak_ram_gib"], "peak_gpu_gib": top["peak_gpu_gib"], "source": "drafted"}],
+                                key=lambda v: -v["ctx"])
+  print(f"Removed the {args.ctx // 1024}K context from {rid}" if args.remove
+        else f"Added a {args.ctx // 1024}K context to {rid}, drafted: measure it before it counts as fitting")
 
 
 def demo_recipe(args):
   return {"validate": demo_recipe_send, "add": demo_recipe_send, "list": demo_recipe_list, "remove": demo_recipe_remove,
-          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "context": demo_recipe_context, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
+          "measure": demo_recipe_measure, "confirm": demo_recipe_confirm, "context": demo_recipe_context, "fix": cmd_recipe_fix, "draft": cmd_recipe_draft, "author": cmd_recipe_author}[args.verb](args)
 
 
 def demo_storage_of(machine):
@@ -2882,7 +2966,7 @@ def build_parser():
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "
                       "errors, one per line), list the host's recipes, or remove one of yours.")
-  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|context|draft|author")
+  rv = rp.add_subparsers(dest="verb", required=True, metavar="validate|add|list|remove|measure|confirm|context|fix|draft|author")
   for verb in ("validate", "add", "list", "remove", "measure", "confirm", "context"):
     r = rv.add_parser(verb)
     r.add_argument("host")
@@ -2895,12 +2979,19 @@ def build_parser():
       r.add_argument("id")
     if verb == "context":
       r.add_argument("--ctx", type=int, required=True, help="the context size to add, in tokens (65536 for 64K); it starts drafted")
+      r.add_argument("--remove", action="store_true", help="take that context size away instead (a recipe keeps at least one)")
     if verb == "measure":
       r.add_argument("--ctx", type=int, required=True, help="the context of the variant to measure")
       r.add_argument("--yes", action="store_true", help="download and load it, bench it and record the result; without this nothing changes")
     r.add_argument("--timeout", type=int, default=None if verb == "measure" else 60,
                    help="seconds to wait for the host (default: 60; measure --yes 3600)")
     r.set_defaults(fn=cmd_recipe)
+  rf = rv.add_parser("fix", description="Copy a recipe of yours from HOST and open a terminal running the agent (agent_command in "
+                     "~/.config/startdgx/config.json) with the authoring brief, to find what is wrong with it and put the fixed one back.")
+  rf.add_argument("host")
+  rf.add_argument("id")
+  rf.add_argument("--here", action="store_true", help="run the agent in this terminal instead of opening one")
+  rf.set_defaults(fn=cmd_recipe)
   rd = rv.add_parser("draft", description="Write a user recipe for a Hugging Face repo that passes the Find checks (hf search), from this "
                      "computer, with no model: its pinned commit, license and one drafted variant whose placeholder numbers equal the weights' size.")
   rd.add_argument("repo", help="OWNER/NAME")
