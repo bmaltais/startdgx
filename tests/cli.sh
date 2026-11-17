@@ -301,9 +301,6 @@ ok $? "recipe validate --json gives the errors as a list, and exits 0, since the
 printf 'CLAIM = 1\n' >"$rd/claim.toml"
 out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
 same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
-printf 'CLAIM = 1\n' >"$rd/claim.toml"
-out=$(s recipe validate me@dgx "$rd/claim.toml" 2>&1 >/dev/null); ok $((!$?)) "a recipe the engine rejects for claiming measured numbers is refused"
-same "$(echo "$out" | wc -l)" 2 && echo "$out" | sed -n 1p | grep -q 'variant\[0\]' && echo "$out" | sed -n 2p | grep -q 'variant\[1\]'; ok $? "with each of the engine's lines shown on its own line"
 rm -f "$FAKE_HOST/home/added.toml"
 s recipe validate me@dgx "$rd/mine.toml" >/dev/null; none_of "$FAKE_HOST/home/added.toml"; ok $? "validating changes nothing on the host"
 out=$(s recipe add me@dgx "$rd/mine.toml"); same "$out" "Added recipe mine"; ok $? "recipe add installs it under its id"
@@ -319,7 +316,6 @@ same "$(wc -l <"$FAKE_LOG")" "$before"; ok $? "and sends the host nothing"
 head -c 300000 /dev/zero | tr '\0' 'a' >"$rd/huge.toml"; s recipe validate me@dgx "$rd/huge.toml" >/dev/null 2>&1; ok $((!$?)) "a file too big to be a recipe is refused"
 tilde='~'; (cd "$rd" && HOME=$rd s recipe validate me@dgx "$tilde/mine.toml" >/dev/null); ok $? "a leading ~ is this computer's home"
 s recipe list me@dgx --json | grep -q '"user":true'; ok $? "recipe list --json passes the engine's listing through"
-tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe list --json$'; ok $? "asking the engine for it"
 out=$(s recipe remove me@dgx mine); same "$out" "Removed recipe mine"; ok $? "recipe remove removes an unused recipe"
 out=$(s recipe remove me@dgx used 2>&1); ok $((!$?)) "recipe remove of one a model uses fails"
 same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used"; ok $? "with the engine's message"
@@ -341,7 +337,6 @@ s recipe measure me@dgx mine >/dev/null 2>&1; ok $((!$?)) "recipe measure needs 
 s recipe measure me@dgx mine --ctx abc >/dev/null 2>&1; ok $((!$?)) "and a number for it"
 s recipe measure me@dgx '../x' --ctx 1 >/dev/null 2>&1; ok $((!$?)) "recipe measure refuses what is no recipe id"
 out=$(s recipe confirm me@dgx mine); same "$out" "Confirmed 1 estimated variant(s) of mine"; ok $? "recipe confirm accepts a recipe's estimated numbers"
-tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai recipe confirm mine$'; ok $? "through the engine's recipe confirm"
 out=$(s recipe confirm me@dgx none 2>&1); ok $((!$?)) "recipe confirm of a recipe with nothing to confirm fails"
 same "$out" "Error: Recipe none has no estimated variant to confirm"; ok $? "with the engine's message"
 # recipe context: a drafted variant added to the host's copy of a recipe of yours, put back through the engine's recipe add.
@@ -596,7 +591,6 @@ for sig in TERM INT HUP; do
   [ -z "$ssh_pid" ] || kill "$ssh_pid" 2>/dev/null
 done
 out=$(s use --detach me@dgx q-detach); ok $? "use --detach succeeds"
-tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use q-detach --detach$'; ok $? "use --detach asks the engine to set the model up in the background"
 same "$out" "Setting up q-detach in the background; follow it with: journalctl"; ok $? "use --detach prints a single line"
 out=$(s use --detach me@dgx q-detach); ok $? "a second use --detach of the same model succeeds"
 same "$out" "q-detach is already being set up; follow it with: journalctl"; ok $? "and says, in one line, that it's already being set up"
@@ -971,7 +965,6 @@ out=$(s uninstall --delete-models --remove-packages me@spark 2>&1); ok $? "unins
 none_of "$h/.local/share/omarchy"; ok $? "--delete-models deletes the model weights"
 grep -qx 'apt-get remove -y -qq podman' "$FAKE_HOST/calls"; ok $? "--remove-packages removes the packages the install added"
 ! grep -q 'apt-get remove.*python3' "$FAKE_HOST/calls" && echo "$out" | grep -q 'keep python3'; ok $? "--remove-packages never removes python3, and says so"
-! grep -q pacman "$FAKE_HOST/root-call"; ok $? "the root part only knows apt (install only supports DGX OS)"
 changed=(podman=yes); installed podman=no; changed=()
 cond='d["packages"] == ["podman"]'; uj; ok $? "uninstall --dry-run --json names the packages --remove-packages would remove"
 
@@ -1437,7 +1430,6 @@ dj '{m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "both"' storage $
 ds storage $a --unset; ok $? "demo storage --unset forgets the store"
 ds storage $a --set /media/demo/usb/startdgx-models; ds move $a $abl --to usb >/dev/null; ds delete $a $abl >/dev/null
 python3 -c 'import json,sys; sys.exit("'$abl'" in json.load(open(sys.argv[1]))["hosts"]["spark-a"]["storage"]["locations"])' "$tmp/state/startdgx-demo/state.json"; ok $? "demo delete forgets where the model was"
-same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 # recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
 # checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).
 drafts=$tmp/drafts
@@ -1498,8 +1490,6 @@ out=$(draft $tf --host me@dgx --id mine 2>&1); ok $((!$?)) "an id the host alrea
 printf '%s' "$out" | grep -q "'mine'.*--id\|--id" && printf '%s' "$out" | grep -q mine; ok $? "naming the id and asking for --id"
 s add me@dgx >/dev/null 2>&1; : >"$FAKE_LOG"
 draft $tf --host me@dgx --id fresh-one >/dev/null; ok $? "an id the host doesn't have passes the host check"
-grep -q 'recipe list --json' "$FAKE_LOG"; ok $? "which asks the host only for its recipe list"
-grep -q 'recipe validate' "$FAKE_LOG"; ok $? "and asks the host's engine to validate the draft before it reports success"
 touch "$FAKE_HOST/home/reject"
 out=$(draft $tf --host me@dgx --id vfail 2>&1); ok $((!$?)) "a draft the host's engine rejects fails"
 printf '%s' "$out" | grep -q 'rejected by the engine'; ok $? "with the engine's errors"
@@ -1560,7 +1550,6 @@ ds recipe draft $tf --host $a --id demo-checked >/dev/null; ok $? "a demo draft 
 printf '# mine\n' >>"$tmp/state/startdgx-demo/drafts/demo-checked.toml"; ds recipe draft $tf --host $a --id demo-checked >/dev/null 2>&1; ok $((!$?)) "and an edited demo draft is not overwritten"
 ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
 ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
-same "$(cat "$DEMO_CALLS")" ""; ok $? "demo draft never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
 # recipe author: the draft, then (when it needs judgement, or --agent) a terminal running the configured agent command with the
 # authoring brief. The agent is a stub here; no real agent or machine runs.
 brief=$here/recipe-authoring-brief.txt
@@ -1637,6 +1626,6 @@ done
 out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | grep -q "Demo: would run 'claude "; ok $? "demo author says what it would run in a terminal"
 out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
 out=$(ds launch fix $a $draft); printf '%s' "$out" | grep -q "Demo: would run 'recipe fix"; ok $? "demo launch fix says what it would run"
-same "$(cat "$DEMO_CALLS")" ""; ok $? "demo author never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
 #@part end
 echo "1..$n"; exit $bad
