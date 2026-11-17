@@ -113,15 +113,18 @@ FocusScope {
         }
         Text {
           // A narrow manager gives the counts a second line: the last ones (failed, not answering) matter most.
+          // Only the parts that need you are in the urgent colour; the words are fixed ones, not host text.
           Layout.fillWidth: true
           wrapMode: Text.Wrap
           maximumLineCount: 2
           elide: Text.ElideRight
-          text: Model.subtitle(view.summary)
-          color: view.summary.kind === "alert" ? Color.urgent : Color.muted
+          textFormat: Text.StyledText
+          text: Model.summaryParts(view.summary).map(function (p) {
+            return p.alert ? "<font color=\"" + Color.urgent + "\">" + p.text + "</font>" : p.text
+          }).join(" \u00b7 ")
+          color: Color.muted
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.letterSpacing: 1
+          font.pixelSize: Style.font.bodySmall
         }
       }
       Button {
@@ -133,15 +136,6 @@ FocusScope {
       }
       // Keeps clear of the close button in the card's corner.
       Item { Layout.preferredWidth: Style.space(24) }
-    }
-
-    Text {
-      text: "MACHINES"
-      visible: view.dgx.hostList.length > 0
-      color: Color.muted
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
-      font.letterSpacing: 1
     }
 
     // The machines, with a scroll bar when they don't fit.

@@ -183,11 +183,11 @@ test("summarize counts machines and models, and picks the bar icon's state", () 
   assert.strictEqual(M.summarize(["h1"], { h1: up(models(a), { online: false }) }).running, 0, "an away machine's last models don't count as running")
 })
 
-test("subtitle: the manager's count line", () => {
-  assert.strictEqual(M.subtitle(M.summarize([], {})), "NO MACHINES ADDED")
-  assert.strictEqual(M.subtitle(M.summarize(["h1"], { h1: up(models(b)) })), "1 MACHINE · NOTHING RUNNING")
-  assert.strictEqual(M.subtitle(M.summarize(["h1", "h2"], { h1: up(models(a, b)), h2: up({}, { online: false }) })), "2 MACHINES · 1 RUNNING · 1 NOT ANSWERING")
-  assert.strictEqual(M.subtitle(M.summarize(["h1"], { h1: up(models(a, row({ recipe: "f", unit: "failed" }), row({ recipe: "g", unit: "failed" }))) })), "1 MACHINE · 1 RUNNING · 2 FAILED")
+test("subtitle: the manager's count line, in sentence case", () => {
+  assert.strictEqual(M.subtitle(M.summarize([], {})), "No machines added")
+  assert.strictEqual(M.subtitle(M.summarize(["h1"], { h1: up(models(b)) })), "1 machine · nothing running")
+  assert.strictEqual(M.subtitle(M.summarize(["h1", "h2"], { h1: up(models(a, b)), h2: up({}, { online: false }) })), "2 machines · 1 running · 1 not answering")
+  assert.strictEqual(M.subtitle(M.summarize(["h1"], { h1: up(models(a, row({ recipe: "f", unit: "failed" }), row({ recipe: "g", unit: "failed" }))) })), "1 machine · 1 running · 2 failed")
 })
 
 test("pollInterval: quick while you look or something moves, slow otherwise, slower for an away machine", () => {
@@ -651,7 +651,7 @@ test("a real status: parsed, and each model as the row draws it", () => {
   assert.deepStrictEqual(M.meter(running, 0), { label: "Memory", fraction: 27.9 / 121.6, value: "28 of 122 GiB" })
   assert.strictEqual(M.modelFacts(s.models["nemotron-3.5-bolt-tensorfold"]), "256K context · 31 GiB")
   const h = { "me@gx10": { loaded: true, online: true, status: s } }
-  assert.strictEqual(M.subtitle(M.summarize(Object.keys(h), h)), "1 MACHINE · 1 RUNNING")
+  assert.strictEqual(M.subtitle(M.summarize(Object.keys(h), h)), "1 machine · 1 running")
 })
 
 test("a real catalog: the picker's offers on that machine", () => {
@@ -1582,4 +1582,36 @@ test("recipeChange: removing a context size and fixing a recipe", () => {
   assert.deepStrictEqual(M.recipeChange("h", r, "remove-ctx", 8192), { type: "removeContext", host: "h", id: "mine", ctx: 8192 })
   assert.deepStrictEqual(M.recipeChange("h", r, "fix", true), { type: "fixRecipe", host: "h", id: "mine" })
   assert.strictEqual(M.recipeChange("h", mineRow({ user: false }), "fix", true), null)
+})
+
+test("summaryParts: only a failure or a machine not answering is an alert", () => {
+  const parts = M.summaryParts({ machines: 2, running: 1, busy: 0, failed: 2, offline: 1 })
+  assert.deepStrictEqual(parts.map(p => p.alert), [false, false, true, true])
+  assert.deepStrictEqual(M.summaryParts({ machines: 0 }), [{ text: "No machines added", alert: false }])
+})
+
+test("hostMemory: the machine's memory split by the models running on it", () => {
+  const status = { ram_total_gib: 122, models: {
+    a: { recipe: "a", name: "Alpha", unit: "active", observed: { ram_used_gib: 28.4 } },
+    b: { recipe: "b", unit: "inactive", observed: { ram_used_gib: 31 } },
+    c: { recipe: "c", unit: "active", observed: { ram_used_gib: 10 } } } }
+  const mem = M.hostMemory(status, {})
+  assert.deepStrictEqual(mem.segments.map(s => s.id), ["a", "c"])
+  assert.strictEqual(mem.used, 38.4)
+  assert.ok(Math.abs(mem.free - 83.6) < 1e-9)
+  assert.strictEqual(M.memoryText(mem), "38 of 122 GiB in use")
+  assert.strictEqual(M.memoryText(M.hostMemory({ ram_total_gib: 122, models: {} }, {})), "Nothing loaded \u00b7 122 GiB free")
+  assert.strictEqual(M.hostMemory({ models: {} }, {}), null)
+  assert.strictEqual(M.hostMemory(null, {}), null)
+  // Never more than the machine has.
+  assert.strictEqual(M.hostMemory({ ram_total_gib: 20, models: status.models }, {}).used, 20)
+})
+
+test("modelColumns: context in K and memory in GiB, empty where unknown", () => {
+  assert.deepStrictEqual(M.modelColumns({ ctx: 262144, observed: { ram_used_gib: 37.8 } }), { ctx: "256K", size: "38 GiB" })
+  assert.deepStrictEqual(M.modelColumns({}), { ctx: "", size: "" })
+})
+
+test("locationShort: a column's word for where the files are", () => {
+  assert.deepStrictEqual(["nvme", "usb", "both", "usb-missing", "mixed", "", "x"].map(M.locationShort), ["NVMe", "USB", "NVMe + USB", "USB missing", "Part USB", "", ""])
 })
