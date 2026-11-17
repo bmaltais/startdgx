@@ -189,6 +189,15 @@ s() { "$here/bin/startdgx" "$@"; }
 none_of() { local f; for f; do [ ! -e "$f" ] || return 1; done; }
 present() { local f; for f; do [ -e "$f" ] || return 1; done; }
 same() { [ "$1" = "$2" ]; }
+# The engine's contract tests need the fork's own code at the tag startdgx pins: STARTDGX_ENGINE if set, else that tag exported
+# from the checkout at ~/StartFS/github/omarchy-local-ai (whatever branch it sits on), else none and those cases are skipped.
+engine_checkout=${STARTDGX_ENGINE:-}
+if [ -z "$engine_checkout" ]; then
+  pinned_tag=$("$here/bin/startdgx" engine | cut -d' ' -f2)
+  if git -C "$HOME/StartFS/github/omarchy-local-ai" rev-parse -q --verify "refs/tags/$pinned_tag" >/dev/null 2>&1; then
+    mkdir -p "$tmp/engine-pin" && git -C "$HOME/StartFS/github/omarchy-local-ai" archive "$pinned_tag" | tar -x -C "$tmp/engine-pin" && engine_checkout=$tmp/engine-pin
+  fi
+fi
 # The fake terminal launcher, which records how many arguments it got, then each one.
 cat >"$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<'F'
 #!/usr/bin/env bash
@@ -396,15 +405,15 @@ ok $? "variants reads a recipe of yours from the engine's state dir, with each v
 echo '{"ur": ["32768/12.3456781/18.0"], "other": ["65536/30/28"]}' >"$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 s variants me@dgx ur --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ([(v['ctx'], v['source'], v['confirmed']) for v in d] == [(65536, 'drafted', False), (32768, 'estimated', True)]))"
 ok $? "variants marks an estimated variant the person confirmed (the engine's confirmations file keys it by id and its ctx/ram/gpu numbers, written as the float's repr: 12.3456781 and 18.0)"
-# Contract with the engine: when a fork checkout is there (STARTDGX_ENGINE, else ~/StartFS/github/omarchy-local-ai), its own variant_key
+# Contract with the engine: when the fork at the pinned tag is there (see engine_checkout at the top), its own variant_key
 # must give the key the fixture above holds, so a change to the engine's key format fails here and not on a host.
-fork_engine=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
+fork_engine=$engine_checkout
 if [ -f "$fork_engine/agent_local.py" ]; then
   engine_key=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import agent_local as a; print(a.variant_key({"ctx": 32768, "peak_ram_gib": 12.3456781, "peak_gpu_gib": 18}))' "$fork_engine" 2>/dev/null)
   matches=1; if [ "$engine_key" = "32768/12.3456781/18.0" ]; then matches=0; fi
   ok $matches "the engine's variant_key gives the key variants reads (a fork checkout is present)"
 else
-  ok 0 "the engine's variant_key contract is skipped: no fork checkout at $fork_engine"
+  ok 0 "the engine's variant_key contract is skipped: no fork checkout at the pinned tag (set STARTDGX_ENGINE)"
 fi
 rm -rf "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes" "$FAKE_HOST/home/.local/state/omarchy/agent-local/recipes-confirmed.json"
 # delete --dry-run: what a removal would free, read from the engine's files and changing none. Model m1 links its own
@@ -1532,7 +1541,6 @@ draft $tf --id Not_An_Id >/dev/null 2>&1; ok $((!$?)) "an --id that can't be a r
 out=$(STARTDGX_HF_BASE=http://127.0.0.1:9 s recipe draft $tf --out "$drafts" 2>&1); ok $((!$?)) "offline fails"
 printf '%s' "$out" | grep -q "Can't reach Hugging Face"; ok $? "saying so"
 # The engine's own validation, when a checkout of the fork is there: a draft passes, as a user recipe named for its id.
-engine_checkout=${STARTDGX_ENGINE:-$HOME/StartFS/github/omarchy-local-ai}
 if [ -x "$engine_checkout/omarchy-local-ai" ] && [ -f "$engine_checkout/agent_local.py" ]; then
   for f in qwen3.8-27b-mlx-4bit-tensorfold lfm-a gemma-a; do
     out=$("$engine_checkout/omarchy-local-ai" recipe validate "$drafts/$f.toml" 2>&1); ok $? "the engine's own recipe validate accepts the draft $f${out:+ ($out)}"
