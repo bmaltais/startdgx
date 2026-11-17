@@ -244,6 +244,7 @@ pin=$(s engine | cut -d' ' -f2)
 st() { s status me@dgx | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($1))"; }
 settag() { mkdir -p "${FAKE_MANIFEST%/*}"; printf '{\n  "engine": {\n    "tag": "%s",\n    "repo": "r"\n  }\n}\n' "$1" >"$FAKE_MANIFEST"; }
 rm -f "$FAKE_MANIFEST"; st '"engine_update" not in d and d["models"] == {}'; ok $? "status adds nothing where the host records no engine tag"
+st 'isinstance(d["ram_available_gib"], float) and d["ram_available_gib"] > 0'; ok $? "status carries the host's available memory, which counts what programs outside the engine hold"
 settag v0.6.3-dgx.1; st 'd["engine_update"] == {"from": "v0.6.3-dgx.1", "to": "'"$pin"'"}'; ok $? "status says an older engine can be updated to the pin"
 settag "$pin"; st '"engine_update" not in d'; ok $? "and nothing where the host has the pin"
 settag v9.9.9-dgx.9; st '"engine_update" not in d'; ok $? "and nothing where the host is newer, which an update would downgrade"
@@ -1153,8 +1154,8 @@ dj '{r["id"]: r for r in d}["nemotron-3.5-lightning-spark"]["user"] is True' lis
 ok $? "and it has a recipe of yours"
 dj 'd["store"] is None' storage $a --json; ok $? "a demo machine without storage.json has no store"
 model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
-dj 'sorted(d) == ["best", "last", "link", "models", "ram_total_gib", "share_error"] and all(sorted(m) == sorted('"$model_keys"') for m in d["models"].values())' status $a
-ok $? "demo status has the engine's status and model row keys"
+dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(m) == sorted('"$model_keys"') for m in d["models"].values())' status $a
+ok $? "demo status has the engine's status and model row keys, and the host's available memory"
 dj 'd["models"]["'$qwen'"]["unit"] == "active" and d["models"]["'$abl'"]["fits"] is False and d["models"]["'$nem'"]["unit"] == "failed" and d["models"]["'$nem'"]["error"]' status $a
 ok $? "demo spark-a has a running model, one that doesn't fit, and one that failed"
 install_keys='["ctx", "endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "install", "name", "observed", "port", "recipe", "result", "runtime", "since_ms", "sub_state", "unit", "vendor"]'

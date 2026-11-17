@@ -43,7 +43,9 @@ ColumnLayout {
             height: segmentRow.height
             width: Math.max(2, track.width * seg.modelData.gib / bar.mem.total)
             // The first model is the accent; each next one steps toward the foreground, so neighbours stay apart.
-            color: Qt.tint(Color.accent, Util.alpha(Color.foreground, Math.min(0.7, 0.28 * seg.index)))
+            // What other programs hold is the foreground, muted: it isn't one of ours.
+            color: seg.modelData.other ? Util.alpha(Color.foreground, 0.45)
+                                       : Qt.tint(Color.accent, Util.alpha(Color.foreground, Math.min(0.7, 0.28 * seg.index)))
             Behavior on width { NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic } }
             HoverHandler { id: segHover }
             PanelToolTip {
