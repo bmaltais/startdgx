@@ -122,6 +122,8 @@ Rectangle {
 
       ColumnLayout {
         Layout.fillWidth: true
+        // On a wide window the facts stay near the name instead of at the far edge; the buttons keep the edge.
+        Layout.maximumWidth: row.wide ? Style.space(440) : Number.POSITIVE_INFINITY
         spacing: Style.spacing.xxs
 
         RowLayout {
@@ -259,6 +261,9 @@ Rectangle {
         PanelToolTip { visible: whereHover.hovered && text !== ""; text: Model.locationText(row.store ? row.location : "") }
       }
 
+      // The room a wide window has left over, between the facts and the buttons.
+      Item { visible: row.wide; Layout.fillWidth: true }
+
       // Everything else about the model (sharing, context size, logs, where its files are) is behind the gear.
       // The gear and the bin appear on the row under the pointer or the cursor (Start and Stop are always there).
       // The three buttons keep their places on every row: one that has nothing to do now is hidden, not taken away,
@@ -306,11 +311,12 @@ Rectangle {
     }
 
     // Under the model: its download while it is set up, progress while it loads, stops or is removed (against
-    // how long that took last time), memory while it runs.
+    // how long that took last time).
     RowLayout {
       Layout.fillWidth: true
-      // A running model's memory is in its Memory column and on the machine's bar, so it has no bar of its own.
-      visible: row.shownBar !== null && !row.away && row.kind !== "running"
+      // A running model's memory is in its Memory column and on the machine's bar, so it has no bar of its own;
+      // the bar a load or stop just filled stays until it has finished filling.
+      visible: row.shownBar !== null && !row.away && (row.kind !== "running" || row.finishing !== "")
       spacing: Style.space(12)
       Text {
         Layout.preferredWidth: Style.space(90)
