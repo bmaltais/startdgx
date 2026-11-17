@@ -1627,6 +1627,25 @@ test("hostMemory: what other programs hold shows as its own segment", () => {
   assert.strictEqual(M.hostMemory({ ram_total_gib: 122, ram_available_gib: -5, models }, {}).used, 122)
 })
 
+test("hostMemory: what a loading model has taken so far is its own segment, not other programs'", () => {
+  const models = {
+    a: { recipe: "a", name: "Alpha", unit: "active", observed: { ram_used_gib: 30 } },
+    l: { recipe: "l", name: "Loader", unit: "activating", observed: { ram_used_gib: 82 } } }
+  const mem = M.hostMemory({ ram_total_gib: 122, ram_available_gib: 62, models }, {})
+  assert.deepStrictEqual(mem.segments.map(s => [s.id, s.gib, !!s.loading, !!s.other]), [["a", 30, false, false], ["l", 30, true, false]])
+  assert.strictEqual(mem.other, 0)
+  assert.strictEqual(mem.used, 60)
+  assert.strictEqual(M.memoryText(mem), "60 of 122 GiB in use \u00b7 Loader loading")
+  // It can't hold more than it needs: the rest is still another program's.
+  const capped = M.hostMemory({ ram_total_gib: 122, ram_available_gib: 22, models: { l: Object.assign({}, models.l, { observed: { ram_used_gib: 40 } }) } }, {})
+  assert.deepStrictEqual(capped.segments.map(s => [s.id, s.gib]), [["l", 40], ["other", 60]])
+  // Not yet measured: whatever the machine holds beyond the running models goes to the one loading.
+  const fresh = M.hostMemory({ ram_total_gib: 122, ram_available_gib: 92, models: { l: Object.assign({}, models.l, { observed: null }) } }, {})
+  assert.deepStrictEqual(fresh.segments.map(s => [s.id, s.gib]), [["l", 30]])
+  // A host that doesn't report what is available can't say what a loading model holds.
+  assert.deepStrictEqual(M.hostMemory({ ram_total_gib: 122, models }, {}).segments.map(s => s.id), ["a"])
+})
+
 test("modelColumns: context in K and memory in GiB, empty where unknown", () => {
   assert.deepStrictEqual(M.modelColumns({ ctx: 262144, observed: { ram_used_gib: 37.8 } }), { ctx: "256K", size: "38 GiB" })
   assert.deepStrictEqual(M.modelColumns({}), { ctx: "", size: "" })

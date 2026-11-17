@@ -50,7 +50,7 @@ ColumnLayout {
             HoverHandler { id: segHover }
             PanelToolTip {
               visible: segHover.hovered
-              text: seg.modelData.name + " · " + Math.round(seg.modelData.gib) + " GiB"
+              text: seg.modelData.name + (seg.modelData.loading ? " · loading" : "") + " · " + Math.round(seg.modelData.gib) + " GiB"
             }
           }
         }
