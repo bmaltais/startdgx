@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 # Tests startdgx against a fake ssh that records its arguments.
+#
+# The file is three independent parts, split at the "#@part" markers below: main, discover and demo. Run bare, it starts the parts at
+# once (each in a temp dir of its own) and prints their results in order; CLI_PART=name runs one part. Everything before the first marker
+# is the shared setup; the last line, after "#@part end", ends every part.
 set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
+if [ -z "${CLI_PART:-}" ]; then
+  out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
+  parts=$(sed -n 's/^#@part \([a-z]*\)$/\1/p' "$0" | grep -vx end | awk '!seen[$0]++')
+  for part in $parts; do CLI_PART=$part bash "$0" >"$out/$part" 2>&1 & done; wait
+  for part in $parts; do cat "$out/$part"; done | grep -v '^1\.\.'
+  total=$(cat "$out"/* | grep -c -E '^(not )?ok - '); bad=$(cat "$out"/* | grep -c '^not ok - ')
+  echo "1..$total"; exit $((bad > 0))
+fi
+if [ -z "${CLI_FILTERED:-}" ]; then
+  mine=$(mktemp); trap 'rm -f "$mine"' EXIT
+  awk -v want="$CLI_PART" '/^#@part /{cur=$2; next} cur=="" || cur==want || cur=="end"' "$0" >"$mine"
+  CLI_FILTERED=1 CLI_HERE=$here bash "$mine"; exit
+fi
+here=$CLI_HERE
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export XDG_CONFIG_HOME=$tmp/config PATH=$tmp/bin:$PATH
 mkdir -p "$tmp/bin"
@@ -171,7 +189,18 @@ s() { "$here/bin/startdgx" "$@"; }
 none_of() { local f; for f; do [ ! -e "$f" ] || return 1; done; }
 present() { local f; for f; do [ -e "$f" ] || return 1; done; }
 same() { [ "$1" = "$2" ]; }
+# The fake terminal launcher, which records how many arguments it got, then each one.
+cat >"$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<'F'
+#!/usr/bin/env bash
+{ echo "$#"; printf '%s\n' "$@"; } >>"$FAKE_LAUNCH"
+F
+chmod +x "$tmp/bin/omarchy-launch-floating-terminal-with-presentation"; export FAKE_LAUNCH=$tmp/launch.log
+cli=$(realpath "$here/bin/startdgx")
+launched() { : >"$FAKE_LAUNCH"; s launch "$@" >/dev/null 2>&1 && cat "$FAKE_LAUNCH"; }
+tf=TensorFold/Qwen3.8-27B-MLX-4bit
+vl=TensorFold/Qwen3.8-VL-27B-MLX-4bit
 
+#@part main
 s status me@dgx >/dev/null 2>&1; ok $((!$?)) "an unknown host is refused"
 s add me@dgx >/dev/null; ok $? "add records the host"
 grep -q '"ram_class": 128' "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "add keeps the host's profile"
@@ -568,13 +597,6 @@ out=$(s logs me@dgx ctl | od -An -c | tr -s ' \n' ' '); ok $? "logs passes on ou
 same "$out" " a ] 5 2 ; c ; Z X Z p b A = = b c \t d \n 357 277 275 e \n "; ok $? "with the controls taken out (C0 and C1, but newline and tab), and bad bytes shown as such"
 out=$(s logs me@dgx ctlerr 2>&1 | od -An -c | tr -s ' \n' ' '); same "$out" " E r r o r : b a d [ 2 J t h i n g \n "; ok $? "and an error line from the host is cleaned too"
 # launch, against a fake terminal launcher that records how many arguments it got, then each one.
-cat >"$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<'F'
-#!/usr/bin/env bash
-{ echo "$#"; printf '%s\n' "$@"; } >>"$FAKE_LAUNCH"
-F
-chmod +x "$tmp/bin/omarchy-launch-floating-terminal-with-presentation"; export FAKE_LAUNCH=$tmp/launch.log
-cli=$(realpath "$here/bin/startdgx")
-launched() { : >"$FAKE_LAUNCH"; s launch "$@" >/dev/null 2>&1 && cat "$FAKE_LAUNCH"; }
 same "$(launched install me@spark)" "$(printf '1\n%s\n' "$cli install me@spark")"; ok $? "launch install opens a terminal running startdgx install"
 same "$(launched install me@spark --replace-engine)" "$(printf '1\n%s\n' "$cli install me@spark --replace-engine")"; ok $? "launch install --replace-engine passes it on"
 same "$(launched uninstall me@spark)" "$(printf '1\n%s\n' "$cli uninstall me@spark")"; ok $? "launch uninstall opens a terminal running startdgx uninstall"
@@ -1001,6 +1023,7 @@ echo "$out" | grep -q 'tag it v0.6.4-dgx.N'; ok $? "release-engine says which re
 g rev-parse -q --verify refs/tags/v0.6.3-dgx.3 >/dev/null; ok $((!$?)) "release-engine creates no tag when it refuses"
 "$rel" v0.6.4-dgx.1 "$fork" >/dev/null 2>&1; ok $? "release-engine accepts the tag named for the upstream release HEAD contains"
 
+#@part discover
 # discover, against a fake tailscale and a fake ssh that answers per peer from $tmp/disco/peers
 disco=$tmp/disco; mkdir -p "$disco/bin" "$disco/peers"
 cat >"$disco/bin/tailscale" <<'F'
@@ -1087,6 +1110,7 @@ echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not 
 ok $? "every peer it didn't hear from in time is unreachable, with why"
 echo "$out" | grep -q "discover's time limit"; ok $? "one it never asked says the limit ran out"
 "$here/bin/startdgx" discover --help | grep -q -- '--limit'; ok $? "discover --help names --limit"
+#@part demo
 # Demo mode: fixtures from demo/, state under $XDG_STATE_HOME/startdgx-demo, and nothing run. Every tool that could
 # reach a machine is a shim here that records its call; the last test fails if demo mode ran any of them.
 mkdir -p "$tmp/demo-bin"; export DEMO_CALLS=$tmp/demo-calls; : >"$DEMO_CALLS"
@@ -1409,8 +1433,6 @@ same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, ta
 drafts=$tmp/drafts
 draft() { STARTDGX_HF_BASE=$here/demo/hf s recipe draft --out "$drafts" "$@"; }
 dd() { local cond=$1; shift; draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
-tf=TensorFold/Qwen3.8-27B-MLX-4bit
-vl=TensorFold/Qwen3.8-VL-27B-MLX-4bit
 out=$(draft $tf); ok $? "recipe draft writes a recipe"
 present "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "named for the repo, owner dropped, slugified, with -tensorfold appended"
 python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
@@ -1570,7 +1592,7 @@ author me@dgx $tf --id author-json --json | python3 -c "import json,sys; d=json.
 author me@dgx $vl --id author-j2 --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['judgement'] == [] and d['agent'] is False))"; ok $? "a vision draft needs no judgement: no agent"
 : >"$FAKE_LAUNCH"; author me@dgx someone/Qwen3.8-27B-gated-MLX-4bit --agent >/dev/null 2>&1; ok $((!$?)) "a refused repo fails"
 same "$(cat "$FAKE_LAUNCH")" ""; ok $? "and starts no agent"
-author me@dgx $tf --id author-here --agent --here >/dev/null 2>&1 </dev/null; same "$(cat "$FAKE_LAUNCH")" ""; ok $? "--here runs the agent in this terminal, not a new one"
+# A stub agent stands in for the real one in every --here case (without it the first one starts whichever agent is on PATH: 16 s, and a real agent).
 mkdir -p "$tmp/agentbin"
 cat >"$tmp/agentbin/stub-agent" <<'F'
 #!/bin/sh
@@ -1578,6 +1600,7 @@ printf '%s\n' "$#" >"$FAKE_AGENT_OUT"
 F
 chmod +x "$tmp/agentbin/stub-agent"
 printf '{"agent_command": "stub-agent"}\n' >"$XDG_CONFIG_HOME/startdgx/config.json"
+: >"$FAKE_LAUNCH"; PATH=$tmp/agentbin:$PATH FAKE_AGENT_OUT=$tmp/agent0.out author me@dgx $tf --id author-here --agent --here >/dev/null 2>&1 </dev/null; same "$(cat "$FAKE_LAUNCH")" ""; ok $? "--here runs the agent in this terminal, not a new one"
 PATH=$tmp/agentbin:$PATH FAKE_AGENT_OUT=$tmp/agent.out author me@dgx $tf --id author-here2 --agent --here >/dev/null 2>&1 </dev/null
 same "$(cat "$tmp/agent.out" 2>/dev/null)" 1; ok $? "the agent gets the brief and context as one argument"
 rm -f "$XDG_CONFIG_HOME/startdgx/config.json"
@@ -1606,4 +1629,5 @@ out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | gr
 out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
 out=$(ds launch fix $a $draft); printf '%s' "$out" | grep -q "Demo: would run 'recipe fix"; ok $? "demo launch fix says what it would run"
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo author never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher"
+#@part end
 echo "1..$n"; exit $bad
