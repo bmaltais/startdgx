@@ -1041,7 +1041,9 @@ echo rekeyed >"$disco/peers/me@rekeyed"
 mkdir -p "$tmp/empty" "$XDG_CONFIG_HOME/startdgx"; echo '{"me@gx10-fresh": {}}' >"$XDG_CONFIG_HOME/startdgx/hosts.json"
 hosts_before=$(cat "$XDG_CONFIG_HOME/startdgx/hosts.json")
 d() { PATH=$disco/bin:$PATH s discover --user me "$@"; }
-dj() { PATH=$disco/bin:$PATH s discover --json --user me --timeout 2 | python3 -c "import json,sys; d={p['name']: p for p in json.load(sys.stdin)}; sys.exit(not ($1))"; }
+# The probes (one peer never answers: 2 s) run once; dj reads that one answer, so each case below does not wait again.
+disco_out=$(PATH=$disco/bin:$PATH s discover --json --user me --timeout 2)
+dj() { printf '%s' "$disco_out" | python3 -c "import json,sys; d={p['name']: p for p in json.load(sys.stdin)}; sys.exit(not ($1))"; }
 : >"$DISCO_LOG"
 out=$(d --json --user me --timeout 2); ok $? "discover --json succeeds with dead and refusing peers"
 echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (isinstance(d, list) and [p["name"] for p in d] == sorted(p["name"] for p in d)))'; ok $? "discover --json is a list sorted by name"
