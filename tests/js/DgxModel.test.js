@@ -1607,6 +1607,26 @@ test("hostMemory: the machine's memory split by the models running on it", () =>
   assert.strictEqual(M.hostMemory({ ram_total_gib: 20, models: status.models }, {}).used, 20)
 })
 
+test("hostMemory: what other programs hold shows as its own segment", () => {
+  const models = { a: { recipe: "a", name: "Alpha", unit: "active", observed: { ram_used_gib: 30 } } }
+  const mem = M.hostMemory({ ram_total_gib: 122, ram_available_gib: 40, models }, {})
+  assert.deepStrictEqual(mem.segments.map(s => s.id), ["a", "other"])
+  assert.strictEqual(mem.other, 52)
+  assert.strictEqual(mem.used, 82)
+  assert.strictEqual(mem.free, 40)
+  assert.strictEqual(M.memoryText(mem), "82 of 122 GiB in use \u00b7 52 GiB by other programs")
+  // Nothing of ours is loaded, yet memory is gone: the bar says so rather than "Nothing loaded".
+  const alone = M.hostMemory({ ram_total_gib: 122, ram_available_gib: 70, models: {} }, {})
+  assert.strictEqual(alone.other, 52)
+  assert.strictEqual(M.memoryText(alone), "52 of 122 GiB in use \u00b7 52 GiB by other programs")
+  // The desktop's own few GiB aren't a segment; an old host without the figure keeps the old bar.
+  assert.strictEqual(M.hostMemory({ ram_total_gib: 122, ram_available_gib: 118, models: {} }, {}).segments.length, 0)
+  assert.strictEqual(M.hostMemory({ ram_total_gib: 122, models }, {}).other, 0)
+  // Available can't be less than zero or more than the total.
+  assert.strictEqual(M.hostMemory({ ram_total_gib: 122, ram_available_gib: 200, models }, {}).other, 0)
+  assert.strictEqual(M.hostMemory({ ram_total_gib: 122, ram_available_gib: -5, models }, {}).used, 122)
+})
+
 test("modelColumns: context in K and memory in GiB, empty where unknown", () => {
   assert.deepStrictEqual(M.modelColumns({ ctx: 262144, observed: { ram_used_gib: 37.8 } }), { ctx: "256K", size: "38 GiB" })
   assert.deepStrictEqual(M.modelColumns({}), { ctx: "", size: "" })

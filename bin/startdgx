@@ -392,6 +392,7 @@ def passthrough(*engine_args):
 
 ENGINE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-dgx\.(\d+)$")
 MANIFEST_MARK = "#manifest"
+MEMORY_MARK = "#memory"
 
 
 def engine_update(host_tag, pinned=None):
@@ -405,19 +406,29 @@ def engine_update(host_tag, pinned=None):
 
 
 def cmd_status(args):
-  # The manifest's engine tag rides on the status call, so a poll stays one ssh.
+  # The manifest's engine tag and the host's MemAvailable ride on the status call, so a poll stays one ssh. MemAvailable
+  # is the number the engine's own fit check uses, and it counts what a process outside the engine (ComfyUI, say) holds.
   host = target(args.host)
   out = ssh_raw(host, f"{ENGINE} status --json; rc=$?; if [ $rc = 0 ]; then echo; echo '{MANIFEST_MARK}'; "
-                      f"grep -m1 '\"tag\"' {MANIFEST} 2>/dev/null; fi; exit $rc", timeout=args.timeout, what="status").stdout
-  status, _, manifest = out.partition(f"\n{MANIFEST_MARK}\n")
+                      f"grep -m1 '\"tag\"' {MANIFEST} 2>/dev/null; echo '{MEMORY_MARK}'; "
+                      f"sed -n 's/^MemAvailable: *\\([0-9]*\\).*/\\1/p' /proc/meminfo 2>/dev/null; fi; exit $rc",
+                timeout=args.timeout, what="status").stdout
+  status, _, rest = out.partition(f"\n{MANIFEST_MARK}\n")
+  manifest, _, memory = rest.partition(f"{MEMORY_MARK}\n")
   tag = re.search(r'"tag":\s*"([^"]*)"', manifest)
   update = engine_update(tag[1]) if tag else None
+  kib = re.match(r"\d+", memory.strip())
   try:
     document = json.loads(status)
   except ValueError:
     document = None
-  if update and isinstance(document, dict):
-    sys.stdout.write(json.dumps({**document, "engine_update": update}) + "\n")
+  extra = {}
+  if update:
+    extra["engine_update"] = update
+  if kib:
+    extra["ram_available_gib"] = round(int(kib[0]) / 1048576, 1)
+  if extra and isinstance(document, dict):
+    sys.stdout.write(json.dumps({**document, **extra}) + "\n")
   else:
     sys.stdout.write(status)
 
@@ -2443,7 +2454,12 @@ def public(row):
 def demo_status(args):
   with demo_state() as state:
     status = demo_host(state, args.host)["status"]
-  print(json.dumps({**status, "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
+  # The demo machine has something else holding 14 GiB (a model loaded through ComfyUI, say), so the bar shows it.
+  held = sum((row.get("_observed") or row.get("observed") or {}).get("ram_used_gib") or 0
+             for row in status["models"].values() if row["unit"] == "active")
+  available = round(max(0.0, status["ram_total_gib"] - held - 14), 1)
+  print(json.dumps({**status, "ram_available_gib": available,
+                    "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
 
 
 def demo_list(args):
