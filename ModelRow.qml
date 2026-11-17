@@ -55,12 +55,46 @@ Rectangle {
   Timer { id: finishTimer; interval: Style.duration(450); onTriggered: row.finishing = "" }
   readonly property var shownBar: row.finishing !== "" && !row.away ? { label: row.finishing, fraction: 1, value: "" } : row.bar
 
-  implicitHeight: body.implicitHeight + Style.spacing.lg * 2
+  // Flat: no card of its own, a hairline between rows; the hover and the keyboard cursor are what lift a row.
+  readonly property bool wide: row.width >= Style.space(600)
+  readonly property string stateWord: row.line.split(" \u00b7 ")[0].replace(/\u00a0/g, " ")
+  readonly property var columns: Model.modelColumns(row.entry)
+  implicitHeight: body.implicitHeight + Style.spacing.md * 2
   radius: Math.max(Style.cornerRadius, Style.space(6))
-  color: Util.alpha(Color.foreground, row.hot ? 0.10 : 0.05)
+  color: row.hot ? Util.alpha(Color.foreground, 0.06) : "transparent"
   border.width: Style.normalBorderWidth
-  border.color: row.current ? Util.alpha(Color.accent, 0.7) : Util.alpha(Color.foreground, 0.06)
+  border.color: row.current ? Util.alpha(Color.accent, 0.7) : "transparent"
   opacity: row.away ? 0.55 : 1
+
+  Rectangle {
+    visible: !row.hot
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.leftMargin: Style.spacing.xxl
+    height: 1
+    color: Util.alpha(Color.foreground, 0.08)
+  }
+
+  // The status dot, beside the words that say the state.
+  component StatusDot: Rectangle {
+    id: dot
+    required property string kind
+    required property bool away
+    Layout.preferredWidth: Style.space(7)
+    Layout.preferredHeight: Style.space(7)
+    radius: width / 2
+    color: dot.kind === "failed" ? Color.urgent
+      : dot.kind === "running" || dot.kind === "loading" || dot.kind === "installing" || dot.kind === "moving" ? Color.accent
+      : Util.alpha(Color.foreground, 0.35)
+    SequentialAnimation on opacity {
+      running: !Style.reduceMotion && !dot.away && (dot.kind === "loading" || dot.kind === "stopping" || dot.kind === "removing" || dot.kind === "installing" || dot.kind === "moving")
+      loops: Animation.Infinite
+      onRunningChanged: if (!running) dot.opacity = 1
+      NumberAnimation { to: 0.25; duration: 500 }
+      NumberAnimation { to: 1; duration: 500 }
+    }
+  }
 
   HoverHandler { id: hover }
   MouseArea {
@@ -90,15 +124,20 @@ Rectangle {
         Layout.fillWidth: true
         spacing: Style.spacing.xxs
 
-        Text {
+        RowLayout {
+         Layout.fillWidth: true
+         spacing: Style.spacing.md
+         Text {
           id: nameText
+          // As wide as the name, so the shared mark sits against it; wraps when the row is narrower.
           Layout.fillWidth: true
+          Layout.maximumWidth: Math.ceil(implicitWidth)
           textFormat: Text.PlainText
           text: row.title
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.body
-          font.bold: true
+          // The machine's name is the bold one; a model's is plain, so the two levels read apart.
           // The name is the person's to read whole (a recipe of yours is named by you): it wraps, never cuts.
           wrapMode: Text.Wrap
           HoverHandler { id: nameHover }
@@ -107,29 +146,30 @@ Rectangle {
             visible: nameHover.hovered && text !== ""
             text: String(row.entry.endpoint || "") !== "" ? String(row.entry.endpoint) + " · model " + String(row.entry.recipe || "") : ""
           }
+         }
+         // Shared on the tailnet: a mark, not a word, so the name keeps the line.
+         TailscaleMark {
+          visible: row.entry.shared === true
+          Layout.alignment: Qt.AlignVCenter
+          iconSize: Style.space(13)
+          color: Color.muted
+          HoverHandler { id: shareHover }
+          PanelToolTip { visible: shareHover.hovered; text: "Shared with your tailnet" }
+         }
+         // Takes the room, so the name's own width limit doesn't shrink the column.
+         Item { Layout.fillWidth: true }
         }
 
         RowLayout {
           Layout.fillWidth: true
+          visible: !row.wide
           spacing: Style.spacing.md
-          Rectangle {
-            id: dot
+          StatusDot {
             // Beside the first line: the words wrap on a narrow row.
             Layout.alignment: Qt.AlignTop
             Layout.topMargin: Math.max(0, (lineMetrics.height - Style.space(7)) / 2)
-            Layout.preferredWidth: Style.space(7)
-            Layout.preferredHeight: Style.space(7)
-            radius: width / 2
-            color: row.kind === "failed" ? Color.urgent
-              : row.kind === "running" || row.kind === "loading" || row.kind === "installing" || row.kind === "moving" ? Color.accent
-              : Util.alpha(Color.foreground, 0.35)
-            SequentialAnimation on opacity {
-              running: !Style.reduceMotion && !row.away && (row.kind === "loading" || row.kind === "stopping" || row.kind === "removing" || row.kind === "installing" || row.kind === "moving")
-              loops: Animation.Infinite
-              onRunningChanged: if (!running) dot.opacity = 1
-              NumberAnimation { to: 0.25; duration: 500 }
-              NumberAnimation { to: 1; duration: 500 }
-            }
+            kind: row.kind
+            away: row.away
           }
           Text {
             id: lineText
@@ -155,7 +195,72 @@ Rectangle {
         }
       }
 
+      // Wide: the facts as columns, so a number sits under the same kind of number on every row.
+      RowLayout {
+        visible: row.wide
+        // A layout fills by default; this one is as wide as its column and no wider.
+        Layout.fillWidth: false
+        Layout.alignment: Qt.AlignVCenter
+        Layout.preferredWidth: Style.space(132)
+        spacing: Style.spacing.md
+        StatusDot { kind: row.kind; away: row.away }
+        Text {
+          id: stateText
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: row.stateWord
+          color: row.kind === "failed" ? Color.urgent : row.kind === "stopped" || row.kind === "doesNotFit" ? Color.muted : Color.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          elide: Text.ElideRight
+          HoverHandler { id: stateHover }
+          PanelToolTip { visible: stateHover.hovered && stateText.truncated; text: row.stateWord }
+        }
+      }
+      Text {
+        visible: row.wide
+        Layout.alignment: Qt.AlignVCenter
+        Layout.preferredWidth: Style.space(48)
+        horizontalAlignment: Text.AlignRight
+        textFormat: Text.PlainText
+        text: row.columns.ctx
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        font.features: { "tnum": 1 }
+        HoverHandler { id: ctxHover }
+        PanelToolTip { visible: ctxHover.hovered && text !== ""; text: "Context size" }
+      }
+      Text {
+        visible: row.wide
+        Layout.alignment: Qt.AlignVCenter
+        Layout.preferredWidth: Style.space(64)
+        horizontalAlignment: Text.AlignRight
+        textFormat: Text.PlainText
+        text: row.columns.size
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        font.features: { "tnum": 1 }
+        HoverHandler { id: sizeHover }
+        PanelToolTip { visible: sizeHover.hovered && text !== ""; text: row.kind === "running" ? "Memory it holds" : "Memory it took when it last ran" }
+      }
+      Text {
+        visible: row.wide
+        Layout.alignment: Qt.AlignVCenter
+        Layout.preferredWidth: Style.space(84)
+        textFormat: Text.PlainText
+        text: Model.locationShort(row.store ? row.location : "")
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
+        HoverHandler { id: whereHover }
+        PanelToolTip { visible: whereHover.hovered && text !== ""; text: Model.locationText(row.store ? row.location : "") }
+      }
+
       // Everything else about the model (sharing, context size, logs, where its files are) is behind the gear.
+      // The gear and the bin appear on the row under the pointer or the cursor (Start and Stop are always there).
       // The three buttons keep their places on every row: one that has nothing to do now is hidden, not taken away,
       // so the others don't move under the pointer and the rows' buttons stay in columns (each is as wide as it is tall,
       // whatever its glyph).
@@ -163,8 +268,10 @@ Rectangle {
         Layout.alignment: Qt.AlignVCenter
         Layout.preferredWidth: implicitHeight
         visible: !row.away
+        opacity: row.hot ? 1 : 0
+        foreground: Color.muted
         iconText: "\uf013"
-        tooltipText: "Settings…  (g)"
+        tooltipText: row.hot ? "Settings…  (g)" : ""
         onClicked: row.settingsRequested()
       }
 
@@ -173,11 +280,11 @@ Rectangle {
         Layout.alignment: Qt.AlignVCenter
         Layout.preferredWidth: implicitHeight
         visible: !row.away
-        opacity: row.removal !== "" ? 1 : 0
-        enabled: row.removal !== ""
+        opacity: row.removal !== "" && row.hot ? 1 : 0
+        enabled: row.removal !== "" && row.hot
         iconText: row.removal === "cancel" ? "\uf00d" : "\uf1f8"
         // No tooltip while it is hidden: one already open would stay, over a button that isn't there.
-        tooltipText: row.removal === "" ? "" : row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
+        tooltipText: row.removal === "" || !row.hot ? "" : row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
         // Quiet: a destructive action is never the loudest thing on the row.
         foreground: Color.muted
         onClicked: row.removeRequested()
@@ -202,7 +309,8 @@ Rectangle {
     // how long that took last time), memory while it runs.
     RowLayout {
       Layout.fillWidth: true
-      visible: row.shownBar !== null && !row.away
+      // A running model's memory is in its Memory column and on the machine's bar, so it has no bar of its own.
+      visible: row.shownBar !== null && !row.away && row.kind !== "running"
       spacing: Style.space(12)
       Text {
         Layout.preferredWidth: Style.space(90)

@@ -44,7 +44,7 @@ ColumnLayout {
   readonly property bool headCurrent: section.cursorKey === section.host
   readonly property string machine: Model.hostName(section.host)
 
-  spacing: Style.spacing.md
+  spacing: Style.spacing.xxs
 
   // The machine's own row.
   Rectangle {
@@ -154,6 +154,14 @@ ColumnLayout {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
         }
+        // The machine's memory, split by the models that hold it: what a Spark runs out of.
+        MemoryBar {
+          Layout.fillWidth: true
+          Layout.leftMargin: headText.indent
+          Layout.topMargin: Style.spacing.md
+          mem: section.loaded && !section.away ? Model.hostMemory(section.hostState.status, section.profile) : null
+          text: Model.memoryText(mem)
+        }
       }
 
       // Update, Install, Logs, Uninstall, Forget and the model store are behind the gear.
@@ -211,7 +219,7 @@ ColumnLayout {
     radius: Math.max(Style.cornerRadius, Style.space(6))
     color: addHover.hovered || addRow.current ? Util.alpha(Color.foreground, 0.06) : "transparent"
     border.width: Style.normalBorderWidth
-    border.color: addRow.current ? Util.alpha(Color.accent, 0.7) : Util.alpha(Color.foreground, 0.10)
+    border.color: addRow.current ? Util.alpha(Color.accent, 0.7) : "transparent"
     onCurrentChanged: if (current) section.revealRequested(addRow)
     HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
     MouseArea {

@@ -294,15 +294,54 @@ function summarize(hostList, hostStates, pending) {
   return s
 }
 
-// The manager's count line, in small capitals: "2 MACHINES · 1 RUNNING · 1 NOT ANSWERING".
+// The manager's count line, in sentence case: "2 machines · 1 running · 1 not answering". Its parts, so the one
+// that needs attention (a failure, a machine not answering) can be drawn apart from the rest.
+function summaryParts(s) {
+  if (s.machines === 0) return [{ text: "No machines added", alert: false }]
+  const parts = [{ text: s.machines + (s.machines === 1 ? " machine" : " machines"), alert: false }]
+  parts.push({ text: s.running > 0 ? s.running + " running" : "nothing running", alert: false })
+  if (s.busy > 0) parts.push({ text: s.busy + " busy", alert: false })
+  if (s.failed > 0) parts.push({ text: s.failed + " failed", alert: true })
+  if (s.offline > 0) parts.push({ text: s.offline + " not answering", alert: true })
+  return parts
+}
+
 function subtitle(s) {
-  if (s.machines === 0) return "NO MACHINES ADDED"
-  const parts = [s.machines + (s.machines === 1 ? " MACHINE" : " MACHINES")]
-  parts.push(s.running > 0 ? s.running + " RUNNING" : "NOTHING RUNNING")
-  if (s.busy > 0) parts.push(s.busy + " BUSY")
-  if (s.failed > 0) parts.push(s.failed + " FAILED")
-  if (s.offline > 0) parts.push(s.offline + " NOT ANSWERING")
-  return parts.join(" · ")
+  return summaryParts(s).map(function (p) { return p.text }).join(" \u00b7 ")
+}
+
+// A machine's memory, the thing a DGX Spark runs out of: { total, used, free, segments: [{ id, name, gib }] } in GiB,
+// one segment per running model (what it holds now), or null while the machine's total is unknown.
+function hostMemory(status, profile) {
+  const total = Number(status && status.ram_total_gib) || 0
+  if (!(total > 0)) return null
+  const segments = []
+  let used = 0
+  const list = modelList(status)
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i]
+    const gib = e.unit === "active" && e.observed ? Number(e.observed.ram_used_gib) || 0 : 0
+    if (gib <= 0) continue
+    segments.push({ id: String(e.recipe), name: String(e.name || e.recipe), gib: gib })
+    used += gib
+  }
+  used = Math.min(used, total)
+  return { total: total, used: used, free: total - used, segments: segments }
+}
+
+// What the memory bar says: "28 of 122 GiB in use", or that nothing is loaded.
+function memoryText(mem) {
+  if (!mem) return ""
+  if (mem.segments.length === 0) return "Nothing loaded \u00b7 " + Math.round(mem.total) + " GiB free"
+  return Math.round(mem.used) + " of " + Math.round(mem.total) + " GiB in use"
+}
+
+// A model's numbers as columns, so rows line up: its context ("256K") and the memory it holds or last held ("31 GiB"),
+// "" for one it doesn't have.
+function modelColumns(entry) {
+  const ctx = Number(entry.ctx) > 0 ? Math.round(Number(entry.ctx) / 1024) + "K" : ""
+  const used = entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
+  return { ctx: ctx, size: used > 0 ? Math.round(used) + " GiB" : "" }
 }
 
 // How often to ask a host for its status: every 2.5 s while the manager is open or a model on it is moving,
@@ -591,6 +630,11 @@ function locationOf(storage, id) {
 }
 
 var LOCATION_WORDS = { nvme: "On NVMe", usb: "On USB", both: "On NVMe and USB", "usb-missing": "USB disk missing", mixed: "Partly on USB" }
+
+// The same, short enough for a column.
+var LOCATION_SHORT = { nvme: "NVMe", usb: "USB", both: "NVMe + USB", "usb-missing": "USB missing", mixed: "Part USB" }
+
+function locationShort(location) { return LOCATION_SHORT[location] || "" }
 
 function locationText(location) { return LOCATION_WORDS[location] || "" }
 
