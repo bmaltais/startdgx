@@ -46,6 +46,27 @@ startdgx never touches the Spark until you run step 5, and step 5 shows its plan
 To undo it all: `startdgx uninstall --dry-run USER@SPARK`, then `startdgx uninstall USER@SPARK` (see Status for the opt-ins).
 Updates: when a newer engine is pinned, the panel offers Update… on the machine (it runs `startdgx install` again).
 
+## Upgrade
+
+Two things upgrade separately: the panel on your desktop, and the engine on each Spark.
+
+1. **The panel (and the CLI that ships with it), on the Omarchy desktop:**
+   ```
+   omarchy plugin update io.github.bmaltais.startdgx --yes
+   ```
+   then restart the shell's view of it: `omarchy-shell io.github.bmaltais.startdgx open` shows the new panel once the
+   shell has reloaded the plugin (log out and in if it doesn't). This works for a plugin added with `omarchy plugin add`.
+   Check the version with `omarchy plugin list`.
+   A copy made from a checkout (`scripts/reload`, how this repo's developer runs it) is a plain copy that
+   `omarchy plugin update` doesn't touch: pull the checkout, `git submodule update --init scripts/devkit`, run
+   `scripts/reload`, then `scripts/reload --check` (it says "in sync" when the copy matches).
+2. **The engine, on each Spark:** a new panel pins a new engine release (`ENGINE_TAG` in `bin/startdgx`). A machine on an
+   older one shows **Update…** in the panel; it opens a terminal for `startdgx install USER@SPARK`, which needs the
+   Spark's `sudo` password. Update the panel first: the engine offer compares the machine's tag with the installed
+   panel's own pin, so a stale panel hides it.
+
+Your models, recipes and settings stay: an update replaces the engine and the plugin's files, not what you added.
+
 ## Status
 
 - [x] `bin/startdgx` SSH control CLI (`add`, `forget`, `hosts`, `status`, `list`, `use`, `start`, `stop`, `share`, `delete`), tests in `tests/cli.sh`
