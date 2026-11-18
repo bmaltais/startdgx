@@ -54,9 +54,12 @@ Two things upgrade separately: the panel on your desktop, and the engine on each
    ```
    omarchy plugin update io.github.bmaltais.startdgx --yes
    ```
-   then restart the shell's view of it: `omarchy-shell io.github.bmaltais.startdgx open` shows the new panel once the
-   shell has reloaded the plugin (log out and in if it doesn't). This works for a plugin added with `omarchy plugin add`.
-   Check the version with `omarchy plugin list`.
+   then restart the shell, which loads the plugin once at start and keeps running the old one until then:
+   `omarchy-restart-shell` (the bar is gone for a few seconds). Open the panel after it:
+   `omarchy-shell io.github.bmaltais.startdgx open`. This works for a plugin added with `omarchy plugin add`; if the
+   update prints "fetch failed" or "cannot fast-forward", the folder is a plain copy or has local changes: remove the
+   plugin and add it again (step 1 of the install).
+   Check it took with `grep 'ENGINE_TAG =' ~/.config/omarchy/plugins/io.github.bmaltais.startdgx/bin/startdgx`.
    A copy made from a checkout (`scripts/reload`, how this repo's developer runs it) is a plain copy that
    `omarchy plugin update` doesn't touch: pull the checkout, `git submodule update --init scripts/devkit`, run
    `scripts/reload`, then `scripts/reload --check` (it says "in sync" when the copy matches).
