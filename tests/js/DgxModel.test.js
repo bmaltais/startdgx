@@ -1667,3 +1667,34 @@ test("hasTitlebar: only a floating window on a floating workspace, with the titl
   assert.strictEqual(M.hasTitlebar("not json", "hyprbars", "StartDGX", "org.quickshell"), false)
   assert.strictEqual(M.hasTitlebar("{}", "hyprbars", "StartDGX", "org.quickshell"), false)
 })
+
+test("parseTfList: the rows of tensorfold list --json, or null for what isn't it", () => {
+  const text = JSON.stringify({ first_look: false, recipes: [
+    { id: "a", name: "A", format: "MLX 4-bit", estimate_gb: 24, repo: "o/a", draftable: true, reason: "", status: "new" },
+    { id: "b", name: "B", format: "NVFP4", estimate_gb: null, repo: null, draftable: false, reason: "NVFP4 needs a runtime startdgx doesn't pin", status: "bogus" }] })
+  const l = M.parseTfList(text)
+  assert.strictEqual(l.firstLook, false)
+  assert.deepStrictEqual(l.rows.map(r => [r.id, r.estimate, r.draftable, r.status]), [["a", 24, true, "new"], ["b", 0, false, ""]])
+  assert.strictEqual(M.parseTfList("nope"), null)
+  assert.strictEqual(M.parseTfList(JSON.stringify({ recipes: [{ name: "x" }] })), null)
+  assert.strictEqual(M.parseTfList(JSON.stringify({ recipes: [] })).rows.length, 0)
+})
+
+test("tensorfold commands: --update saves the look, and the entry comes after -- so a dash can't be an option", () => {
+  assert.deepStrictEqual(M.tfListCommand(false), ["tensorfold", "list", "--json"])
+  assert.deepStrictEqual(M.tfListCommand(true), ["tensorfold", "list", "--json", "--update"])
+  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "-x"), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "-x"])
+})
+
+test("tfRowText, tfRowNote and tfSummary: an estimate is said to be one; the reason and the counts are plain", () => {
+  assert.strictEqual(M.tfRowText({ format: "MLX 4-bit", estimate: 24 }), "MLX 4-bit \u00b7 24 GB estimated by TensorFold")
+  assert.strictEqual(M.tfRowText({ format: "", estimate: 0 }), "no memory estimate")
+  assert.strictEqual(M.tfRowNote({ draftable: true, reason: "" }), "")
+  assert.strictEqual(M.tfRowNote({ draftable: false, reason: "why" }), "why")
+  assert.strictEqual(M.tfRowNote({ draftable: false, reason: "" }), "Can't be drafted")
+  const row = (status) => ({ status: status })
+  assert.strictEqual(M.tfSummary(null), "")
+  assert.strictEqual(M.tfSummary({ firstLook: true, rows: [row("")] }), "1 RECIPE FOR ONE DGX SPARK \u00b7 NO EARLIER LOOK SAVED")
+  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("new"), row("changed"), row("")] }), "3 RECIPES FOR ONE DGX SPARK \u00b7 2 NEW OR CHANGED")
+  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("")] }), "1 RECIPE FOR ONE DGX SPARK \u00b7 NOTHING NEW")
+})
