@@ -111,6 +111,10 @@ test("modelFacts: context, and the memory a stopped model takes once running", (
   assert.strictEqual(M.modelFacts(row({ unit: "active" })), "128K context", "the meter shows a running model's memory")
   assert.strictEqual(M.modelFacts(row({ unit: "inactive", observed: null, ctx: 262144 })), "256K context")
   assert.strictEqual(M.modelFacts(row({ unit: "installing", ctx: null, observed: null })), "")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "image", ctx: null })), "Image model · 28 GiB", "an image model says so and has no context")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "video", ctx: null, observed: null })), "Video model")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "music", ctx: null, observed: null })), "Music model")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "text" })), "128K context · 28 GiB")
 })
 
 const profile = { platform: "aarch64-gb10", ram_gib: 121.62, ram_class: 128,
@@ -1374,6 +1378,11 @@ test("hostChange: what a click in the machine's panel asks for", () => {
   assert.deepStrictEqual(M.hostChange(h, "folder", "", storeOf(null)), { action: null }, "an emptied box asks nothing")
 })
 
+test("contextAction: a text model's context can be sized, an image model has none", () => {
+  assert.strictEqual(M.contextAction(row({ unit: "inactive" }), ""), "context")
+  assert.strictEqual(M.contextAction(row({ unit: "inactive", kind: "image" }), ""), null)
+})
+
 test("modelPages: share, logs, context sizes and where the files are", () => {
   const entry = row({ unit: "inactive", shared: false, ctx: 131072 })
   const choices = M.contextChoices([{ ctx: 131072, peak_ram_gib: 40, source: "measured" }, { ctx: 262144, peak_ram_gib: 200, source: "measured" }], 131072, 121.6)
@@ -1386,6 +1395,8 @@ test("modelPages: share, logs, context sizes and where the files are", () => {
   const s = M.modelPages(Object.assign({}, c, { store: { path: "/m/u/x", present: true }, location: "nvme" }))
   assert.deepStrictEqual(keysOf(s), ["General:share,logs", "Context:ctx", "Storage:where,move-usb"])
   assert.strictEqual(s[2].fields[0].hint, "On NVMe")
+  assert.deepStrictEqual(keysOf(M.modelPages(Object.assign({}, c, { entry: row({ unit: "inactive", shared: false, kind: "image", ctx: null }) }))), ["General:share,logs"],
+    "an image, video or music model has no context to size")
   assert.strictEqual(s[2].fields[1].label, "Move to USB")
   const running = M.modelPages(Object.assign({}, c, { entry: row({ unit: "active" }), store: { path: "/m/u/x", present: true }, location: "nvme" }))
   assert.deepStrictEqual(keysOf(running)[2], "Storage:where", "a running model can't be moved")
