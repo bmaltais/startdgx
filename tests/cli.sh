@@ -1769,7 +1769,7 @@ esac
 F
   chmod +x "$1/dgx-comfyui.sh"
 }
-comfy_up() { ( cd "$home/dgx-comfyui/ComfyUI" && exec python3 -c 'import time; time.sleep(120)' main.py ) >/dev/null 2>&1 </dev/null & echo $! >"$tmp/comfy.pid"; sleep 0.5; }
+comfy_up() { ( cd "$home/dgx-comfyui/ComfyUI" && exec python3 -c 'import time; time.sleep(120)' main.py --listen 0.0.0.0 --port 8188 ) >/dev/null 2>&1 </dev/null & echo $! >"$tmp/comfy.pid"; sleep 0.5; }
 fake_tool "$home/dgx-comfyui"; fake_tool "$tmp/usb/dgx-comfyui"
 mkdir -p "$home/dgx-comfyui/ComfyUI" "$tmp/usb/dgx-comfyui/ComfyUI"; : >"$home/dgx-comfyui/ComfyUI/main.py"; : >"$tmp/usb/dgx-comfyui/ComfyUI/main.py"
 # one with a lean tool checkout (no lib/jsonout.py): too old to read
