@@ -481,7 +481,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (k === "u") return { type: "uninstall", host: row.host }
   if (k === "f") return { type: "forget", host: row.host }
   if (away) return null
-  if (k === "g") return row.kind === "model" ? { type: "modelSettings", host: row.host, id: row.id } : { type: "hostSettings", host: row.host }
+  if (k === "g") return row.kind === "model" ? { type: "modelSettings", host: row.host, id: row.id } : row.kind === "comfy" ? { type: "comfySettings", host: row.host, path: row.id } : { type: "hostSettings", host: row.host }
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "enter" && row.kind === "comfyfind") return { type: "findComfy", host: row.host }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
@@ -1542,16 +1542,23 @@ function comfyCommand(host, job) {
   case "start": return ["comfyui", "start", host, "--dir", job.path, "--timeout", "120"]
   case "stop": return ["comfyui", "stop", host, "--dir", job.path, "--timeout", "120"]
   case "adopt": return ["comfyui", "adopt", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "60"])
+  // `autostart on` runs it as a background service and starts it now; `off` removes the service, which stops it.
+  case "autostart-on": return ["comfyui", "autostart", host, "on", "--dir", job.path, "--timeout", "120"]
+  case "autostart-off": return ["comfyui", "autostart", host, "off", "--dir", job.path, "--timeout", "120"]
+  case "forget": return ["comfyui", "forget", host, "--dir", job.path].concat(job.stopService ? ["--stop-service"] : [], ["--timeout", "60"])
   }
   return null
 }
 
-// The marks of a machine's ComfyUI actions, "host#comfy/path" -> start | stop | adopt: the ones running or waiting (`jobs`,
+// What a ComfyUI action shows on its row: the service switch starts or stops it, as Start and Stop do.
+function comfyMark(kind) { return kind === "autostart-on" ? "start" : kind === "autostart-off" ? "stop" : kind }
+
+// The marks of a machine's ComfyUI actions, "host#comfy/path" -> start | stop | adopt | forget: the ones running or waiting (`jobs`,
 // [{ kind, path }]), and a start or stop that has finished until the status poll shows it took (the process takes seconds to
 // show or go), at most 30 s (`settling`, [{ kind, path, until }]). { marks, settling }, the settling ones still to wait for.
 function comfyMarks(host, jobs, settling, status, now) {
   const marks = {}
-  for (let i = 0; i < jobs.length; i++) if (!(comfyKey(host, jobs[i].path) in marks)) marks[comfyKey(host, jobs[i].path)] = jobs[i].kind
+  for (let i = 0; i < jobs.length; i++) if (!(comfyKey(host, jobs[i].path) in marks)) marks[comfyKey(host, jobs[i].path)] = comfyMark(jobs[i].kind)
   const running = comfyRunning(status)
   const keep = []
   for (let i = 0; i < settling.length; i++) {
@@ -1582,4 +1589,66 @@ function comfyFindRows(installs) {
     return { path: String(i.path), name: row.name, text: bits.join(" \u00b7 "), managed: !!i.managed,
              offer: i.kind === "dgx-comfyui" && !i.managed && i.present !== false ? "adopt" : "" }
   })
+}
+
+// ---- a ComfyUI install's settings window -----------------------------------------------------------------------
+
+// `comfyui status --json`: { install, status, too_old, running_elsewhere, job, update } or null. `status` is the install's own
+// `dgx-comfyui.sh status --json` (null for one too old to speak it).
+function parseComfyStatus(text) {
+  const parsed = parseJson(text)
+  return isPlainObject(parsed) && isPlainObject(parsed.install) ? parsed : null
+}
+
+// Where ComfyUI is reached from another machine, or "" when it listens on the machine only (127.0.0.1) or isn't known.
+function comfyUrl(host, status) {
+  if (!status || !(Number(status.port) > 0)) return ""
+  const bind = String(status.bind || "")
+  if (bind === "127.0.0.1" || bind === "localhost" || bind === "::1") return ""
+  return "http://" + hostName(host) + ":" + Number(status.port)
+}
+
+// The pages of an install's window. `c`: { host, info (its comfyRow), answer (comfyStatus, or null while it is read), error, pending }.
+function comfyPages(c) {
+  const info = c.info
+  const st = c.answer && c.answer.status ? c.answer.status : null
+  const url = comfyUrl(c.host, st)
+  const running = info.state === "running"
+  const busy = String(c.pending || "") !== ""
+  const general = []
+  general.push({ key: "state", type: "info", label: "Status", hint: c.error ? c.error
+    : !c.answer ? "Reading…"
+    : running ? "Running" + (info.gib > 0 ? " · " + Math.round(info.gib) + " GiB" : "") + (st && Number(st.port) > 0 ? " · port " + Number(st.port) : "")
+    : info.note !== "" ? info.note : "Stopped" })
+  const openReason = !running ? "Start it first." : url === "" ? "It listens on the machine itself (" + String(st ? st.bind : "") + "); open it there, or set it to listen on the network." : ""
+  general.push({ key: "open", type: "action", label: "Open ComfyUI", button: "Open", disabled: openReason !== "",
+    hint: openReason !== "" ? openReason : url })
+  general.push({ key: "service", type: "bool", label: "Keep running in the background", disabled: busy || info.state === "unfinished" || info.state === "missing" || info.state === "unsupported" || !!(c.answer && c.answer.too_old),
+    hint: "Runs ComfyUI as a service that starts when the machine boots. Turning it on starts it now; turning it off stops it." })
+  const facts = []
+  facts.push({ key: "folder", type: "info", label: "Folder", hint: info.path })
+  if (info.version) facts.push({ key: "tool", type: "info", label: "dgx-comfyui", hint: info.version + (c.answer && c.answer.update ? " · " + c.answer.update.text : "") })
+  if (st && st.comfy && st.comfy.version) facts.push({ key: "comfy", type: "info", label: "ComfyUI", hint: String(st.comfy.version) + (st.comfy.newer_release ? " · " + st.comfy.newer_release + " is out" : "") })
+  if (st && Number(st.models_bytes) > 0) facts.push({ key: "models", type: "info", label: "Models", hint: sizeText(Number(st.models_bytes)) + (Number(st.disk_free_bytes) > 0 ? " · " + sizeText(Number(st.disk_free_bytes)) + " free" : "") })
+  const manage = [{ key: "forget", type: "action", label: "Forget this install", button: "Forget…", danger: true, disabled: busy,
+    hint: "startdgx stops managing it. The folder, its models and workflows stay as they are, and Find existing ComfyUI… can adopt it again." }]
+  return [{ title: "General", fields: general }, { title: "About", fields: facts }, { title: "Manage", fields: manage }]
+}
+
+function comfyValues(answer) {
+  const st = answer && answer.status ? answer.status : null
+  return { service: !!(st && st.service && st.service.enabled === "enabled") }
+}
+
+// What a click in an install's window asks for: an action for the service, or null.
+function comfyChange(host, info, answer, key, value) {
+  switch (key) {
+  case "open": {
+    const url = comfyUrl(host, answer && answer.status ? answer.status : null)
+    return url === "" ? null : { type: "comfyOpen", url: url }
+  }
+  case "service": return { type: "comfyToggle", host: host, path: info.path, kind: value ? "autostart-on" : "autostart-off" }
+  case "forget": return { type: "comfyForget", host: host, path: info.path }
+  }
+  return null
 }

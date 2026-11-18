@@ -60,9 +60,10 @@ Item {
     poller.owner.setMarks(poller.host, Object.assign({}, Model.marks(poller.queue, poller.done), c.marks))
   }
 
-  // A click on an install: kind is start, stop or adopt (the label names an adopted one in the panel).
-  function runComfy(kind, path, label) {
-    poller.comfyJobs = poller.comfyJobs.concat([{ kind: kind, path: path, label: label || "" }])
+  // A click on an install: kind is start, stop, autostart-on, autostart-off, adopt (the label names an adopted one in the panel)
+  // or forget (`stopService` also removes its background service).
+  function runComfy(kind, path, label, stopService) {
+    poller.comfyJobs = poller.comfyJobs.concat([{ kind: kind, path: path, label: label || "", stopService: !!stopService }])
     poller.publish()
     poller.launchComfy()
   }
@@ -206,9 +207,10 @@ Item {
       else {
         poller.owner.notice = Model.actionNotice("comfyui", comfyActOut.text)
         // A started or stopped ComfyUI shows in the status seconds later: its mark stays until it does.
-        if (job.kind === "start" || job.kind === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: job.kind, path: job.path, until: Date.now() + 30000 }])
-        if (job.kind === "adopt") poller.owner.comfyAdopted(poller.host)
+        const shown = Model.comfyMark(job.kind)
+        if (shown === "start" || shown === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: shown, path: job.path, until: Date.now() + 30000 }])
       }
+      poller.owner.comfyActed(poller.host, job.kind, job.path)
       poller.publish()
       // What the action changed: the status (running), and the list (adopted).
       poller.poll()

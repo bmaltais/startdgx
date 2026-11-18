@@ -77,6 +77,7 @@ Item {
     if (root.card === "add") core.cancelDiscover()
     if (root.card === "find") core.cancelHf()
     if (root.card === "findComfy") core.cancelComfyFind()
+    if (root.card === "comfySettings") core.cancelComfyStatus()
     root.card = ""
   }
   function close() {
@@ -172,6 +173,23 @@ Item {
     root.card = "findComfy"
     core.findComfy(host)
   }
+  // An install's settings window (Open, the service switch, facts, Forget), and the question before Forget. `cardModel` holds the folder.
+  function showComfySettings(host, path, page) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardModel = path
+    root.cardPage = page || ""
+    root.card = "comfySettings"
+    core.comfyStatusFor(host, path)
+  }
+  function showComfyForget(host, path) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.cardModel = path
+    root.card = "comfyForget"
+  }
   function showAddRecipe(host, path) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -239,6 +257,10 @@ Item {
     case "findComfy": root.showFindComfy(action.host); break
     case "comfyToggle": core.comfyAct(action.host, action.kind, action.path); break
     case "comfyAdopt": core.comfyAct(action.host, "adopt", action.path, action.label || ""); break
+    case "comfySettings": root.showComfySettings(action.host, action.path, action.page); break
+    case "comfyForget": root.showComfyForget(action.host, action.path); break
+    case "comfyForgetNow": core.comfyAct(action.host, "forget", action.path, "", !!action.stopService); root.closeCard(); break
+    case "comfyOpen": Qt.openUrlExternally(action.url); break
     case "use": root.setUp(action.host, action.recipe, false); break
     case "setupYours": root.showRecipeRun("setup", action.host, action.recipe, Number(action.recipe.context)); break
     case "setupNow": root.setUp(action.host, action.recipe, true); break
@@ -400,7 +422,7 @@ Item {
       visible: root.card !== ""
       anchors.centerIn: frame
       // The settings windows are wider than the other cards: pages on the left, a page on the right.
-      width: Math.min(Style.space(root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" ? 760 : 560), win.width - Style.space(40))
+      width: Math.min(Style.space(root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? 760 : 560), win.width - Style.space(40))
       height: Math.min(Math.max(Style.space(260), cardLoader.item ? (cardLoader.item as Item).implicitHeight : 0), win.height - Style.space(80))
       radius: root.radius
       color: Color.menu.background
@@ -417,18 +439,19 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" ? settingsCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
-          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : root.card === "findComfy" ? findComfyCard : addCard
+          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
-      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : "model"; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
+      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : cardLoader.owner.card === "comfySettings" ? "comfy" : "model"; path: cardLoader.owner.cardModel; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }
       Component { id: findCard; FindView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
+      Component { id: comfyForgetCard; ComfyForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardModel } }
       Component { id: findComfyCard; FindComfyView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeRunCard; RecipeRunView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; mode: cardLoader.owner.cardMode; recipe: cardLoader.owner.cardRecipe; ctx: cardLoader.owner.cardCtx } }
       Component { id: removeCard; RemoveView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel } }

@@ -171,9 +171,9 @@ Item {
     service.storageErrors = errors
   }
   // Start or stop an install, or adopt one the Find card found (the label is optional).
-  function comfyAct(host, kind, path, label) {
+  function comfyAct(host, kind, path, label, stopService) {
     const p = service.poller(host)
-    if (p) p.runComfy(kind, path, label)
+    if (p) p.runComfy(kind, path, label, stopService)
   }
   // The Start or Stop an install's button and key offer (DgxModel.comfyToggle), for the cursor's keys.
   function comfyToggle(host, path) {
@@ -190,10 +190,23 @@ Item {
     comfyFindQuery.ask(host, [service.script, "comfyui", "discover", host, "--json", "--timeout", "90"])
   }
   function cancelComfyFind() { comfyFindQuery.cancel() }
-  // An adopted install: the list has it now, and the Find card, if it is open on this machine, shows it as managed.
-  function comfyAdopted(host) {
+  // An action on an install ended (done or not): the Find card, if it is open on this machine, shows what changed, and so does the
+  // install's window.
+  function comfyActed(host, kind, path) {
     if (service.comfyFindHost === host && service.comfyFound !== null) service.findComfy(host)
+    if (service.comfyStatusKey === host + "\n" + path) service.comfyStatusFor(host, path)
   }
+  // An install's window: `comfyui status --json` for it (the answer is for comfyStatusKey, until another is asked).
+  property string comfyStatusKey: ""
+  property var comfyStatus: null
+  property string comfyStatusError: ""
+  function comfyStatusFor(host, path) {
+    const key = host + "\n" + path
+    if (service.comfyStatusKey !== key) { service.comfyStatus = null; service.comfyStatusKey = key }
+    service.comfyStatusError = ""
+    comfyStatusQuery.ask(key, [service.script, "comfyui", "status", host, "--dir", path, "--json", "--timeout", "90"])
+  }
+  function cancelComfyStatus() { comfyStatusQuery.cancel() }
   function comfyRead(host, installs) {
     if (!installs) return
     const next = Object.assign({}, service.comfyui)
@@ -609,6 +622,16 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.recipes = list
       else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(err, "The machine's catalog could not be read")
+    }
+  }
+
+  Query {
+    id: comfyStatusQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.comfyStatusKey) return
+      const answer = code === 0 ? Model.parseComfyStatus(out) : null
+      if (answer) service.comfyStatus = answer
+      else service.comfyStatusError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }
 
