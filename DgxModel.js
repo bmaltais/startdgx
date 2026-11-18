@@ -1649,15 +1649,17 @@ function comfyPages(c) {
   facts.push({ key: "folder", type: "info", label: "Folder", hint: info.path })
   const up = comfyUpdatePlan(info, c.answer, c.pending)
   if (info.version) facts.push({ key: "tool", type: "info", label: "dgx-comfyui", hint: info.version + (c.answer && c.answer.update ? " \u00b7 " + c.answer.update.from + " \u2192 " + c.answer.update.to + " is available" : "") })
-  if (up.target !== "" || up.hint !== "") facts.push({ key: "update", type: "action", label: "Update dgx-comfyui", button: "Update", disabled: up.action === "", hint: up.hint })
+  // Update is something to do, so it is on Manage with Forget; About only says things.
+  const manage = []
+  if (up.target !== "" || up.hint !== "") manage.push({ key: "update", type: "action", label: "Update dgx-comfyui", button: "Update", disabled: up.action === "", hint: up.hint })
   if (st && st.comfy && st.comfy.version) facts.push({ key: "comfy", type: "info", label: "ComfyUI", hint: String(st.comfy.version) + (st.comfy.newer_release ? " \u00b7 " + st.comfy.newer_release + " is out" : "") })
   if (st && st.comfy && st.comfy.newer_release) {
     const upc = comfyUpdatePlan(info, c.answer, c.pending, true)
-    facts.push({ key: "update-comfyui", type: "action", label: "Update ComfyUI", button: "Update", disabled: upc.action === "", hint: upc.action === "" ? upc.hint : st.comfy.newer_release + " is out. It updates ComfyUI and its nodes, and takes a few minutes." })
+    manage.push({ key: "update-comfyui", type: "action", label: "Update ComfyUI", button: "Update", disabled: upc.action === "", hint: upc.action === "" ? upc.hint : st.comfy.newer_release + " is out. It updates ComfyUI and its nodes, and takes a few minutes." })
   }
   if (st && Number(st.models_bytes) > 0) facts.push({ key: "models", type: "info", label: "Models", hint: sizeText(Number(st.models_bytes)) + (Number(st.disk_free_bytes) > 0 ? " · " + sizeText(Number(st.disk_free_bytes)) + " free" : "") })
-  const manage = [{ key: "forget", type: "action", label: "Forget this install", button: "Forget…", danger: true, disabled: busy,
-    hint: "startdgx stops managing it. The folder, its models and workflows stay as they are, and Find existing ComfyUI… can adopt it again." }]
+  manage.push({ key: "forget", type: "action", label: "Forget this install", button: "Forget\u2026", danger: true, disabled: busy,
+    hint: "startdgx stops managing it. The folder, its models and workflows stay as they are, and Find existing ComfyUI\u2026 can adopt it again." })
   const pages = [{ title: "General", fields: general }]
   if (c.workflows) pages.push({ title: "Workflows", fields: comfyWorkflowFields(c) })
   if (c.health) pages.push({ title: "Health", fields: comfyHealthFields(c) })
@@ -1672,8 +1674,8 @@ function comfyValues(answer) {
 
 // What Update does for an install, and why not: { action: "update" | "", target, hint }. `answer` is `comfyui status` (its `update`
 // is { from, to } for a release older than the pin, `pinned` the release startdgx moves to, `too_old` for an install that can't
-// speak JSON). Only a clean checkout on a release tag moves (the CLI's rule): a branch may be one somebody works in, so startdgx
-// gives the git commands instead. `comfy` is the ComfyUI update, which has the same conditions.
+// speak JSON). Only a clean checkout moves (the CLI's rule): uncommitted changes or unpushed commits are somebody's work, so startdgx
+// gives the git commands instead. One on a branch moves too: the branch stays, and the hint says how to go back. `comfy` is the ComfyUI update, which has the same conditions.
 function comfyUpdatePlan(info, answer, pending, comfy) {
   const none = function (hint) { return { action: "", target: "", hint: hint } }
   if (!answer) return none("")
@@ -1686,9 +1688,11 @@ function comfyUpdatePlan(info, answer, pending, comfy) {
   if (info.state === "unfinished" || info.state === "missing" || info.state === "unsupported") return none("")
   if (info.state === "running") return { action: "", target: target, hint: "Stop it first: an update changes what it runs." }
   const t = info.tool || {}
-  const why = t.dirty ? "It has uncommitted changes." : t.unpushed > 0 ? "It has commits that aren't pushed." : t.branch ? "It is on the branch " + t.branch + ", which may be a checkout you work in." : ""
+  const why = t.dirty ? "It has uncommitted changes." : t.unpushed > 0 ? "It has commits that aren't pushed." : ""
   if (why !== "") return { action: "", target: target, hint: why + " startdgx won't move it. To move it yourself: " + git }
-  return { action: comfy ? "update-comfyui" : "update", target: target, hint: comfy ? "" : (answer.update ? answer.update.from + " \u2192 " + answer.update.to + ". " : "") + "It updates dgx-comfyui and runs its install again, which takes a few minutes. Your models and workflows stay." }
+  // A clean checkout on a branch moves too (the branch stays); the hint says how to go back.
+  const back = t.branch ? " It is on the branch " + t.branch + ": it moves to " + where + " and stays there; git -C " + info.path + " checkout " + t.branch + " goes back." : ""
+  return { action: comfy ? "update-comfyui" : "update", target: target, hint: comfy ? "" : (answer.update ? answer.update.from + " \u2192 " + answer.update.to + ". " : "") + "It updates dgx-comfyui and runs its install again, which takes a few minutes. Your models and workflows stay." + back }
 }
 
 // What a click in an install's window asks for: an action for the service, or null.

@@ -345,14 +345,21 @@ test("comfyUpdatePlan: a clean checkout on an older release can update, and says
   assert.match(plan.hint, /v0\.0\.5 → v0\.1\.0\. It updates dgx-comfyui/)
 })
 
-test("comfyUpdatePlan: a branch, a changed or unpushed checkout is not moved: the git commands are given", () => {
-  for (const [tool, words] of [[{ tag: "", branch: "main" }, /on the branch main/], [{ dirty: true }, /uncommitted changes/], [{ unpushed: 2 }, /aren't pushed/]]) {
+test("comfyUpdatePlan: a changed or unpushed checkout is not moved: the git commands are given", () => {
+  for (const [tool, words] of [[{ dirty: true }, /uncommitted changes/], [{ unpushed: 2 }, /aren't pushed/], [{ tag: "", branch: "main", dirty: true }, /uncommitted changes/]]) {
     const info = M.comfyRow(oldTool(tool), {})
     const plan = M.comfyUpdatePlan(info, offer({ update: null }), "")
     assert.strictEqual(plan.action, "")
     assert.match(plan.hint, words)
     assert.match(plan.hint, /startdgx won't move it\. To move it yourself: git -C \/home\/u\/dgx-comfyui fetch --tags && git -C \/home\/u\/dgx-comfyui checkout v0\.1\.0$/)
   }
+})
+
+test("comfyUpdatePlan: a clean checkout on a branch moves, and the hint says how to go back", () => {
+  const plan = M.comfyUpdatePlan(M.comfyRow(oldTool({ tag: "", branch: "main" }), {}), offer({ update: null }), "")
+  assert.deepStrictEqual([plan.action, plan.target], ["update", "v0.1.0"])
+  assert.match(plan.hint, /It is on the branch main: it moves to v0\.1\.0 and stays there; git -C \/home\/u\/dgx-comfyui checkout main goes back\./)
+  assert.doesNotMatch(M.comfyUpdatePlan(M.comfyRow(oldTool({}), {}), offer({}), "").hint, /goes back/, "a tag has no branch to go back to")
 })
 
 test("comfyUpdatePlan: nothing to update, a job running, or running", () => {
@@ -371,7 +378,8 @@ test("comfyUpdatePlan and comfyChange: the ComfyUI update has the same condition
   const info = M.comfyRow(oldTool({}), {})
   const ans = offer({ status: { comfy: { version: "v1", newer_release: "v2" } } })
   assert.strictEqual(M.comfyUpdatePlan(info, ans, "", true).action, "update-comfyui")
-  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({ branch: "main", tag: "" }), {}), ans, "", true).action, "")
+  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({ branch: "main", tag: "" }), {}), ans, "", true).action, "update-comfyui", "a clean branch moves too")
+  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({ dirty: true }), {}), ans, "", true).action, "")
   assert.deepStrictEqual(M.comfyChange("h", info, ans, "update", true), { type: "comfyToggle", host: "h", path: "/home/u/dgx-comfyui", kind: "update" })
   assert.strictEqual(M.comfyChange("h", info, ans, "update-comfyui", true).kind, "update-comfyui")
   assert.strictEqual(M.comfyChange("h", M.comfyRow(oldTool({ dirty: true }), {}), ans, "update", true), null)
@@ -385,7 +393,7 @@ test("comfyPages: the About page offers Update only when there is something to u
   const info = M.comfyRow(oldTool({}), {})
   const old = M.comfyPages({ host: "h", info: info, answer: offer({}), error: "", pending: "" })
   assert.strictEqual(field(old, "update").disabled, false)
-  const blocked = M.comfyPages({ host: "h", info: M.comfyRow(oldTool({ branch: "main", tag: "" }), {}), answer: offer({ update: null }), error: "", pending: "" })
+  const blocked = M.comfyPages({ host: "h", info: M.comfyRow(oldTool({ dirty: true }), {}), answer: offer({ update: null }), error: "", pending: "" })
   assert.strictEqual(field(blocked, "update").disabled, true)
   assert.match(field(blocked, "update").hint, /git -C/)
   const current = M.comfyPages({ host: "h", info: M.comfyRow(install({}), {}), answer: { update: null, pinned: "v0.1.0", too_old: false, status: { comfy: {} } }, error: "", pending: "" })
@@ -475,4 +483,13 @@ test("comfyListPartial: a look that was cut short says so", () => {
   assert.strictEqual(M.comfyListPartial(JSON.stringify({ installs: [], partial: false })), false)
   assert.strictEqual(M.comfyListPartial(JSON.stringify({ installs: [] })), false)
   assert.strictEqual(M.comfyListPartial("x"), false)
+})
+
+test("comfyPages: the Update buttons are on Manage with Forget; About only says things", () => {
+  const info = M.comfyRow(oldTool({}), {})
+  const ans = offer({ status: { comfy: { version: "v1", newer_release: "v2" } } })
+  const pages = M.comfyPages({ host: "h", info: info, answer: ans, error: "", pending: "" })
+  const keys = (title) => pages.find((p) => p.title === title).fields.map((f) => f.key)
+  assert.deepStrictEqual(keys("Manage"), ["update", "update-comfyui", "forget"])
+  assert.ok(M.comfyPages({ host: "h", info: info, answer: ans, error: "", pending: "" }).find((p) => p.title === "About").fields.every((f) => f.type === "info"), "About has nothing to click")
 })
