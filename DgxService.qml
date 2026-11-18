@@ -502,7 +502,7 @@ Item {
   // doesn't end it.
   function draftRecipe(host, repo) { service.draftWith(host, repo, Model.draftCommand(host, repo)) }
   // The same for an entry of TensorFold's list: its CLI step names the entry, the rest is the Add recipe path.
-  function draftTensorfold(host, row) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id)) }
+  function draftTensorfold(host, row, picked) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings)) }
   function draftWith(host, label, command) {
     if (service.recipeBusy) return
     service.draftRepo = label
