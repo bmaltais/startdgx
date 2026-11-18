@@ -3138,8 +3138,6 @@ def demo_comfyui(args):
           raise Error(f"{item['path']} has uncommitted changes; commit or stash them, or move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
         if tool["unpushed"]:
           raise Error(f"{item['path']} has commits that aren't pushed; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
-        if tool["branch"]:
-          raise Error(f"{item['path']} is on the branch {tool['branch']}, which may be a checkout you work in; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
         if item.get("state") == "up":
           raise Error(f"ComfyUI in {item['path']} is running; stop it first")
         demo_comfyui_remember(item, job)
@@ -3580,15 +3578,14 @@ elif mode == "update":
     fail(path + " has uncommitted changes; commit or stash them, or move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
   if t["unpushed"]:
     fail(path + " has commits that aren't pushed; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
-  if t["branch"]:
-    fail(path + " is on the branch " + t["branch"] + ", which may be a checkout you work in; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
+  # A clean checkout on a branch moves too: the branch stays where it is, and the record says which one it was on (git checkout BRANCH goes back).
   if path in running_roots():
     fail("ComfyUI in " + path + " is running; stop it first")
   with locked():
     installs = load()
     for r in installs:
       if os.path.realpath(r["path"]) == path:
-        r["previous_ref"] = t["tag"] or t["commit"]
+        r["previous_ref"] = t["branch"] or t["tag"] or t["commit"]
         r["tool_ref"] = ref
     save(installs)
   print(json.dumps(start_job(path, JOB_UPDATE, path, ref, "comfyui" if comfy else "tool")))

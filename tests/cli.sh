@@ -1889,11 +1889,17 @@ rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 
 # update: only a clean checkout moves (the fake tool written above is committed first, so the checkout starts clean)
 git -C "$home/dgx-comfyui" add -A; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qm faketool
-s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "is on the branch main, which may be a checkout you work in; move it yourself: git -C $home/dgx-comfyui fetch --tags"; ok $? "update refuses a checkout on a branch, however clean, and gives the git commands"
 git -C "$home/dgx-comfyui" branch -q -u main 2>/dev/null; git -C "$home/dgx-comfyui" branch --set-upstream-to=main main >/dev/null 2>&1
-s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "is on the branch main"; ok $? "also one that tracks an upstream"
 echo x >>"$home/dgx-comfyui/lib/jsonout.py"; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qam wip 2>/dev/null; echo y >>"$home/dgx-comfyui/lib/jsonout.py"
-s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "uncommitted changes"; ok $? "update refuses uncommitted changes"
+s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "uncommitted changes"; ok $? "update refuses uncommitted changes, on a branch too"
+# A clean checkout on a branch moves (an install.sh install is a clone on main): the branch stays, and the record says it was on it.
+branchy=$home/branchy; git clone -q "$src" "$branchy" 2>/dev/null; git -C "$branchy" checkout -q -B work v0.1.0; mkdir -p "$branchy/.state"
+s comfyui adopt me@dgx --dir "$branchy" --label branchy >/dev/null; ok $? "a clone on a branch is adopted"
+s comfyui update me@dgx --dir branchy --repo "$src" --ref v0.2.0 >/dev/null 2>&1; ok $? "update moves a clean checkout that is on a branch"
+git -C "$branchy" describe --tags --exact-match | grep -qx v0.2.0; ok $? "to the release"
+git -C "$branchy" rev-parse --verify -q work >/dev/null; ok $? "and the branch is still there"
+py '[r for r in d["installs"] if r["label"]=="branchy"][0]["previous_ref"]=="work"' <"$rec"; ok $? "the record says which branch it was on"
+rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.2.0 >/dev/null; ok $? "update moves a clean checkout"
 git -C "$new" describe --tags --exact-match | grep -qx v0.2.0; ok $? "to the release"
 s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="succeeded" and any("installed in" in l for l in d["log"])'; ok $? "and runs its install"
