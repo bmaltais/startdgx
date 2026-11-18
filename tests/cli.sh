@@ -1554,6 +1554,44 @@ ds recipe draft $tf >/dev/null 2>&1; ok $? "and an unedited demo draft is replac
 ds recipe draft $tf --host $a --id demo-checked >/dev/null; ok $? "a demo draft for a machine passes the demo engine's validation"
 printf '# mine\n' >>"$tmp/state/startdgx-demo/drafts/demo-checked.toml"; ds recipe draft $tf --host $a --id demo-checked >/dev/null 2>&1; ok $((!$?)) "and an edited demo draft is not overwritten"
 ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
+# tensorfold list / draft: tensorfold.dev's catalog for one DGX Spark, read-only, with a drafted recipe from an entry (its memory is
+# the catalog's estimate, so the variant is drafted and never fits until measured, ADR 0001).
+dtf() { local cond=$1; shift; ds tensorfold "$@" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
+dtf '[r["id"] for r in d["recipes"]] == ["lfm2.5-24b-a2b", "qwen3.6-35b-a3b", "odd-link"] and d["first_look"] is True' list --json
+ok $? "tensorfold list: the entries with a Spark deployment, in order (a Mac-only entry is left out)"
+dtf '{r["id"]: r["draftable"] for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and "pin" in d["recipes"][1]["reason"] and d["recipes"][2]["repo"] is None' list --json
+ok $? "only an MLX 4-bit entry with a pinned Hugging Face commit can be drafted, and the others say why"
+dtf 'd["recipes"][0]["estimate_gb"] == 24 and d["recipes"][2]["estimate_gb"] is None' list --json
+ok $? "the catalog's estimate is carried as an estimate, and a missing one stays missing"
+ds tensorfold draft lfm2.5-24b-a2b --json | python3 -c "
+import json,sys,tomllib
+d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb')); v=r['variant'][0]
+sys.exit(not (d['source']=='drafted' and r['artifacts'][0]['revision']=='0f74678ad5062e607c5469c35151dc6fcbd966b6' and v['source']=='drafted' and v['peak_ram_gib']==24 and 'estimate of 24 GB' in r['summary']))"
+ok $? "tensorfold draft pins the catalog's commit, takes its estimate as the drafted placeholder and says so"
+ds tensorfold draft qwen3.6-35b-a3b >/dev/null 2>&1; ok $((!$?)) "tensorfold draft refuses a format the runtime isn't pinned for"
+ds tensorfold draft odd-link >/dev/null 2>&1; ok $((!$?)) "and an entry with no pinned checkpoint"
+ds tensorfold draft mac-only >/dev/null 2>&1; ok $((!$?)) "and one the list has no Spark deployment for"
+tfs=$tmp/tf-state; tfc=$tmp/tf-catalog.json
+python3 - "$here/demo/tensorfold/catalog.json" "$tfc" <<'F'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["records"][0]["name"] = "Evil\x1b[31m name\nsecond line"
+json.dump(d, open(sys.argv[2], "w"))
+F
+tfl() { STARTDGX_TENSORFOLD_CATALOG=$tfc XDG_STATE_HOME=$tfs s tensorfold "$@"; }
+tfl list --update | grep -q "Saved this look"; ok $? "tensorfold list --update saves the look"
+tfl list | grep -q "Evil\[31m namesecond line"; ok $? "a third party's name is printed as one line without control characters"
+python3 - "$tfc" <<'F'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["records"][0]["deployments"]["dgx-spark"]["checkpoint"] = "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-MLX-4bit/tree/" + "b" * 40
+d["records"].append({"id": "brand-new", "name": "Brand New", "deployments": {"dgx-spark": {"format": "MLX 4-bit", "estimateGB": 5, "checkpoint": "https://huggingface.co/x/y/tree/" + "c" * 40}}})
+json.dump(d, open(sys.argv[1], "w"))
+F
+tfl list --json | python3 -c "import json,sys; d=json.load(sys.stdin); st={r['id']: r['status'] for r in d['recipes']}; sys.exit(not (st == {'lfm2.5-24b-a2b': 'changed', 'qwen3.6-35b-a3b': '', 'odd-link': '', 'brand-new': 'new'} and d['first_look'] is False))"
+ok $? "a later look says which entries are new and which are pinned to another commit"
+echo '{"schemaVersion": 2, "records": []}' >"$tmp/tf-bad.json"; STARTDGX_TENSORFOLD_CATALOG=$tmp/tf-bad.json s tensorfold list >/dev/null 2>&1; ok $((!$?)) "a list in another schema version is refused"
+STARTDGX_TENSORFOLD_CATALOG=http://127.0.0.1:9 s tensorfold list 2>&1 | grep -q "Can't reach tensorfold.dev"; ok $? "tensorfold list offline says so"
 ds recipe draft someone/Qwen3.8-27B-gated-MLX-4bit >/dev/null 2>&1; ok $((!$?)) "demo refuses a gated repo"
 # recipe author: the draft, then (when it needs judgement, or --agent) a terminal running the configured agent command with the
 # authoring brief. The agent is a stub here; no real agent or machine runs.
