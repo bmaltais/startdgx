@@ -232,6 +232,8 @@ Item {
           poller.comfyStarted = poller.comfyStarted.filter(function (p) { return p !== path })
           poller.pollComfy()
           poller.poll()
+          // The install's window, if open, shows what the job changed.
+          poller.owner.comfyActed(poller.host, "job", path)
         }
       }
       Qt.callLater(poller.askNextJob)
@@ -248,7 +250,7 @@ Item {
       else {
         poller.owner.notice = Model.actionNotice("comfyui", comfyActOut.text)
         // A started or stopped ComfyUI shows in the status seconds later: its mark stays until it does.
-        if (job.kind === "install") poller.comfyStarted = poller.comfyStarted.concat([job.path])
+        if (job.kind === "install" || job.kind === "update" || job.kind === "update-comfyui") poller.comfyStarted = poller.comfyStarted.concat([job.path])
         const shown = Model.comfyMark(job.kind)
         if (shown === "start" || shown === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: shown, path: job.path, until: Date.now() + 30000 }])
       }
@@ -257,7 +259,7 @@ Item {
       // What the action changed: the status (running), and the list (adopted).
       poller.poll()
       poller.pollComfy()
-      if (job.kind === "install") Qt.callLater(poller.pollComfyJobs)
+      if (job.kind === "install" || job.kind === "update" || job.kind === "update-comfyui") Qt.callLater(poller.pollComfyJobs)
       Qt.callLater(poller.launchComfy)
     }
   }
