@@ -460,7 +460,7 @@ function rows(hostList, hostStates, comfy) {
     if (hs && hs.loaded && hs.online) out.push({ kind: "add", host: host })
     const installs = comfy && comfy[host] ? comfy[host] : []
     for (let j = 0; j < installs.length; j++) out.push({ kind: "comfy", host: host, id: String(installs[j].path) })
-    if (hs && hs.loaded && hs.online) out.push({ kind: "comfyfind", host: host })
+    if (hs && hs.loaded && hs.online) { out.push({ kind: "comfyinstall", host: host }); out.push({ kind: "comfyfind", host: host }) }
   }
   return out
 }
@@ -484,6 +484,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (k === "g") return row.kind === "model" ? { type: "modelSettings", host: row.host, id: row.id } : row.kind === "comfy" ? { type: "comfySettings", host: row.host, path: row.id } : { type: "hostSettings", host: row.host }
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
   if (k === "enter" && row.kind === "comfyfind") return { type: "findComfy", host: row.host }
+  if (k === "enter" && row.kind === "comfyinstall") return { type: "installComfy", host: row.host }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
   if (k === "e") return { type: "addRecipe", host: row.host }
   if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "modelSettings", host: row.host, id: row.id, page: "Context" }
@@ -1460,6 +1461,13 @@ function hasTitlebar(clientsJson, pluginsText, title, wmClass) {
 // ---- ComfyUI installs --------------------------------------------------------------------------------------
 // `startdgx comfyui list --json` (the installs startdgx manages on a machine) and, from the status poll, which of them runs.
 
+// The last line of a job's log, "" for none.
+function lastLogLine(job) {
+  const log = job && Array.isArray(job.log) ? job.log : []
+  for (let i = log.length - 1; i >= 0; i--) if (String(log[i]).trim() !== "") return String(log[i]).trim()
+  return ""
+}
+
 // A ComfyUI row's key, for the cursor and the marks: a path has slashes, so it can't be told from a model's "host/id".
 function comfyKey(host, path) { return host + "#comfy/" + path }
 
@@ -1494,7 +1502,7 @@ function comfyRunning(status) {
 // What a ComfyUI install's row shows: { path, name, state, version, note, gib }. `state` is running, stopped, or one
 // that can't run: unfinished (its ComfyUI isn't installed yet), missing (its folder is gone), unsupported (a foreign
 // folder). `note` says why such a row, or an install too old for startdgx to read, can't be used as it is.
-function comfyRow(install, status) {
+function comfyRow(install, status, job) {
   const path = String(install.path)
   const tool = isPlainObject(install.tool) ? install.tool : {}
   const rss = comfyRunning(status)[path]
@@ -1507,7 +1515,12 @@ function comfyRow(install, status) {
   else if (install.installed === false) { state = "unfinished"; note = "ComfyUI isn't installed in it yet" }
   else if (rss !== undefined) state = "running"
   if (state !== "missing" && state !== "unsupported" && install.json_capable === false) note = "Too old for startdgx to read: update it"
-  return { path: path, name: name, state: state, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0 }
+  // A job on it (`comfyui job`): running, it is installing or updating, and says the last thing its log said; a failed install
+  // says so and can be run again, where it stopped.
+  const work = job && job.state === "running" ? (install.installed === false ? "Installing" : "Updating") : ""
+  if (work !== "") { state = "working"; note = lastLogLine(job) || work + "\u2026" }
+  else if (job && job.state === "failed" && install.installed === false) { state = "failed"; note = "The install failed" + (lastLogLine(job) ? ": " + lastLogLine(job) : "") }
+  return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0 }
 }
 
 // A machine's ComfyUI line under its name: "2 ComfyUI installs, one running", or "" for none.
@@ -1523,6 +1536,7 @@ function comfySummary(rows) {
 function comfyToggle(info, pending, rows) {
   if (!info || String(pending || "") !== "") return { action: "", reason: "" }
   if (info.state === "running") return { action: "stop", reason: "" }
+  if (info.state === "failed") return { action: "retry", reason: "" }
   if (info.state !== "stopped") return { action: "", reason: "" }
   const other = (rows || []).filter(function (r) { return r.state === "running" && r.path !== info.path })[0]
   return other ? { action: "", reason: "ComfyUI in " + other.name + " is running: stop it first" } : { action: "start", reason: "" }
@@ -1541,6 +1555,7 @@ function comfyCommand(host, job) {
   switch (job.kind) {
   case "start": return ["comfyui", "start", host, "--dir", job.path, "--timeout", "120"]
   case "stop": return ["comfyui", "stop", host, "--dir", job.path, "--timeout", "120"]
+  case "install": return ["comfyui", "install", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "120"])
   case "adopt": return ["comfyui", "adopt", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "60"])
   // `autostart on` runs it as a background service and starts it now; `off` removes the service, which stops it.
   case "autostart-on": return ["comfyui", "autostart", host, "on", "--dir", job.path, "--timeout", "120"]
@@ -1651,4 +1666,62 @@ function comfyChange(host, info, answer, key, value) {
   case "forget": return { type: "comfyForget", host: host, path: info.path }
   }
   return null
+}
+
+// ---- installing ComfyUI -----------------------------------------------------------------------------------------
+
+// `comfyui plan --json`: { places: [{ mount, fstype, free_bytes }], home, min_free_bytes, problems, path?, free_bytes? } or null.
+function parseComfyPlan(text) {
+  const parsed = parseJson(text)
+  return isPlainObject(parsed) && Array.isArray(parsed.places) && Array.isArray(parsed.problems) ? parsed : null
+}
+
+// What is wrong with a folder, in words: one line, "" when nothing is.
+function comfyProblemText(plan) {
+  if (!plan || !Array.isArray(plan.problems) || plan.problems.length === 0) return ""
+  const words = {
+    exists_not_empty: "That folder isn't empty. Pick a new one, or an empty one.",
+    inside_managed: "That is inside an install startdgx already manages.",
+    not_writable: "startdgx can't write there.",
+    too_small: "It needs " + sizeText(Number(plan.min_free_bytes) || 0) + " free; there is " + sizeText(Number(plan.free_bytes) || 0) + "."
+  }
+  return plan.problems.map(function (p) { return words[p] || String(p) }).join(" ")
+}
+
+// The disks to offer as a place for the folder: { text, folder } for each, the folder being where an install goes on it ("/" is the
+// home folder's disk, so its install goes in the home folder).
+var COMFY_FOLDER = "dgx-comfyui"
+function comfyFolderChoices(plan) {
+  if (!plan) return []
+  const home = String(plan.home || "")
+  return plan.places.map(function (p) {
+    const mount = String(p.mount)
+    const base = mount === "/" && home !== "" ? home : mount.replace(/\/+$/, "")
+    return { text: mount + "  \u00b7  " + sizeText(Number(p.free_bytes) || 0) + " free", folder: base + "/" + COMFY_FOLDER }
+  })
+}
+
+// Whether the folder typed can be installed into, from a plan for exactly that folder: ready, and why not.
+function comfyInstallReady(plan, typed) {
+  if (String(typed || "").trim() === "") return { ready: false, text: "" }
+  if (!plan || plan.path === undefined) return { ready: false, text: "Checking\u2026" }
+  const problem = comfyProblemText(plan)
+  return problem !== "" ? { ready: false, text: problem } : { ready: true, text: "Free to use \u00b7 " + sizeText(Number(plan.free_bytes) || 0) + " free" }
+}
+
+// The installs of a machine whose job is worth asking about: one not installed yet, and any a job was started on this session.
+function comfyWatchPaths(installs, started) {
+  const out = []
+  const seen = {}
+  for (let i = 0; i < installs.length; i++) {
+    const path = String(installs[i].path)
+    if ((installs[i].installed === false || started.indexOf(path) >= 0) && !seen[path]) { seen[path] = true; out.push(path) }
+  }
+  return out
+}
+
+// `comfyui job --json`: { path, state, exit_status, log } or null.
+function parseComfyJob(text) {
+  const parsed = parseJson(text)
+  return isPlainObject(parsed) && typeof parsed.state === "string" ? parsed : null
 }

@@ -96,8 +96,8 @@ test("rows: a machine's ComfyUI installs follow its Add model row", () => {
   const comfy = { h1: [{ path: "/a" }, { path: "/b" }], h2: [{ path: "/c" }] }
   const r = M.rows(["h1", "h2"], { h1: up, h2: { loaded: true, online: false, status: null } }, comfy)
   assert.deepStrictEqual(r.map((x) => x.kind + ":" + x.host + (x.id ? "/" + x.id : "")),
-    ["host:h1", "add:h1", "comfy:h1//a", "comfy:h1//b", "comfyfind:h1", "host:h2", "comfy:h2//c"])
-  assert.deepStrictEqual(M.rows(["h1"], { h1: up }).map((x) => x.kind), ["host", "add", "comfyfind"], "none listed: just the Find row")
+    ["host:h1", "add:h1", "comfy:h1//a", "comfy:h1//b", "comfyinstall:h1", "comfyfind:h1", "host:h2", "comfy:h2//c"])
+  assert.deepStrictEqual(M.rows(["h1"], { h1: up }).map((x) => x.kind), ["host", "add", "comfyinstall", "comfyfind"], "none listed: just the Install and Find rows")
 })
 
 test("keyAction: on a ComfyUI row g opens its window and the machine's other keys act for its machine", () => {
@@ -192,7 +192,7 @@ test("comfyFindRows: what the Find card offers for each folder", () => {
 test("rows and keys: the Find row ends a machine's ComfyUI group and opens the card", () => {
   const up = { loaded: true, online: true, status: { models: {} } }
   const r = M.rows(["h"], { h: up }, { h: [{ path: "/a" }] })
-  assert.deepStrictEqual(r.map((x) => x.kind), ["host", "add", "comfy", "comfyfind"])
+  assert.deepStrictEqual(r.map((x) => x.kind), ["host", "add", "comfy", "comfyinstall", "comfyfind"])
   assert.deepStrictEqual(M.rows(["h"], { h: { loaded: true, online: false, status: null } }, {}).map((x) => x.kind), ["host"], "not on a machine that is away")
   assert.deepStrictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", false, false, ""), { type: "findComfy", host: "h" })
   assert.strictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", true, false, ""), null, "away: nothing")
@@ -276,4 +276,61 @@ test("comfyCommand and comfyMarks: the service switch and Forget", () => {
   assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "autostart-on", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "start" })
   assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "autostart-off", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "stop" })
   assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "forget", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "forget" })
+})
+
+const planOf = (over) => Object.assign({ places: [{ mount: "/", fstype: "ext4", free_bytes: 1.2e12 }, { mount: "/media/u/usb", fstype: "exfat", free_bytes: 1.5e12 }],
+  home: "/home/u", min_free_bytes: 40 * 2 ** 30, problems: [] }, over)
+
+test("parseComfyPlan: the host's plan, or null", () => {
+  assert.ok(M.parseComfyPlan(JSON.stringify(planOf({}))))
+  assert.strictEqual(M.parseComfyPlan("x"), null)
+  assert.strictEqual(M.parseComfyPlan(JSON.stringify({ places: [] })), null)
+})
+
+test("comfyFolderChoices: one per disk, the root's in the home folder", () => {
+  assert.deepStrictEqual(M.comfyFolderChoices(planOf({})).map((c) => c.folder), ["/home/u/dgx-comfyui", "/media/u/usb/dgx-comfyui"])
+  assert.match(M.comfyFolderChoices(planOf({}))[1].text, /^\/media\/u\/usb {2}· {2}1\.4 TiB free$|free$/)
+  assert.deepStrictEqual(M.comfyFolderChoices(null), [])
+})
+
+test("comfyProblemText and comfyInstallReady: the folder typed, in words", () => {
+  assert.strictEqual(M.comfyProblemText(planOf({ path: "/p", free_bytes: 1e12 })), "")
+  assert.match(M.comfyProblemText(planOf({ problems: ["exists_not_empty"] })), /isn't empty/)
+  assert.match(M.comfyProblemText(planOf({ problems: ["inside_managed"] })), /already manages/)
+  assert.match(M.comfyProblemText(planOf({ problems: ["not_writable"] })), /can't write/)
+  assert.match(M.comfyProblemText(planOf({ problems: ["too_small"], free_bytes: 20 * 2 ** 30 })), /needs 40\.0 GiB free; there is 20\.0 GiB/)
+  assert.deepStrictEqual(M.comfyInstallReady(null, ""), { ready: false, text: "" })
+  assert.deepStrictEqual(M.comfyInstallReady(planOf({}), "/p"), { ready: false, text: "Checking…" }, "a plan with no folder is not for this one")
+  assert.strictEqual(M.comfyInstallReady(planOf({ path: "/p", free_bytes: 1e12 }), "/p").ready, true)
+  assert.strictEqual(M.comfyInstallReady(planOf({ path: "/p", free_bytes: 1e9, problems: ["too_small"] }), "/p").ready, false)
+})
+
+test("comfyRow with a job: installing shows its last log line, a failed install can be run again", () => {
+  const fresh = install({ installed: false })
+  const running = M.comfyRow(fresh, {}, { state: "running", log: ["cloning", "", "building torch…"] })
+  assert.deepStrictEqual([running.state, running.work, running.note], ["working", "Installing", "building torch…"])
+  assert.strictEqual(M.comfyRow(install({}), {}, { state: "running", log: [] }).work, "Updating", "an installed one is updating")
+  assert.strictEqual(M.comfyRow(fresh, {}, { state: "running", log: [] }).note, "Installing…")
+  const failed = M.comfyRow(fresh, {}, { state: "failed", exit_status: 1, log: ["no space left"] })
+  assert.deepStrictEqual([failed.state, failed.note], ["failed", "The install failed: no space left"])
+  assert.deepStrictEqual(M.comfyToggle(failed, "", [failed]), { action: "retry", reason: "" })
+  assert.strictEqual(M.comfyRow(fresh, {}, { state: "none", log: [] }).state, "unfinished")
+  assert.strictEqual(M.comfyRow(fresh, {}).state, "unfinished", "no job read yet")
+  assert.strictEqual(M.comfyRow(install({}), {}, { state: "failed", log: [] }).state, "stopped", "a failed update leaves a working install")
+})
+
+test("comfyWatchPaths and parseComfyJob: which installs' jobs to ask about", () => {
+  const list = [install({ path: "/a" }), install({ path: "/b", installed: false }), install({ path: "/c" })]
+  assert.deepStrictEqual(M.comfyWatchPaths(list, []), ["/b"])
+  assert.deepStrictEqual(M.comfyWatchPaths(list, ["/c", "/b"]), ["/b", "/c"])
+  assert.deepStrictEqual(M.comfyWatchPaths([], ["/x"]), [])
+  assert.strictEqual(M.parseComfyJob(JSON.stringify({ path: "/b", state: "running", log: [] })).state, "running")
+  assert.strictEqual(M.parseComfyJob("x"), null)
+  assert.strictEqual(M.parseComfyJob("{}"), null)
+})
+
+test("comfyCommand: install, and its row key on a machine", () => {
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "install", path: "/a", label: "x" }), ["comfyui", "install", "h", "--dir", "/a", "--label", "x", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "install", path: "/a" }), ["comfyui", "install", "h", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.keyAction("enter", { kind: "comfyinstall", host: "h" }, null, "", false, false, ""), { type: "installComfy", host: "h" })
 })

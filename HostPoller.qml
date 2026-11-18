@@ -60,7 +60,22 @@ Item {
     poller.owner.setMarks(poller.host, Object.assign({}, Model.marks(poller.queue, poller.done), c.marks))
   }
 
-  // A click on an install: kind is start, stop, autostart-on, autostart-off, adopt (the label names an adopted one in the panel)
+  // Jobs (an install or update) run on the machine on their own, so they are asked about: `comfyui job` for each install not yet installed
+  // and each one a job was started on this session, every few seconds while the window is open (DgxModel.comfyWatchPaths).
+  property var comfyStarted: []
+  property var comfyJobQueue: []
+  function pollComfyJobs() {
+    if (!poller.answering || comfyJobProc.running) return
+    poller.comfyJobQueue = Model.comfyWatchPaths(poller.owner.comfyui[poller.host] || [], poller.comfyStarted)
+    poller.askNextJob()
+  }
+  function askNextJob() {
+    if (poller.comfyJobQueue.length === 0) return
+    comfyJobProc.command = [poller.owner.script, "comfyui", "job", poller.host, "--dir", poller.comfyJobQueue[0], "--json", "--timeout", "60"]
+    comfyJobProc.running = true
+  }
+
+  // A click on an install: kind is start, stop, autostart-on, autostart-off, install, adopt (the label names an adopted or new one in the panel)
   // or forget (`stopService` also removes its background service).
   function runComfy(kind, path, label, stopService) {
     poller.comfyJobs = poller.comfyJobs.concat([{ kind: kind, path: path, label: label || "", stopService: !!stopService }])
@@ -196,6 +211,32 @@ Item {
     onExited: function (code) { poller.owner.comfyRead(poller.host, Model.comfyAnswer(code, comfyOut.text, comfyErr.text, poller.host).installs) }
   }
 
+  Timer {
+    interval: 4000
+    running: poller.owner.windowOpen
+    repeat: true
+    onTriggered: poller.pollComfyJobs()
+  }
+  Process {
+    id: comfyJobProc
+    stdout: StdioCollector { id: comfyJobOut; waitForEnd: true }
+    stderr: StdioCollector { id: comfyJobErr; waitForEnd: true }
+    onExited: function (code) {
+      const path = poller.comfyJobQueue[0]
+      poller.comfyJobQueue = poller.comfyJobQueue.slice(1)
+      const job = code === 0 ? Model.parseComfyJob(comfyJobOut.text) : null
+      if (job) {
+        poller.owner.comfyJobRead(poller.host, path, job)
+        // A job we started has ended: the install is (or is not) installed now, which the list says.
+        if (job.state !== "running" && poller.comfyStarted.indexOf(path) >= 0) {
+          poller.comfyStarted = poller.comfyStarted.filter(function (p) { return p !== path })
+          poller.pollComfy()
+          poller.poll()
+        }
+      }
+      Qt.callLater(poller.askNextJob)
+    }
+  }
   Process {
     id: comfyActProc
     stdout: StdioCollector { id: comfyActOut; waitForEnd: true }
@@ -207,6 +248,7 @@ Item {
       else {
         poller.owner.notice = Model.actionNotice("comfyui", comfyActOut.text)
         // A started or stopped ComfyUI shows in the status seconds later: its mark stays until it does.
+        if (job.kind === "install") poller.comfyStarted = poller.comfyStarted.concat([job.path])
         const shown = Model.comfyMark(job.kind)
         if (shown === "start" || shown === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: shown, path: job.path, until: Date.now() + 30000 }])
       }
@@ -215,6 +257,7 @@ Item {
       // What the action changed: the status (running), and the list (adopted).
       poller.poll()
       poller.pollComfy()
+      if (job.kind === "install") Qt.callLater(poller.pollComfyJobs)
       Qt.callLater(poller.launchComfy)
     }
   }

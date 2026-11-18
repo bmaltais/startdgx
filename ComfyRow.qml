@@ -22,9 +22,11 @@ Rectangle {
 
   readonly property bool running: row.info.state === "running"
   readonly property bool hot: hover.hovered || row.current
-  readonly property bool busy: row.pending !== ""
-  readonly property string stateWord: row.pending === "start" ? "Starting" : row.pending === "stop" ? "Stopping" : row.pending === "adopt" ? "Adding"
-    : row.running ? "Running" : row.info.state === "unfinished" ? "Not installed" : row.info.state === "missing" ? "Folder gone"
+  // A job runs on it (installing, updating), or a click waits: the dot pulses.
+  readonly property bool working: row.info.state === "working"
+  readonly property bool busy: row.pending !== "" || row.working
+  readonly property string stateWord: row.pending === "start" ? "Starting" : row.pending === "stop" ? "Stopping" : row.pending === "adopt" ? "Adding" : row.pending === "install" ? "Installing"
+    : row.working ? String(row.info.work) : row.info.state === "failed" ? "Install failed" : row.running ? "Running" : row.info.state === "unfinished" ? "Not installed" : row.info.state === "missing" ? "Folder gone"
     : row.info.state === "unsupported" ? "Not managed" : "Stopped"
 
   implicitHeight: body.implicitHeight + Style.spacing.md * 2
@@ -146,8 +148,9 @@ Rectangle {
       Layout.preferredWidth: implicitHeight
       visible: !row.away
       enabled: row.toggle.action !== "" || row.toggle.reason !== ""
-      iconText: row.toggle.action === "stop" ? "\udb80\udfe4" : "\udb81\udc0a"
-      tooltipText: row.toggle.reason !== "" ? row.toggle.reason : row.toggle.action === "stop" ? "Stop  (s)" : row.toggle.action === "start" ? "Start  (s)" : ""
+      iconText: row.toggle.action === "stop" ? "\udb80\udfe4" : row.toggle.action === "retry" ? "\uf021" : "\udb81\udc0a"
+      tooltipText: row.toggle.reason !== "" ? row.toggle.reason : row.toggle.action === "stop" ? "Stop  (s)" : row.toggle.action === "start" ? "Start  (s)"
+        : row.toggle.action === "retry" ? "Run the install again, where it stopped  (s)" : ""
       foreground: row.toggle.reason !== "" ? Color.muted : Color.foreground
       opacity: !enabled ? 0 : row.toggle.reason !== "" ? 0.5 : 1
       onClicked: if (row.toggle.reason === "") row.toggleRequested()

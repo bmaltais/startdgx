@@ -173,8 +173,31 @@ Item {
   // Start or stop an install, or adopt one the Find card found (the label is optional).
   function comfyAct(host, kind, path, label, stopService) {
     const p = service.poller(host)
-    if (p) p.runComfy(kind, path, label, stopService)
+    if (!p) return
+    // Run a failed install again: where it stopped, with the label it had.
+    if (kind === "retry") {
+      const found = (service.comfyui[host] || []).filter(function (i) { return i.path === path })[0]
+      p.runComfy("install", path, found ? String(found.label || "") : "")
+    } else p.runComfy(kind, path, label, stopService)
   }
+  // The job asked about for an install (`comfyui job`), by Model.comfyKey: { state, exit_status, log }.
+  property var comfyJob: ({})
+  function comfyJobRead(host, path, job) {
+    const next = Object.assign({}, service.comfyJob)
+    next[Model.comfyKey(host, path)] = job
+    service.comfyJob = next
+  }
+  // The Install ComfyUI card: `comfyui plan --json` for the folder typed ("" for just the disks), the answer for comfyPlanKey.
+  property string comfyPlanKey: ""
+  property var comfyPlan: null
+  property string comfyPlanError: ""
+  function comfyPlanFor(host, path) {
+    const key = host + "\n" + path
+    if (service.comfyPlanKey !== key) service.comfyPlanKey = key
+    service.comfyPlanError = ""
+    comfyPlanQuery.ask(key, [service.script, "comfyui", "plan", host, "--json", "--timeout", "60"].concat(path !== "" ? ["--dir", path] : []))
+  }
+  function cancelComfyPlan() { comfyPlanQuery.cancel() }
   // The Start or Stop an install's button and key offer (DgxModel.comfyToggle), for the cursor's keys.
   function comfyToggle(host, path) {
     const installs = service.comfyui[host] || []
@@ -212,6 +235,9 @@ Item {
     const next = Object.assign({}, service.comfyui)
     next[host] = installs
     service.comfyui = next
+    // An install the list shows that is not installed yet has a job to read.
+    const p = service.poller(host)
+    if (p) Qt.callLater(p.pollComfyJobs)
   }
   function statusFailed(host, why) {
     const old = service.hostState[host] || {}
@@ -542,6 +568,9 @@ Item {
     const comfyui = ({})
     for (let m = 0; m < want.length; m++) if (service.comfyui[want[m]]) comfyui[want[m]] = service.comfyui[want[m]]
     service.comfyui = comfyui
+    const comfyJob = ({})
+    for (const key in service.comfyJob) if (want.indexOf(key.substring(0, key.indexOf("#comfy/"))) >= 0) comfyJob[key] = service.comfyJob[key]
+    service.comfyJob = comfyJob
   }
 
   Component.onCompleted: service.refreshHosts()
@@ -622,6 +651,16 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.recipes = list
       else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(err, "The machine's catalog could not be read")
+    }
+  }
+
+  Query {
+    id: comfyPlanQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.comfyPlanKey) return
+      const plan = code === 0 ? Model.parseComfyPlan(out) : null
+      if (plan) service.comfyPlan = plan
+      else service.comfyPlanError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }
 

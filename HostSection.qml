@@ -16,9 +16,10 @@ ColumnLayout {
   property var hostState: null        // { loaded, online, error, status, lastSeenMs }, or null before the first answer
   property var pending: ({})          // "host/model" -> "start" | "stop" | "delete", "host/model#share" -> "share" | "unshare"
   property real nowMs: 0
-  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model", "host#add", "host#comfy/path" or "host#comfyfind"
+  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model", "host#add", "host#comfy/path", "host#comfyinstall" or "host#comfyfind"
   property var storage: null          // `startdgx storage` (DgxModel.parseStorage), or null until read
   property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
+  property var comfyJobs: ({})        // "host#comfy/path" -> the job last read for that install (`comfyui job`)
   property var comfy: []              // the managed ComfyUI installs `startdgx comfyui list` last said ([] while unread or none)
 
   signal selectRequested(string key)
@@ -43,7 +44,7 @@ ColumnLayout {
     return status && status.models && status.models[id] ? status.models[id] : ({ recipe: id, unit: "inactive" })
   }
   // One row per install: what `list` knows of it (its folder, version) and what the status poll saw (running, memory).
-  readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null) })
+  readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null, section.comfyJobs[Model.comfyKey(section.host, i.path)]) })
   // The ComfyUI rows are made per folder and kept across polls, like the models' (a new list would rebuild them every poll, and
   // the list would jump), so the folders are only replaced when they change.
   property var comfyPaths: []
@@ -297,6 +298,47 @@ ColumnLayout {
         section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
         section.actionRequested({ type: "comfyToggle", host: section.host, path: comfyRow.modelData, kind: comfyRow.toggle.action })
       }
+    }
+  }
+
+  // Install ComfyUI…: opens the card that picks a folder on the machine and installs a new ComfyUI there. Only on a machine that answers.
+  Rectangle {
+    id: installRow
+    readonly property bool current: section.cursorKey === section.host + "#comfyinstall"
+    visible: section.loaded && !section.away
+    Layout.fillWidth: true
+    Layout.leftMargin: Style.spacing.xxl
+    implicitHeight: installText.implicitHeight + Style.spacing.md * 2
+    radius: Math.max(Style.cornerRadius, Style.space(6))
+    color: installHover.hovered || installRow.current ? Util.alpha(Color.foreground, 0.06) : "transparent"
+    border.width: Style.normalBorderWidth
+    border.color: installRow.current ? Util.alpha(Color.accent, 0.7) : "transparent"
+    onCurrentChanged: if (current) section.revealRequested(installRow)
+    HoverHandler { id: installHover; cursorShape: Qt.PointingHandCursor }
+    MouseArea {
+      anchors.fill: parent
+      onClicked: {
+        section.selectRequested(section.host + "#comfyinstall")
+        section.actionRequested({ type: "installComfy", host: section.host })
+      }
+    }
+    Text {
+      id: installText
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.spacing.xxl
+      anchors.rightMargin: Style.spacing.lg
+      textFormat: Text.PlainText
+      text: "+  Install ComfyUI…"
+      color: installHover.hovered || installRow.current ? Color.foreground : Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      elide: Text.ElideRight
+    }
+    PanelToolTip {
+      visible: installHover.hovered
+      text: "Install a new ComfyUI on " + section.machine + ", in a folder you pick  (Enter)"
     }
   }
 

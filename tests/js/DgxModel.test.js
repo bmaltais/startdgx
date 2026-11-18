@@ -230,7 +230,7 @@ test("peerOffer: a Spark with an engine startdgx didn't install can be added as 
 test("rows: the keyboard cursor's list, each machine then its models, then Add model and Find ComfyUI on one that answers", () => {
   const r = M.rows(["h1", "h2", "h3", "h4"], { h1: up(models(b, a)), h2: up({}), h3: undefined, h4: up(models(a), { online: false }) })
   assert.deepStrictEqual(r.map((x) => x.kind + ":" + x.host + (x.id ? "/" + x.id : "")),
-    ["host:h1", "model:h1/a", "model:h1/b", "add:h1", "comfyfind:h1", "host:h2", "add:h2", "comfyfind:h2", "host:h3", "host:h4", "model:h4/a"])
+    ["host:h1", "model:h1/a", "model:h1/b", "add:h1", "comfyinstall:h1", "comfyfind:h1", "host:h2", "add:h2", "comfyinstall:h2", "comfyfind:h2", "host:h3", "host:h4", "model:h4/a"])
 })
 
 test("keyAction: a key and the button it matches cannot disagree", () => {
@@ -354,7 +354,7 @@ test("withSetups: a model just asked for shows at once, waiting, until the machi
   assert.strictEqual(shown.h1.status.models.nemotron.name, "Nemotron", "the machine's own rows stay")
   assert.strictEqual(hs.status.models.flash, undefined, "the state it was given is left alone")
   assert.strictEqual(shown.h2, undefined, "a machine not heard from gets nothing")
-  assert.deepStrictEqual(M.rows(["h1"], shown).map((r) => r.id || r.kind), ["host", "nemotron", "flash", "add", "comfyfind"], "in name order, as the machine will list it")
+  assert.deepStrictEqual(M.rows(["h1"], shown).map((r) => r.id || r.kind), ["host", "nemotron", "flash", "add", "comfyinstall", "comfyfind"], "in name order, as the machine will list it")
   assert.strictEqual(M.summarize(["h1"], shown).busy, 1, "and counts as busy, so the machine is polled quickly")
 })
 
