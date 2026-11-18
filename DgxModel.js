@@ -312,7 +312,8 @@ function subtitle(s) {
 
 // A machine's memory, the thing a DGX Spark runs out of: { total, used, free, other, segments: [{ id, name, gib, other? }] }
 // in GiB, one segment per running model (what it holds now) and, when the host reports what is available
-// (`ram_available_gib`, its MemAvailable), one "Other programs" segment for what the machine uses beyond those models: a
+// (`ram_available_gib`, its MemAvailable), a segment for the model that is loading (what the machine holds beyond the
+// running ones, up to what it needs) and one "Other programs" segment for what the machine uses beyond those models: a
 // model loaded through ComfyUI, a download. Under the desktop's reserve (RESERVE_GIB) it is just the desktop, and no
 // segment. It is the same figure the engine checks before it starts a model.
 // null while the machine's total is unknown.
@@ -331,18 +332,36 @@ function hostMemory(status, profile) {
   }
   const available = status && status.ram_available_gib
   const held = available === undefined || available === null || !isFinite(Number(available)) ? models : Math.max(models, total - Number(available))
-  const other = held - models >= RESERVE_GIB ? held - models : 0
+  // What the machine holds beyond the running models goes first to the one that is loading (it takes its memory as it
+  // loads, before it counts as running), up to what it needs when that is known.
+  let loading = null
+  let loadingGib = 0
+  for (let i = 0; i < list.length && held > models; i++) {
+    const e = list[i]
+    if (e.unit !== "activating") continue
+    const need = e.observed ? Number(e.observed.ram_used_gib) || 0 : 0
+    loadingGib = need > 0 ? Math.min(held - models, need) : held - models
+    if (loadingGib < RESERVE_GIB) { loadingGib = 0; continue }
+    loading = e
+    segments.push({ id: String(e.recipe), name: String(e.name || e.recipe), gib: loadingGib, loading: true })
+    break
+  }
+  const beyond = held - models - loadingGib
+  const other = beyond >= RESERVE_GIB ? beyond : 0
   if (other > 0) segments.push({ id: "other", name: "Other programs", gib: other, other: true })
-  const used = Math.min(models + other, total)
-  return { total: total, used: used, free: total - used, other: other, segments: segments }
+  const used = Math.min(models + loadingGib + other, total)
+  return { total: total, used: used, free: total - used, other: other, loading: loading ? String(loading.name || loading.recipe) : "", segments: segments }
 }
 
-// What the memory bar says: "28 of 122 GiB in use", the part nothing of ours holds, or that nothing is loaded.
+// What the memory bar says: "28 of 122 GiB in use", the model that is loading, the part nothing of ours holds, or that nothing is loaded.
 function memoryText(mem) {
   if (!mem) return ""
   if (mem.segments.length === 0) return "Nothing loaded \u00b7 " + Math.round(mem.total) + " GiB free"
   const text = Math.round(mem.used) + " of " + Math.round(mem.total) + " GiB in use"
-  return mem.other > 0 ? text + " \u00b7 " + Math.round(mem.other) + " GiB by other programs" : text
+  const parts = [text]
+  if (mem.loading) parts.push(mem.loading + " loading")
+  if (mem.other > 0) parts.push(Math.round(mem.other) + " GiB by other programs")
+  return parts.join(" \u00b7 ")
 }
 
 // A model's numbers as columns, so rows line up: its context ("256K") and the memory it holds or last held ("31 GiB"),
