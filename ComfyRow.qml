@@ -19,8 +19,10 @@ Rectangle {
   signal selectRequested()
   signal toggleRequested()
   signal settingsRequested()
+  signal openRequested()
 
   readonly property bool running: row.info.state === "running"
+  readonly property bool link: row.running && String(row.info.url || "") !== "" && !row.away
   readonly property bool hot: hover.hovered || row.current
   // A job runs on it (installing, updating), or a click waits: the dot pulses.
   readonly property bool working: row.info.state === "working"
@@ -89,7 +91,24 @@ Rectangle {
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
       }
+      // A running one that listens on the network shows where, as a link: it opens as a web app.
+      Item {
+        visible: row.link
+        Layout.fillWidth: true
+        implicitHeight: urlText.implicitHeight
+        TextLink {
+          id: urlText
+          width: Math.min(implicitWidth, parent.width)
+          text: String(row.info.url || "")
+          elide: Text.ElideRight
+          font.pixelSize: Style.font.bodySmall
+          idleColor: Color.accent
+          tooltip: "Open ComfyUI in its own window  (o)"
+          onClicked: row.openRequested()
+        }
+      }
       Text {
+        visible: !row.link
         Layout.fillWidth: true
         textFormat: Text.PlainText
         // Why a row can't be used as it is takes the folder's place: that is what needs reading.

@@ -1499,10 +1499,21 @@ function comfyRunning(status) {
   return out
 }
 
+// Where the running managed installs listen, as the status poll read it off each process: { path: { port, bind } }.
+function comfyListening(status) {
+  const out = {}
+  const list = status && Array.isArray(status.comfyui) ? status.comfyui : []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (isPlainObject(item) && typeof item.path === "string" && Number(item.port) > 0) out[item.path] = { port: Number(item.port), bind: String(item.bind || "") }
+  }
+  return out
+}
+
 // What a ComfyUI install's row shows: { path, name, state, version, note, gib }. `state` is running, stopped, or one
 // that can't run: unfinished (its ComfyUI isn't installed yet), missing (its folder is gone), unsupported (a foreign
 // folder). `note` says why such a row, or an install too old for startdgx to read, can't be used as it is.
-function comfyRow(install, status, job) {
+function comfyRow(install, status, job, host) {
   const path = String(install.path)
   const tool = isPlainObject(install.tool) ? install.tool : {}
   const rss = comfyRunning(status)[path]
@@ -1520,7 +1531,10 @@ function comfyRow(install, status, job) {
   const work = job && job.state === "running" ? (install.installed === false ? "Installing" : job.kind === "recipe" ? "Installing workflow" : "Updating") : ""
   if (work !== "") { state = "working"; note = lastLogLine(job) || work + "\u2026" }
   else if (job && job.state === "failed" && install.installed === false) { state = "failed"; note = "The install failed" + (lastLogLine(job) ? ": " + lastLogLine(job) : "") }
-  return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0,
+  // Where a running one is reached from this machine ("" when unknown, or it listens on the machine itself): the poll read it off the process.
+  const seen = state === "running" ? comfyListening(status)[path] : undefined
+  const url = seen && host ? comfyUrl(host, seen) : ""
+  return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0, url: url,
            tool: { tag: String(tool.tag || ""), branch: String(tool.branch || ""), dirty: !!tool.dirty, unpushed: Number(tool.unpushed) || 0 } }
 }
 
@@ -1547,6 +1561,8 @@ function comfyToggle(info, pending, rows) {
 function comfyKeyAction(key, row, toggle, repeat) {
   const k = String(key).toLowerCase()
   if (!row || row.kind !== "comfy" || repeat || !toggle || !toggle.action) return null
+  // `o` opens a running one (its Stop is what offers).
+  if (k === "o") return toggle.action === "stop" ? { type: "comfyOpenAt", host: row.host, path: row.id } : null
   if (k !== "s" && k !== "enter") return null
   return { type: "comfyToggle", host: row.host, path: row.id, kind: toggle.action }
 }
@@ -1625,7 +1641,19 @@ function comfyUrl(host, status) {
   if (!status || !(Number(status.port) > 0)) return ""
   const bind = String(status.bind || "")
   if (bind === "127.0.0.1" || bind === "localhost" || bind === "::1") return ""
-  return "http://" + hostName(host) + ":" + Number(status.port)
+  return "http://" + hostName(host) + ":" + Number(status.port) + "/"
+}
+
+// ComfyUI's page as a web app (Omarchy's chromeless browser window); xdg-open where the launcher or a Chromium browser is missing.
+// The URL is an argument, never part of the script text.
+function webappCommand(url) {
+  return ["sh", "-c", 'if command -v omarchy-launch-webapp >/dev/null 2>&1; then omarchy-launch-webapp "$1" || xdg-open "$1"; else xdg-open "$1"; fi', "sh", String(url)]
+}
+
+// Why a running install can't be opened from the machine this panel is on, or "" when it can (`comfyui status` answered).
+function comfyOpenProblem(answer) {
+  if (!answer || !answer.status) return "ComfyUI didn't say where it listens"
+  return comfyUrl("", answer.status) === "" ? "ComfyUI listens on the machine itself (" + String(answer.status.bind || "") + "), not on the network" : ""
 }
 
 // The pages of an install's window. `c`: { host, info (its comfyRow), answer (comfyStatus, or null while it is read), error, pending }.
