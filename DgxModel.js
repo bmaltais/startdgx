@@ -173,9 +173,16 @@ function meter(entry, nowMs, pending) {
   return null
 }
 
-// The facts under a model's name: its context, and the memory it took when it last ran (a running model's is on its meter).
+// What a model makes, when it isn't text: the engine's `kind` (text, image, video or music). A text model has a context
+// to size and agents to run on it; the others have neither.
+var KIND_WORDS = { image: "Image", video: "Video", music: "Music" }
+function isTextModel(entry) { return !entry || !KIND_WORDS[entry.kind] }
+
+// The facts under a model's name: what it makes (not text), its context, and the memory it took when it last ran (a
+// running model's is on its meter).
 function modelFacts(entry) {
   const facts = []
+  if (!isTextModel(entry)) facts.push(KIND_WORDS[entry.kind] + " model")
   if (Number(entry.ctx) > 0) facts.push(Math.round(Number(entry.ctx) / 1024) + "K context")
   const used = entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
   if (used > 0 && entry.unit !== "active") facts.push(Math.round(used) + " GiB")
@@ -797,7 +804,7 @@ function modelPages(c) {
 
   // The page is there for any model that is set up, also while it restarts with a new size (dimmed then), so the
   // window doesn't change pages under the person who just chose one.
-  if (CONTEXT_UNITS[c.entry.unit]) {
+  if (CONTEXT_UNITS[c.entry.unit] && isTextModel(c.entry)) {
     const fitting = c.choices.filter(function (x) { return x.fits })
     const skipped = c.choices.filter(function (x) { return !x.fits }).map(function (x) { return x.label + ": " + x.text + "." })
     const now = Number(c.entry.ctx) > 0 ? Math.round(Number(c.entry.ctx) / 1024) + "K" : ""
@@ -1304,7 +1311,7 @@ function contextChoices(variants, currentCtx, ramTotalGib) {
 // "context" when the model's context can be changed now: it is set up and at rest (running, stopped or failed),
 // with no click of its own waiting. The engine restarts a running model with the new context, and starts a stopped one.
 function contextAction(entry, pending) {
-  if (!entry || pending) return null
+  if (!entry || pending || !isTextModel(entry)) return null
   return ["active", "inactive", "failed"].indexOf(entry.unit) >= 0 ? "context" : null
 }
 
