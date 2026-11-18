@@ -1,0 +1,73 @@
+{
+  "installs": [
+    {
+      "path": "/home/demo/dgx-comfyui",
+      "kind": "dgx-comfyui",
+      "present": true,
+      "installed": true,
+      "json_capable": true,
+      "sources": [
+        "scan"
+      ],
+      "managed": false,
+      "label": "",
+      "tool": {
+        "tag": "v0.1.0",
+        "commit": "d913a9f",
+        "branch": "",
+        "dirty": false,
+        "unpushed": 0
+      }
+    },
+    {
+      "path": "/media/demo/usb/dgx-comfyui",
+      "kind": "dgx-comfyui",
+      "present": true,
+      "installed": true,
+      "json_capable": false,
+      "sources": [
+        "scan",
+        "service"
+      ],
+      "managed": false,
+      "label": "",
+      "tool": {
+        "tag": "v0.0.5",
+        "commit": "1513909",
+        "branch": "",
+        "dirty": false,
+        "unpushed": 0
+      }
+    },
+    {
+      "path": "/home/demo/code/dgx-comfyui",
+      "kind": "dgx-comfyui",
+      "present": true,
+      "installed": true,
+      "json_capable": true,
+      "sources": [
+        "scan"
+      ],
+      "managed": false,
+      "label": "",
+      "tool": {
+        "tag": "",
+        "commit": "d913a9f",
+        "branch": "main",
+        "dirty": true,
+        "unpushed": 2
+      }
+    },
+    {
+      "path": "/home/demo/ComfyUI",
+      "kind": "foreign",
+      "present": true,
+      "sources": [
+        "scan"
+      ],
+      "managed": false,
+      "label": "",
+      "reason": "a ComfyUI without dgx-comfyui.sh: startdgx doesn't manage it"
+    }
+  ]
+}
