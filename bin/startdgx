@@ -1978,7 +1978,8 @@ def hf_row(base, item):
   label = HF_LABEL_RE.search(" ".join([repo, *(item.get("tags") or [])]))
   return {"repo": repo, "params": (item.get("safetensors") or {}).get("total"),
           "size_bytes": hf_weights_bytes(tree) or None,
-          "license": card.get("license"), "base_model": hf_base_model(card), "label": label.group(0).lower() if label else None}
+          "license": card.get("license"), "base_model": hf_base_model(card), "label": label.group(0).lower() if label else None,
+          "recipe_id": draft_id(repo)}
 
 
 def hf_search(base, query):
@@ -2174,16 +2175,39 @@ JUDGEMENT_TEXT = {"drafter": "it is, or carries, a speculative drafter (the temp
                   "server": "its config scales positions (rope_scaling), which may need server arguments the template cannot set"}
 
 
-def draft_host_ids(host):
-  """The ids a machine has, curated and the user's."""
+def draft_host_rows(host):
+  """The recipes a machine has, curated and the user's, by id."""
   if DEMO:
     with demo_state() as state:
-      return {r["id"] for r in demo_host(state, host)["list"]}
+      return {r["id"]: r for r in demo_host(state, host)["list"]}
   try:
     rows = json.loads(ssh(target(host), "recipe", "list", "--json", timeout=60).stdout)
-    return {r["id"] for r in rows}
+    return {r["id"]: r for r in rows}
   except (ValueError, KeyError, TypeError) as error:
     raise Error(f"{host} gave a recipe list startdgx can't read") from error
+
+
+def draft_variant_sources(host, rid):
+  """The source of each variant of a recipe the machine has."""
+  if DEMO:
+    with demo_state() as state:
+      return [v["source"] for v in demo_variants_of(demo_host(state, host), rid)]
+  out = ssh_raw(target(host), f"python3 -I - {shlex.quote(rid)}", stdin=VARIANTS_PROBE, timeout=60, what="probe").stdout
+  return [v["source"] for v in (parse_variants(out) if out.strip() else None) or []]
+
+
+def draft_check_host(host, rid):
+  """Nothing when the machine has no recipe `rid`; True when it has one of yours that is only a draft (placeholders, nothing worth keeping:
+  adding replaces it); else an Error, for a recipe that holds more (curated, set up, measured, or numbers you confirmed)."""
+  row = draft_host_rows(host).get(rid)
+  if row is None:
+    return None
+  if row.get("user") is True and row.get("installed") is not True:
+    sources = draft_variant_sources(host, rid)
+    if sources and all(source == "drafted" for source in sources):
+      return True
+  raise Error(f"{host} already has a recipe '{rid}' that holds more than a draft (it is curated, measured, set up, or has numbers you confirmed): "
+              "remove it first in Add recipe…, or pick another id with --id")
 
 
 def draft_validate(host, rid, text):
@@ -2204,8 +2228,7 @@ def draft_recipe(args, replace=False):
   if not RID_RE.match(rid):
     raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
   sha, license_id, size, config = hf_draft_source(hf_base(), repo, getattr(args, "revision", None))
-  if args.host and rid in draft_host_ids(args.host):
-    raise Error(f"{args.host} already has a recipe '{rid}' (curated or yours): pick another id with --id")
+  replaces = bool(args.host) and draft_check_host(args.host, rid) is True
   out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
                                                                        "startdgx"), "drafts")
   path = os.path.join(out, f"{rid}.toml")
@@ -2244,7 +2267,7 @@ def draft_recipe(args, replace=False):
       raise
   result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
             "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config),
-            "name": draft_name(repo), "ctx": DRAFT_CTX}
+            "name": draft_name(repo), "ctx": DRAFT_CTX, "replaces_draft": replaces}
   return result
 
 
@@ -2315,7 +2338,7 @@ def tf_rows(document):
     reason = "" if repo and base_format == TF_FORMAT else (f"{base_format or 'its format'} needs a newer TensorFold runtime than the engine has" if repo else "no pinned Hugging Face checkpoint")
     source = record.get("source")
     rows.append({"id": record["id"], "name": tf_clean(record.get("name")) or record["id"], "format": fmt, "estimate_gb": tf_number(deployment.get("estimateGB")),
-                 "weight_gb": tf_number(deployment.get("weightGB")), "repo": repo, "revision": revision,
+                 "weight_gb": tf_number(deployment.get("weightGB")), "repo": repo, "revision": revision, "recipe_id": draft_id(repo) if repo else "",
                  "url": source if isinstance(source, str) and source.startswith("https://") else "", "draftable": reason == "", "reason": reason})
   return rows
 
@@ -4255,7 +4278,7 @@ def build_parser():
   tv = tp.add_subparsers(dest="verb", required=True, metavar="list|draft")
   tl = tv.add_parser("list", description="The recipes tensorfold.dev lists for one DGX Spark (128 GB), with what is new or changed since the look saved last.")
   tl.add_argument("--update", action="store_true", help="save this look, so the next run says what changed since")
-  tl.add_argument("--json", action="store_true", help='as {device, first_look, recipes: [{id, name, format, estimate_gb, weight_gb, repo, revision, url, draftable, reason, status}]}')
+  tl.add_argument("--json", action="store_true", help='as {device, first_look, recipes: [{id, name, format, estimate_gb, weight_gb, repo, revision, recipe_id, url, draftable, reason, status}]}')
   tl.set_defaults(fn=cmd_tensorfold_list)
   td = tv.add_parser("draft", description="Write a user recipe from an entry of the list: its pinned checkpoint, license and one drafted variant "
                      "whose memory is the list's estimate (never a fit until measured). Only MLX 4-bit entries can be drafted.")

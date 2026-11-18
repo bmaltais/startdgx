@@ -1322,9 +1322,9 @@ hf() { STARTDGX_HF_BASE=$here/demo/hf s hf search "$@"; }
 hj() { local cond=$1; shift; hf "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); r={x['repo']: x for x in d}; sys.exit(not ($cond))"; }
 hj 'set(r) == {"TensorFold/Qwen3.8-27B-MLX-4bit", "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", "LiquidAI/LFM2.5-24B-A2B-MLX-4bit", "someone/Gemma-4-31B-uncensored-MLX-4bit"}' qwen
 ok $? "hf search lists the affine 4-bit repos of known families and hides 8-bit, 3-bit, mxfp4, BF16 tagged mlx, unknown architectures, gated, and missing or malformed configs"
-hj 'sorted(r["TensorFold/Qwen3.8-27B-MLX-4bit"]) == ["base_model", "label", "license", "params", "repo", "size_bytes"]' qwen
-ok $? "a row has repo, params, size_bytes, license, base_model and label"
-hj 'r["TensorFold/Qwen3.8-27B-MLX-4bit"] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "params": 27356728560, "size_bytes": 16074529674, "license": "apache-2.0", "base_model": "Qwen/Qwen3.8-27B", "label": None}' qwen
+hj 'sorted(r["TensorFold/Qwen3.8-27B-MLX-4bit"]) == ["base_model", "label", "license", "params", "recipe_id", "repo", "size_bytes"]' qwen
+ok $? "a row has repo, params, size_bytes, license, base_model and label, and the id a draft of it would get"
+hj 'r["TensorFold/Qwen3.8-27B-MLX-4bit"] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "params": 27356728560, "size_bytes": 16074529674, "license": "apache-2.0", "base_model": "Qwen/Qwen3.8-27B", "label": None, "recipe_id": "qwen3.8-27b-mlx-4bit-tensorfold"}' qwen
 ok $? "its parameter count, weights size (the safetensors files only), license and base model come from the repo"
 hj 'r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["label"] == "abliterated" and r["daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit"]["base_model"] == "Qwen/Qwen3.8-27B"' qwen
 ok $? "a derivative is labelled abliterated and shows its base model"
@@ -1469,7 +1469,7 @@ r = tomllib.load(open(sys.argv[1], "rb"))
 sys.exit("input" in r or "server" in r)
 F
 ok $? "a text-only draft sets neither"
-dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": [], "name": "Qwen3.8 27B", "ctx": 8192}' $tf --id qwen3.8-draft
+dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": [], "name": "Qwen3.8 27B", "ctx": 8192, "replaces_draft": False}' $tf --id qwen3.8-draft
 ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings, name, ctx}, and --id names the file"
 present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
 printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
@@ -1554,6 +1554,12 @@ ds recipe draft $tf >/dev/null 2>&1; ok $? "and an unedited demo draft is replac
 ds recipe draft $tf --host $a --id demo-checked >/dev/null; ok $? "a demo draft for a machine passes the demo engine's validation"
 printf '# mine\n' >>"$tmp/state/startdgx-demo/drafts/demo-checked.toml"; ds recipe draft $tf --host $a --id demo-checked >/dev/null 2>&1; ok $((!$?)) "and an edited demo draft is not overwritten"
 ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo machine's curated recipe id is a clash"
+# a recipe of yours that is only a draft is replaced by adding again; one that holds more (estimated numbers, a curated recipe) is not
+ds recipe add $a "$rdir/my-draft-70b.toml" >/dev/null; ds recipe add $a "$rdir/my-estimate-14b.toml" >/dev/null
+ds recipe draft $tf --host $a --id my-draft-70b --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['replaces_draft'] is True))"; ok $? "a draft of yours already on the machine is replaced, and the result says so"
+ds recipe draft $tf --host $a --id my-estimate-14b >/dev/null 2>"$tmp/est.err"; ok $((!$?)) "a recipe of yours with estimated numbers is not replaced"
+grep -q "remove it first in Add recipe" "$tmp/est.err"; ok $? "and the refusal says how to go on"
+ds recipe remove $a my-draft-70b >/dev/null; ds recipe remove $a my-estimate-14b >/dev/null
 # tensorfold list / draft: tensorfold.dev's catalog for one DGX Spark, read-only, with a drafted recipe from an entry (its memory is
 # the catalog's estimate, so the variant is drafted and never fits until measured, ADR 0001).
 dtf() { local cond=$1; shift; ds tensorfold "$@" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }

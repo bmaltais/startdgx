@@ -22,6 +22,14 @@ FocusScope {
   property bool showBlocked: false
   readonly property bool tf: card.source === "tf"
   readonly property var tfList: card.dgx.tfList
+  // The machine's own recipe list, so a row says where its model stands there (not added, added and not measured, already on it).
+  readonly property var recipes: card.dgx.listHost === card.host ? card.dgx.recipes : null
+  function stateOf(recipeId) { return Model.findState(recipeId, card.recipes, card.hostState ? card.hostState.status : null) }
+  function measureAdded(state) {
+    if (!state.recipe) return
+    if (state.measureCtx > 0) card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: state.recipe, ctx: state.measureCtx })
+    else card.svc.dispatch({ type: "addRecipe", host: card.host })
+  }
   readonly property var tfParts: Model.tfSplit(card.tfList)
   // The rows to show: those that can be added, and the others too once asked for.
   readonly property var tfShown: card.showBlocked ? card.tfParts.ready.concat(card.tfParts.blocked) : card.tfParts.ready
@@ -67,7 +75,11 @@ FocusScope {
     if (!card.searching) card.dgx.searchHf(queryField.text)
   }
 
+  // A model just added changes what the rows say.
+  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) card.dgx.listRecipes(card.host)
+
   Component.onCompleted: {
+    card.dgx.listRecipes(card.host)
     queryField.text = card.query
     if (card.query !== "") { card.source = "hf"; card.go() }
     else card.pickSource("tf")
@@ -221,6 +233,19 @@ FocusScope {
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
+    // A recipe the machine already has that the rows above don't show: Add recipe… lists the machine's recipes of yours, with Remove.
+    RowLayout {
+      Layout.fillWidth: true
+      visible: card.draftFailure.indexOf("already has a recipe") >= 0
+      Button {
+        text: "Your recipes on " + Model.hostName(card.host) + "…"
+        bordered: true
+        fontSize: Style.font.bodySmall
+        tooltipText: "Opens Add recipe…, which lists the recipes of yours on this machine, to measure or remove one"
+        onClicked: card.svc.dispatch({ type: "addRecipe", host: card.host })
+      }
+      Item { Layout.fillWidth: true }
+    }
     Repeater {
       model: card.drafting ? card.dgx.draftWarnings : []
       delegate: Text {
@@ -261,20 +286,6 @@ FocusScope {
       font.pixelSize: Style.font.bodySmall
     }
 
-    // The next step, where it is: an added model is measured to be runnable (the same card as the model list's Measure…).
-    RowLayout {
-      Layout.fillWidth: true
-      visible: card.draftResult !== null && card.draftResult.ok && card.draftResult.added === true && card.dgx.draftCtx > 0
-      Button {
-        text: "Measure…"
-        bordered: true
-        fontSize: Style.font.bodySmall
-        tooltipText: "Download " + card.dgx.draftName + ", load it and bench it on " + Model.hostName(card.host) + ". Shows the download and asks first"
-        onClicked: card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: { id: card.dgx.draftId, name: card.dgx.draftName }, ctx: card.dgx.draftCtx })
-      }
-      Item { Layout.fillWidth: true }
-    }
-
     RowLayout {
       visible: !card.tf
       Layout.fillWidth: true
@@ -296,6 +307,7 @@ FocusScope {
           id: hfRow
           required property var modelData
           readonly property string label: Model.hfLabel(hfRow.modelData)
+          readonly property var st: card.stateOf(String(hfRow.modelData.recipe_id || ""))
           width: ListView.view.width
           implicitHeight: body.implicitHeight + Style.spacing.lg * 2
           radius: Math.max(Style.cornerRadius, Style.space(6))
@@ -368,7 +380,24 @@ FocusScope {
                 tooltipText: Model.authorHint()
                 onClicked: card.author(hfRow.modelData.repo)
               }
+              Text {
+                visible: hfRow.st.state !== ""
+                textFormat: Text.PlainText
+                text: Model.findStateText(hfRow.st)
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
               Button {
+                visible: hfRow.st.state === "unmeasured"
+                text: "Measure…"
+                bordered: true
+                fontSize: Style.font.bodySmall
+                tooltipText: "Download " + hfRow.modelData.repo + ", load it and bench it on " + Model.hostName(card.host) + ". Shows the download and asks first"
+                onClicked: card.measureAdded(hfRow.st)
+              }
+              Button {
+                visible: hfRow.st.state === ""
                 text: "Add"
                 bordered: true
                 fontSize: Style.font.bodySmall
@@ -409,6 +438,7 @@ FocusScope {
           id: tfRow
           required property var modelData
           readonly property string note: Model.tfRowNote(tfRow.modelData)
+          readonly property var st: card.stateOf(tfRow.modelData.recipeId)
           width: ListView.view.width
           implicitHeight: tfBody.implicitHeight + Style.spacing.lg * 2
           radius: Math.max(Style.cornerRadius, Style.space(6))
@@ -471,8 +501,24 @@ FocusScope {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
               }
+              Text {
+                visible: tfRow.st.state !== ""
+                textFormat: Text.PlainText
+                text: Model.findStateText(tfRow.st)
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
               Button {
-                visible: tfRow.modelData.draftable
+                visible: tfRow.st.state === "unmeasured"
+                text: "Measure…"
+                bordered: true
+                fontSize: Style.font.bodySmall
+                tooltipText: "Download " + tfRow.modelData.name + ", load it and bench it on " + Model.hostName(card.host) + ". Shows the download and asks first"
+                onClicked: card.measureAdded(tfRow.st)
+              }
+              Button {
+                visible: tfRow.modelData.draftable && tfRow.st.state === ""
                 text: "Add"
                 bordered: true
                 fontSize: Style.font.bodySmall

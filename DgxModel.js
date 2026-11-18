@@ -1386,7 +1386,7 @@ function draftStatus(step, host, repo) {
 // The CLI's failure line for the card, which has no --id to offer: an id clash ends at what the machine has; a draft file left by
 // an earlier try says to delete it.
 function draftErrorText(line) {
-  return String(line).replace(/: pick another id with --id, or delete the file$/, ": delete the file to draft it again").replace(/: pick another id with --id$/, "")
+  return String(line).replace(/: pick another id with --id, or delete the file$/, ": delete the file to draft it again").replace(/: pick another id with --id$/, "").replace(/, or pick another id with --id$/, "")
 }
 
 function draftDone(host, id) {
@@ -1406,7 +1406,7 @@ function parseTfList(text) {
     const r = p.recipes[i]
     if (!isPlainObject(r) || typeof r.id !== "string" || r.id === "" || typeof r.name !== "string") return null
     rows.push({ id: r.id, name: r.name, format: String(r.format || ""), estimate: Number(r.estimate_gb) > 0 ? Number(r.estimate_gb) : 0,
-                repo: typeof r.repo === "string" ? r.repo : "", draftable: r.draftable === true, reason: String(r.reason || ""),
+                repo: typeof r.repo === "string" ? r.repo : "", recipeId: typeof r.recipe_id === "string" ? r.recipe_id : "", draftable: r.draftable === true, reason: String(r.reason || ""),
                 status: r.status === "new" || r.status === "changed" ? r.status : "" })
   }
   return { firstLook: p.first_look === true, rows: rows }
@@ -1430,6 +1430,24 @@ function tfSplit(list) {
 
 function tfBlockedText(blocked) {
   return blocked.length === 0 ? "" : blocked.length + " more can't be added yet"
+}
+
+// Where a Find row stands on the machine, from the machine's recipe list (`startdgx list`, the picker's rows) and its status:
+// { state: "" | "ready" | "unmeasured" | "on", measureCtx } . "" means it can be added; "unmeasured" is added but not measured (its
+// Measure… ctx is the row's own, 0 when the row doesn't say); "on" is a model of the machine already (set up or being set up); "ready"
+// is added and measured, so the picker's Set up is the next step. `recipes` is null while the list is being read.
+function findState(recipeId, recipes, status) {
+  if (!recipeId || !Array.isArray(recipes)) return { state: "", measureCtx: 0, recipe: null }
+  const r = recipes.filter(function (x) { return x && x.id === recipeId })[0]
+  if (!r) return { state: "", measureCtx: 0, recipe: null }
+  const models = status && isPlainObject(status.models) ? status.models : {}
+  if (models[recipeId] || r.installed === true) return { state: "on", measureCtx: 0, recipe: r }
+  const ctx = pickerMeasureCtx(r)
+  return ctx === null ? { state: "ready", measureCtx: 0, recipe: r } : { state: "unmeasured", measureCtx: ctx, recipe: r }
+}
+
+function findStateText(s) {
+  return s.state === "on" ? "Already on this machine" : s.state === "ready" ? "Added. Set it up from the model list" : s.state === "unmeasured" ? "Added, not measured yet" : ""
 }
 
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).
