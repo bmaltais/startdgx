@@ -1435,6 +1435,14 @@ dj '{m["id"]: m["location"] for m in d["models"]}["'$abl'"] == "both"' storage $
 ds storage $a --unset; ok $? "demo storage --unset forgets the store"
 ds storage $a --set /media/demo/usb/startdgx-models; ds move $a $abl --to usb >/dev/null; ds delete $a $abl >/dev/null
 python3 -c 'import json,sys; sys.exit("'$abl'" in json.load(open(sys.argv[1]))["hosts"]["spark-a"]["storage"]["locations"])' "$tmp/state/startdgx-demo/state.json"; ok $? "demo delete forgets where the model was"
+same() { [ "$1" = "$2" ]; }
+# destination: where a model's files should end up, chosen before the first download and kept on this computer (nothing is sent to a machine).
+want=$(ds destination $a some-model); same "$want" nvme; ok $? "destination: internal disk by default"
+ds destination $a some-model --to usb >/dev/null; ok $? "destination --to usb records the choice"
+want=$(ds destination $a some-model --json); same "$want" '{"to": "usb"}'; ok $? "and reads it back"
+want=$(ds destination $a --json); same "$want" '{"some-model": "usb"}'; ok $? "without a model it lists the machine's choices"
+ds destination $a some-model --to nvme >/dev/null; want=$(ds destination $a --json); same "$want" '{}'; ok $? "--to nvme forgets it"
+ds destination $a 'Bad Id' >/dev/null 2>&1; ok $((!$?)) "destination refuses what can't be a recipe id"
 # recipe draft: a complete user recipe for a repo, written from the Hugging Face API alone (no model, no host unless --host
 # checks the id against the host's recipes), with the pinned commit, the license and one drafted variant (ADR 0001).
 drafts=$tmp/drafts

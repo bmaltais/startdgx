@@ -147,6 +147,9 @@ Item {
     core.planContext(host, r.id)
     // What TensorFold's list gave this machine for it, if it came from there: the window's Run page.
     core.loadTf(false, host)
+    core.loadDestinations(host)
+    const p = core.poller(host)
+    if (p) p.pollStorage()
   }
 
   // The model picker: the machine's catalog, with TensorFold's list (read now, which also saves this look so the next one marks what is new) and a
@@ -164,6 +167,7 @@ Item {
     root.card = "addModel"
     core.listRecipes(host)
     core.loadTf(true, host)
+    core.loadDestinations(host)
   }
   // The Install ComfyUI card: the folder to put it in, on a disk of the machine, checked as it is typed.
   function showInstallComfy(host) {
@@ -247,6 +251,7 @@ Item {
     case "hostSettings": root.showHostSettings(action.host, action.page); break
     case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
     case "recipeSettings": root.showRecipeSettings(action.host, action.recipe, action.page); break
+    case "setDestination": core.setDestination(action.host, action.id, action.to); break
     case "tfChange": core.draftTensorfold(action.host, action.row, action.choices, true); break
     case "addContext": core.addContext(action.host, action.id, action.ctx); break
     case "removeContext": core.addContext(action.host, action.id, action.ctx, true); break

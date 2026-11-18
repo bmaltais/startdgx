@@ -64,7 +64,8 @@ FocusScope {
         workflows: card.comfyWorkflows, health: card.comfyHealth }) : [])
     : card.kind === "recipe"
     ? Model.recipePages({ recipe: card.recipeNow, variants: card.mine ? card.dgx.variants : null, loading: card.mine && card.dgx.variantsLoading,
-        error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "", tf: card.tfRow })
+        error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "", tf: card.tfRow,
+        store: card.storage ? card.storage.store : null, destination: card.dgx.destinationOf(card.host, card.model) })
     : card.kind === "host"
     ? Model.hostPages({
         machine: card.machine, update: Model.engineUpdate(card.status), needsSetup: !!card.dgx.setupNeeded[card.host],
@@ -74,7 +75,7 @@ FocusScope {
         location: Model.locationOf(card.storage, card.model), choices: card.choices,
         variantsLoading: card.mine && card.dgx.variantsLoading, variantsError: card.mine ? card.dgx.variantsError : "",
         away: Model.isAway(card.dgx.shownState[card.host]) }) : []
-  readonly property var values: card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
+  readonly property var values: card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow, destination: card.dgx.destinationOf(card.host, card.model) }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
 
   // The model went (a removal finished): nothing left to set.
   readonly property bool gone: (card.kind === "model" && !card.entry) || (card.kind === "comfy" && !card.comfyInstall)
