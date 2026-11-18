@@ -100,10 +100,10 @@ test("rows: a machine's ComfyUI installs follow its Add model row", () => {
   assert.deepStrictEqual(M.rows(["h1"], { h1: up }).map((x) => x.kind), ["host", "add", "comfyfind"], "none listed: just the Find row")
 })
 
-test("keyAction: on a ComfyUI row the machine's keys act for its machine", () => {
+test("keyAction: on a ComfyUI row g opens its window and the machine's other keys act for its machine", () => {
   const row = { kind: "comfy", host: "h", id: "/a" }
   assert.deepStrictEqual(M.keyAction("a", row, null, "", false, false, ""), { type: "addModel", host: "h" })
-  assert.deepStrictEqual(M.keyAction("g", row, null, "", false, false, ""), { type: "hostSettings", host: "h" })
+  assert.deepStrictEqual(M.keyAction("g", row, null, "", false, false, ""), { type: "comfySettings", host: "h", path: "/a" }, "g opens the install's window")
   assert.strictEqual(M.keyAction("d", row, null, "", false, false, ""), null, "no remove on an install")
 })
 
@@ -196,4 +196,84 @@ test("rows and keys: the Find row ends a machine's ComfyUI group and opens the c
   assert.deepStrictEqual(M.rows(["h"], { h: { loaded: true, online: false, status: null } }, {}).map((x) => x.kind), ["host"], "not on a machine that is away")
   assert.deepStrictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", false, false, ""), { type: "findComfy", host: "h" })
   assert.strictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", true, false, ""), null, "away: nothing")
+})
+
+const answerOf = (over, status) => Object.assign({ install: install({}), too_old: false, running_elsewhere: [], job: { state: "none", log: [] },
+  update: null, status: Object.assign({ port: 8188, bind: "0.0.0.0", service: { installed: true, active: true, enabled: "enabled" }, comfy: { version: "v0.3.50", newer_release: "" },
+    models_bytes: 30 * 2 ** 30, disk_free_bytes: 80 * 2 ** 30 }, status || {}) }, over)
+const runningStatus = { comfyui: [{ path: "/home/u/dgx-comfyui", rss_mib: 6144 }] }
+
+test("parseComfyStatus: the install's answer, or null", () => {
+  assert.ok(M.parseComfyStatus(JSON.stringify(answerOf({}))))
+  assert.strictEqual(M.parseComfyStatus("nope"), null)
+  assert.strictEqual(M.parseComfyStatus("{}"), null)
+})
+
+test("comfyUrl: only where another machine can reach it", () => {
+  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "0.0.0.0" }), "http://gx10:8188")
+  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "100.64.0.2" }), "http://gx10:8188")
+  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "127.0.0.1" }), "")
+  assert.strictEqual(M.comfyUrl("me@gx10", { bind: "0.0.0.0" }), "")
+  assert.strictEqual(M.comfyUrl("me@gx10", null), "")
+})
+
+test("comfyPages: a running install can be opened; a stopped one says to start it", () => {
+  const field = (pages, key) => pages.flatMap((p) => p.fields).find((f) => f.key === key)
+  const info = M.comfyRow(install({}), runningStatus)
+  const up = M.comfyPages({ host: "me@gx10", info: info, answer: answerOf({}), error: "", pending: "" })
+  assert.deepStrictEqual(up.map((p) => p.title), ["General", "About", "Manage"])
+  assert.strictEqual(field(up, "state").hint, "Running · 6 GiB · port 8188")
+  assert.strictEqual(field(up, "open").disabled, false)
+  assert.strictEqual(field(up, "open").hint, "http://gx10:8188")
+  const down = M.comfyPages({ host: "me@gx10", info: M.comfyRow(install({}), {}), answer: answerOf({}), error: "", pending: "" })
+  assert.strictEqual(field(down, "open").disabled, true)
+  assert.strictEqual(field(down, "open").hint, "Start it first.")
+  assert.strictEqual(field(down, "state").hint, "Stopped")
+  const local = M.comfyPages({ host: "me@gx10", info: info, answer: answerOf({}, { bind: "127.0.0.1" }), error: "", pending: "" })
+  assert.strictEqual(field(local, "open").disabled, true)
+  assert.match(field(local, "open").hint, /listens on the machine itself/)
+})
+
+test("comfyPages: the facts, and what waits or fails", () => {
+  const field = (pages, key) => pages.flatMap((p) => p.fields).find((f) => f.key === key)
+  const info = M.comfyRow(install({}), {})
+  const pages = M.comfyPages({ host: "h", info: info, answer: answerOf({ update: { text: "v0.2.0 is out" } }, { comfy: { version: "v0.3.50", newer_release: "v0.3.60" } }), error: "", pending: "" })
+  assert.strictEqual(field(pages, "folder").hint, "/home/u/dgx-comfyui")
+  assert.strictEqual(field(pages, "tool").hint, "v0.1.0 · v0.2.0 is out")
+  assert.strictEqual(field(pages, "comfy").hint, "v0.3.50 · v0.3.60 is out")
+  assert.strictEqual(field(pages, "models").hint, "30.0 GiB \u00b7 80.0 GiB free")
+  assert.strictEqual(field(M.comfyPages({ host: "h", info: info, answer: null, error: "", pending: "" }), "state").hint, "Reading…")
+  assert.strictEqual(field(M.comfyPages({ host: "h", info: info, answer: null, error: "h didn't answer", pending: "" }), "state").hint, "h didn't answer")
+  // While a click waits, the switch and Forget can't be clicked again.
+  const busy = M.comfyPages({ host: "h", info: info, answer: answerOf({}), error: "", pending: "start" })
+  assert.strictEqual(field(busy, "service").disabled, true)
+  assert.strictEqual(field(busy, "forget").disabled, true)
+  assert.strictEqual(field(M.comfyPages({ host: "h", info: info, answer: answerOf({}), error: "", pending: "" }), "service").disabled, false)
+  // One that is not installed, or too old to read, has no switch.
+  assert.strictEqual(field(M.comfyPages({ host: "h", info: M.comfyRow(install({ installed: false }), {}), answer: answerOf({}), error: "", pending: "" }), "service").disabled, true)
+  assert.strictEqual(field(M.comfyPages({ host: "h", info: info, answer: answerOf({ too_old: true, status: null }), error: "", pending: "" }), "service").disabled, true)
+})
+
+test("comfyValues and comfyChange: the switch follows the service; a click asks for the matching action", () => {
+  assert.deepStrictEqual(M.comfyValues(answerOf({})), { service: true })
+  assert.deepStrictEqual(M.comfyValues(answerOf({}, { service: { enabled: "disabled" } })), { service: false })
+  assert.deepStrictEqual(M.comfyValues(null), { service: false })
+  const info = M.comfyRow(install({}), {})
+  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "service", true), { type: "comfyToggle", host: "me@gx10", path: "/home/u/dgx-comfyui", kind: "autostart-on" })
+  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "service", false).kind, "autostart-off")
+  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "open", true), { type: "comfyOpen", url: "http://gx10:8188" })
+  assert.strictEqual(M.comfyChange("me@gx10", info, answerOf({}, { bind: "127.0.0.1" }), "open", true), null)
+  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "forget", true), { type: "comfyForget", host: "me@gx10", path: "/home/u/dgx-comfyui" })
+  assert.strictEqual(M.comfyChange("me@gx10", info, answerOf({}), "nope", true), null)
+})
+
+test("comfyCommand and comfyMarks: the service switch and Forget", () => {
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "autostart-on", path: "/a" }), ["comfyui", "autostart", "h", "on", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "autostart-off", path: "/a" }), ["comfyui", "autostart", "h", "off", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "forget", path: "/a" }), ["comfyui", "forget", "h", "--dir", "/a", "--timeout", "60"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "forget", path: "/a", stopService: true }), ["comfyui", "forget", "h", "--dir", "/a", "--stop-service", "--timeout", "60"])
+  // The switch shows on the row as the start or stop it is.
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "autostart-on", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "start" })
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "autostart-off", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "stop" })
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "forget", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "forget" })
 })

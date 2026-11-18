@@ -18,6 +18,7 @@ Rectangle {
 
   signal selectRequested()
   signal toggleRequested()
+  signal settingsRequested()
 
   readonly property bool running: row.info.state === "running"
   readonly property bool hot: hover.hovered || row.current
@@ -129,6 +130,16 @@ Rectangle {
       font.pixelSize: Style.font.bodySmall
       font.features: { "tnum": 1 }
     }
+    // The install's window: the service switch, Open, the facts, Forget.
+    Button {
+      Layout.alignment: Qt.AlignVCenter
+      Layout.preferredWidth: implicitHeight
+      visible: !row.away && row.hot
+      iconText: "\uf013"
+      tooltipText: "Settings…  (g)"
+      onClicked: row.settingsRequested()
+    }
+
     // Start or Stop; greyed out, with the reason, while another install runs (they share the machine's memory).
     Button {
       Layout.alignment: Qt.AlignVCenter

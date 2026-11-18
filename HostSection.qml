@@ -289,6 +289,10 @@ ColumnLayout {
       current: section.cursorKey === Model.comfyKey(section.host, comfyRow.modelData)
       onCurrentChanged: if (current) section.revealRequested(comfyRow)
       onSelectRequested: section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
+      onSettingsRequested: {
+        section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
+        section.actionRequested({ type: "comfySettings", host: section.host, path: comfyRow.modelData })
+      }
       onToggleRequested: {
         section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
         section.actionRequested({ type: "comfyToggle", host: section.host, path: comfyRow.modelData, kind: comfyRow.toggle.action })
