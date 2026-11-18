@@ -85,7 +85,7 @@ FocusScope {
 
     // The engine's own lines: the download, what it loads, what follows.
     Repeater {
-      model: card.mine && card.dgx.runPlan ? card.dgx.runPlan : []
+      model: card.mine && card.dgx.runPlan ? Model.runPlanLines(card.dgx.runPlan, card.mode) : []
       delegate: Text {
         required property string modelData
         Layout.fillWidth: true

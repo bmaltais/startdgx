@@ -1076,6 +1076,16 @@ function parseMeasurePlan(text) {
   return all.length ? all : null
 }
 
+// The lines the confirmation card shows. The machine's dry run is a measuring run's plan; for a plain set-up only what it downloads and
+// loads applies (the bench and the lock are the measuring run's), and it starts if there is room. Falls back to every line when it
+// can't tell which those are.
+function runPlanLines(plan, mode) {
+  const all = Array.isArray(plan) ? plan : []
+  if (mode !== "setup") return all
+  const kept = all.filter(function (l) { return /^(download|load):/i.test(String(l)) })
+  return kept.length === 0 ? all : kept.concat(["then: it starts if there is room for it"])
+}
+
 // The confirmation card's words, for a measure or a setup of `r` at `ctx` on `host`: { title, body, button }.
 function recipeRunWords(mode, r, ctx, host) {
   const name = String(r.name || r.id)
@@ -1371,7 +1381,7 @@ function parseDraftResult(text) {
   const p = parseJson(text)
   if (!isPlainObject(p) || p.ok !== true || typeof p.id !== "string" || p.id === "" || typeof p.path !== "string" || p.path === "") return null
   if (!Array.isArray(p.warnings)) return null
-  return { id: p.id, path: p.path, name: typeof p.name === "string" && p.name !== "" ? p.name : p.id, ctx: Number(p.ctx) > 0 ? Number(p.ctx) : 0,
+  return { id: p.id, path: p.path, source: p.source === "estimated" ? "estimated" : "drafted", name: typeof p.name === "string" && p.name !== "" ? p.name : p.id, ctx: Number(p.ctx) > 0 ? Number(p.ctx) : 0,
            warnings: p.warnings.map(String).filter(function (w) { return w !== "" }) }
 }
 
@@ -1389,8 +1399,10 @@ function draftErrorText(line) {
   return String(line).replace(/: pick another id with --id, or delete the file$/, ": delete the file to draft it again").replace(/: pick another id with --id$/, "").replace(/, or pick another id with --id$/, "")
 }
 
-function draftDone(host, id) {
-  return id + " is on " + hostName(host) + " but not measured yet, so it can't run. Measure… downloads it and tests it there; after that it is a model like the others."
+function draftDone(host, id, source) {
+  return source === "estimated"
+    ? id + " is on " + hostName(host) + ", with TensorFold's memory estimate. Set up… downloads it and starts it there; Measure… later replaces the estimate with real numbers."
+    : id + " is on " + hostName(host) + " but not measured yet, so it can't run. Measure… downloads it and tests it there; after that it is a model like the others."
 }
 
 // ---- TensorFold's list on the Find card ---------------------------------------------------------------------------------------
@@ -1440,7 +1452,8 @@ function tfDraftCommand(host, entry, choices, settings, replace) {
     if (choices.parallel !== undefined && Number(choices.parallel) !== d.parallel) args.push("--parallel", String(choices.parallel))
     if (choices.input !== undefined && String(choices.input) !== d.input) args.push("--input", String(choices.input))
   }
-  return ["tensorfold", "draft", "--host", host, "--json"].concat(args, replace ? ["--replace"] : [], ["--", String(entry)])
+  // --estimated: the list's estimate is the variant's numbers and the add confirms them, so the model can be set up without a measuring run.
+  return ["tensorfold", "draft", "--host", host, "--json", "--estimated"].concat(args, replace ? ["--replace"] : [], ["--", String(entry)])
 }
 
 // What a choice reads as on the card: "16K", "2", "Text + images".
@@ -1476,21 +1489,27 @@ function tfBlockedText(blocked) {
 }
 
 // Where a Find row stands on the machine, from the machine's recipe list (`startdgx list`, the picker's rows) and its status:
-// { state: "" | "ready" | "unmeasured" | "on", measureCtx } . "" means it can be added; "unmeasured" is added but not measured (its
-// Measure… ctx is the row's own, 0 when the row doesn't say); "on" is a model of the machine already (set up or being set up); "ready"
-// is added and measured, so the picker's Set up is the next step. `recipes` is null while the list is being read.
+// { state: "" | "ready" | "unmeasured" | "nofit" | "on", measured, measureCtx, recipe } . "" means it can be added; "ready" is added and the machine
+// counts it as fitting (measured, or an estimate that was confirmed: `measured` says which), so Set up… is the next step and Measure… (the
+// ctx is the row's own) an optional way to replace an estimate; "unmeasured" is added but its numbers don't count yet (a draft: it has to be
+// measured); "nofit" is added and measured, and doesn't fit this machine; "on" is a model of the machine already (set up or being set up).
+// `recipes` is null while the list is being read.
 function findState(recipeId, recipes, status) {
-  if (!recipeId || !Array.isArray(recipes)) return { state: "", measureCtx: 0, recipe: null }
+  const none = { state: "", measured: false, measureCtx: 0, recipe: null }
+  if (!recipeId || !Array.isArray(recipes)) return none
   const r = recipes.filter(function (x) { return x && x.id === recipeId })[0]
-  if (!r) return { state: "", measureCtx: 0, recipe: null }
+  if (!r) return none
   const models = status && isPlainObject(status.models) ? status.models : {}
-  if (models[recipeId] || r.installed === true) return { state: "on", measureCtx: 0, recipe: r }
+  const measured = recipeSource(r) === "measured"
+  if (models[recipeId] || r.installed === true) return { state: "on", measured: measured, measureCtx: 0, recipe: r }
+  if (r.available === true) return { state: "ready", measured: measured, measureCtx: measured ? 0 : Math.max(0, Number(r.context) || 0), recipe: r }
   const ctx = pickerMeasureCtx(r)
-  return ctx === null ? { state: "ready", measureCtx: 0, recipe: r } : { state: "unmeasured", measureCtx: ctx, recipe: r }
+  return ctx === null ? { state: "nofit", measured: true, measureCtx: 0, recipe: r } : { state: "unmeasured", measured: false, measureCtx: ctx, recipe: r }
 }
 
 function findStateText(s) {
-  return s.state === "on" ? "Already on this machine" : s.state === "ready" ? "Added. Set it up from the model list" : s.state === "unmeasured" ? "Added, not measured yet" : ""
+  return s.state === "on" ? "Already on this machine" : s.state === "ready" ? (s.measured ? "Added \u00b7 measured" : "Added \u00b7 memory estimated")
+    : s.state === "unmeasured" ? "Added, not measured yet" : s.state === "nofit" ? "Added, but it doesn't fit this machine" : ""
 }
 
 // What Update does for a row the machine already has: { kind: "" | "update" | "blocked", confirm, text }. The list has moved on from what the
@@ -1499,7 +1518,7 @@ function findStateText(s) {
 function tfUpdatePlan(row, st) {
   if (!row || !row.outdated || !st || st.state === "") return { kind: "", confirm: false, text: "" }
   if (st.state === "on") return { kind: "blocked", confirm: false, text: "Update available: remove the model first" }
-  return { kind: "update", confirm: st.state === "ready", text: "Update available" }
+  return { kind: "update", confirm: st.measured === true && st.state !== "unmeasured", text: "Update available" }
 }
 
 // The choices an update gives the machine again: what it was given before, as the picks the draft command compares with the defaults.
@@ -1511,7 +1530,7 @@ function tfAddedChoices(row) {
 function tfStateText(row, st) {
   const base = findStateText(st)
   const plan = tfUpdatePlan(row, st)
-  return plan.kind === "update" ? (st.state === "ready" ? "Added \u00b7 update available" : "Added, not measured \u00b7 update available") : plan.kind === "blocked" ? "On this machine \u00b7 update available" : base
+  return plan.kind === "update" ? (st.state === "unmeasured" ? "Added, not measured \u00b7 update available" : "Added \u00b7 update available") : plan.kind === "blocked" ? "On this machine \u00b7 update available" : base
 }
 
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).

@@ -25,6 +25,10 @@ FocusScope {
   // The machine's own recipe list, so a row says where its model stands there (not added, added and not measured, already on it).
   readonly property var recipes: card.dgx.listHost === card.host ? card.dgx.recipes : null
   function stateOf(recipeId) { return Model.findState(recipeId, card.recipes, card.hostState ? card.hostState.status : null) }
+  // Set up… on a row that is ready: the card that shows the download first, as for any recipe of yours.
+  function setUpAdded(state) {
+    if (state.recipe && Number(state.recipe.context) > 0) card.svc.dispatch({ type: "setupYours", host: card.host, recipe: state.recipe })
+  }
   function measureAdded(state) {
     if (!state.recipe) return
     if (state.measureCtx > 0) card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: state.recipe, ctx: state.measureCtx })
@@ -155,7 +159,7 @@ FocusScope {
       visible: card.tf
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
-      text: "Models TensorFold publishes for one DGX Spark, read from this computer. Add puts one on " + Model.hostName(card.host) + ", not measured yet; Measure… then downloads and tests it there, and after that it runs like any other model."
+      text: "Models TensorFold publishes for one DGX Spark, read from this computer. Add puts one on " + Model.hostName(card.host) + " with TensorFold's memory estimate; Set up… then downloads and starts it there. Measure… is optional: it replaces the estimate with real numbers."
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -298,7 +302,7 @@ FocusScope {
       visible: card.draftResult !== null && card.draftResult.ok && card.draftResult.added === true
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
-      text: card.draftResult ? Model.draftDone(card.host, card.draftResult.id) : ""
+      text: card.draftResult ? Model.draftDone(card.host, card.draftResult.id, card.dgx.draftSource) : ""
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
@@ -536,12 +540,26 @@ FocusScope {
                 tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + " again from TensorFold's current version, with the choices it had" + (Model.tfUpdatePlan(tfRow.modelData, tfRow.st).confirm ? ". It was measured: the measurement is discarded and it has to be measured again" : "")
                 onClicked: card.update(tfRow.modelData, tfRow.st)
               }
+              TextLink {
+                visible: tfRow.st.state === "ready" && !tfRow.st.measured && tfRow.st.measureCtx > 0
+                text: "Measure…"
+                tooltip: "Optional: download it, load it and bench it on " + Model.hostName(card.host) + ", to replace TensorFold's estimate with real numbers"
+                onClicked: card.measureAdded(tfRow.st)
+              }
+              Button {
+                visible: tfRow.st.state === "ready"
+                text: "Set up…"
+                bordered: true
+                fontSize: Style.font.bodySmall
+                tooltipText: "Download " + tfRow.modelData.name + " to " + Model.hostName(card.host) + " and start it. Shows the download and asks first"
+                onClicked: card.setUpAdded(tfRow.st)
+              }
               Button {
                 visible: tfRow.st.state === "unmeasured"
                 text: "Measure…"
                 bordered: true
                 fontSize: Style.font.bodySmall
-                tooltipText: "Download " + tfRow.modelData.name + ", load it and bench it on " + Model.hostName(card.host) + ". Shows the download and asks first"
+                tooltipText: "Download " + tfRow.modelData.name + ", load it and bench it on " + Model.hostName(card.host) + ". Its numbers don't count until then. Shows the download and asks first"
                 onClicked: card.measureAdded(tfRow.st)
               }
               TextLink {

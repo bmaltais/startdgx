@@ -88,6 +88,8 @@ Item {
   property string draftId: ""
   // The drafted recipe's name and the context its variant is for, which Measure… on the Find card needs.
   property string draftName: ""
+  // "estimated" when the add gave the recipe the list's estimate: the add then confirms it, so no measuring run comes first.
+  property string draftSource: ""
   property int draftCtx: 0
   property string draftError: ""
   property var draftWarnings: []
@@ -447,6 +449,8 @@ Item {
       // The picker's catalog and the card's list now have a recipe more.
       if (service.listHost === service.recipeHost) service.recipes = null
       service.loadUserRecipes(service.recipeHost)
+      // The add is the person's say-so for an estimate from TensorFold's list: confirm it, so the machine counts the model as fitting.
+      if (service.draftSource === "estimated" && r.id === service.draftId) Qt.callLater(function () { service.confirmRecipe(service.recipeHost, r.id) })
     }
   }
 
@@ -507,6 +511,7 @@ Item {
     if (service.recipeBusy) return
     service.draftRepo = label
     service.draftId = ""
+    service.draftSource = ""
     service.draftError = ""
     service.draftWarnings = []
     service.recipeHost = host
@@ -834,6 +839,7 @@ Item {
       }
       service.draftId = d.id
       service.draftName = d.name
+      service.draftSource = d.source
       service.draftCtx = d.ctx
       service.draftWarnings = d.warnings
       service.checkRecipe(service.recipeHost, d.path, true)
