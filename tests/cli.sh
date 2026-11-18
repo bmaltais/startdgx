@@ -1589,6 +1589,15 @@ ok $? "the entry's own defaults add nothing"
 ds tensorfold draft lfm2.5-24b-a2b --context 4096 --out "$tmp/tfc" >/dev/null 2>"$tmp/ctx.err"; ok $((!$?)) "a context the entry doesn't offer is refused"
 grep -q "offers context 8192, 16384, 32768" "$tmp/ctx.err"; ok $? "and the refusal lists what it offers"
 ds tensorfold draft odd-link --parallel 2 >/dev/null 2>&1; ok $((!$?)) "a choice on an entry that offers none is refused"
+# --estimated: the list's own estimate is the variant's numbers (confirmed by the person's add), and an entry without one stays drafted
+ds tensorfold draft lfm2.5-24b-a2b --estimated --id est-lfm --out "$tmp/tfe" --json | python3 -c "
+import json,sys,tomllib
+d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb')); v=r['variant'][0]
+sys.exit(not (d['source']=='estimated' and v['source']=='estimated' and v['peak_ram_gib']==24 and 'not measured' in r['summary']))"
+ok $? "tensorfold draft --estimated writes the list's estimate as an estimated variant"
+ds tensorfold draft odd-link --estimated --out "$tmp/tfe" >/dev/null 2>&1; ok $((!$?)) "and still refuses an entry that can't be drafted"
+ds tensorfold draft lfm2.5-24b-a2b --id plain-est --out "$tmp/tfe" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not d['source']=='drafted')"
+ok $? "without --estimated the variant is still drafted, which must be measured (ADR 0001)"
 # the record of what a machine was given, and "outdated" once the list has moved on
 rm -f "$tmp/state/startdgx-demo/tensorfold-added.json"
 ds tensorfold draft lfm2.5-24b-a2b --host $a --context 16384 --parallel 2 --id rec-lfm --out "$tmp/tfc2" >/dev/null

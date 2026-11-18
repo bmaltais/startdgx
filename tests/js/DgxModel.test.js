@@ -1683,7 +1683,7 @@ test("parseTfList: the rows of tensorfold list --json, or null for what isn't it
 test("tensorfold commands: --update saves the look, and the entry comes after -- so a dash can't be an option", () => {
   assert.deepStrictEqual(M.tfListCommand(false), ["tensorfold", "list", "--json"])
   assert.deepStrictEqual(M.tfListCommand(true), ["tensorfold", "list", "--json", "--update"])
-  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "-x"), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "-x"])
+  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "-x"), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--", "-x"])
 })
 
 test("tfRowText, tfRowNote and tfSummary: an estimate is said to be one; the reason and the counts are plain", () => {
@@ -1714,20 +1714,31 @@ test("parseDraftResult carries the recipe's name and context, for Measure… on 
   assert.strictEqual(d.ctx, 8192)
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).ctx, 0)
   assert.match(M.draftDone("me@gx10", "x"), /not measured yet, so it can't run/)
+  assert.match(M.draftDone("me@gx10", "x", "estimated"), /memory estimate. Set up/)
+  assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [], source: "estimated" })).source, "estimated")
+  assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).source, "drafted")
 })
 
 test("findState: where a Find row stands on the machine, from its recipe list", () => {
   const mine = (over) => Object.assign({ id: "x-tensorfold", user: true, installed: false, available: false, source: "drafted", context: 8192 }, over)
-  assert.deepStrictEqual(M.findState("x-tensorfold", null, {}), { state: "", measureCtx: 0, recipe: null })
+  assert.deepStrictEqual(M.findState("x-tensorfold", null, {}), { state: "", measured: false, measureCtx: 0, recipe: null })
   assert.strictEqual(M.findState("", [mine({})], {}).state, "")
   assert.strictEqual(M.findState("y", [mine({})], {}).state, "")
   const un = M.findState("x-tensorfold", [mine({})], {})
   assert.strictEqual(un.state, "unmeasured")
   assert.strictEqual(un.measureCtx, 8192)
-  assert.strictEqual(M.findState("x-tensorfold", [mine({ source: "measured", available: true })], {}).state, "ready")
+  const measured = M.findState("x-tensorfold", [mine({ source: "measured", available: true })], {})
+  assert.strictEqual(measured.state, "ready")
+  assert.strictEqual(measured.measured, true)
+  // an estimate the add confirmed: the machine counts it as fitting, so it can be set up, and Measure… stays an option
+  const est = M.findState("x-tensorfold", [mine({ source: "estimated", available: true })], {})
+  assert.deepStrictEqual([est.state, est.measured, est.measureCtx], ["ready", false, 8192])
+  assert.strictEqual(M.findState("x-tensorfold", [mine({ source: "measured", available: false })], {}).state, "nofit")
   assert.strictEqual(M.findState("x-tensorfold", [mine({ installed: true })], {}).state, "on")
   assert.strictEqual(M.findState("x-tensorfold", [mine({})], { models: { "x-tensorfold": { unit: "installing" } } }).state, "on")
   assert.strictEqual(M.findStateText({ state: "unmeasured" }), "Added, not measured yet")
+  assert.strictEqual(M.findStateText({ state: "ready", measured: false }), "Added \u00b7 memory estimated")
+  assert.strictEqual(M.findStateText({ state: "ready", measured: true }), "Added \u00b7 measured")
   assert.strictEqual(M.findStateText({ state: "" }), "")
   assert.strictEqual(M.parseTfList(JSON.stringify({ recipes: [{ id: "a", name: "A", recipe_id: "a-tensorfold" }] })).rows[0].recipeId, "a-tensorfold")
 })
@@ -1743,10 +1754,10 @@ test("parseTfList carries an entry's choices, or null", () => {
 
 test("tfDraftCommand sends only the choices that differ from the entry's defaults", () => {
   const cmd = (c) => M.tfDraftCommand("me@gx10", "a", c, tfSet)
-  assert.deepStrictEqual(cmd({ context: 8192, parallel: 1, input: "text" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "a"])
-  assert.deepStrictEqual(cmd({ context: 16384, parallel: 2, input: "images" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--context", "16384", "--parallel", "2", "--input", "images", "--", "a"])
-  assert.deepStrictEqual(cmd({ parallel: 2 }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--parallel", "2", "--", "a"])
-  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "a", { context: 16384 }, null), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "a"])
+  assert.deepStrictEqual(cmd({ context: 8192, parallel: 1, input: "text" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--", "a"])
+  assert.deepStrictEqual(cmd({ context: 16384, parallel: 2, input: "images" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--context", "16384", "--parallel", "2", "--input", "images", "--", "a"])
+  assert.deepStrictEqual(cmd({ parallel: 2 }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--parallel", "2", "--", "a"])
+  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "a", { context: 16384 }, null), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--", "a"])
 })
 
 test("tfChoiceLabel, tfValues and tfCustomized: what a choice reads as, the values shown and whether they differ", () => {
@@ -1763,11 +1774,12 @@ test("tfChoiceLabel, tfValues and tfCustomized: what a choice reads as, the valu
 test("tfUpdatePlan and tfStateText: a draft is replaced at once, a measured recipe asks first, a set-up model is blocked", () => {
   const row = (over) => Object.assign({ id: "a", outdated: true }, over)
   assert.deepStrictEqual(M.tfUpdatePlan(row({}), { state: "unmeasured" }), { kind: "update", confirm: false, text: "Update available" })
-  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "ready" }).confirm, true)
+  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "ready", measured: true }).confirm, true)
+  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "ready", measured: false }).confirm, false)
   assert.strictEqual(M.tfUpdatePlan(row({}), { state: "on" }).kind, "blocked")
   assert.strictEqual(M.tfUpdatePlan(row({ outdated: false }), { state: "ready" }).kind, "")
   assert.strictEqual(M.tfUpdatePlan(row({}), { state: "" }).kind, "")
-  assert.strictEqual(M.tfStateText(row({}), { state: "ready" }), "Added \u00b7 update available")
+  assert.strictEqual(M.tfStateText(row({}), { state: "ready", measured: true }), "Added \u00b7 update available")
   assert.strictEqual(M.tfStateText(row({ outdated: false }), { state: "unmeasured" }), "Added, not measured yet")
   assert.strictEqual(M.tfStateText(row({}), { state: "on" }), "On this machine \u00b7 update available")
 })
@@ -1780,8 +1792,17 @@ test("the update gives the machine what it was given before, and --replace only 
   assert.strictEqual(row.added.recipeId, "a-tensorfold")
   assert.deepStrictEqual(M.tfAddedChoices(row), { context: 16384, parallel: 2, input: "text" })
   assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "a", M.tfAddedChoices(row), row.settings, true),
-    ["tensorfold", "draft", "--host", "me@gx10", "--json", "--context", "16384", "--parallel", "2", "--replace", "--", "a"])
+    ["tensorfold", "draft", "--host", "me@gx10", "--json", "--estimated", "--context", "16384", "--parallel", "2", "--replace", "--", "a"])
   assert.deepStrictEqual(M.tfListCommand(true, "me@gx10"), ["tensorfold", "list", "--json", "--update", "--host", "me@gx10"])
   assert.deepStrictEqual(M.tfListCommand(false), ["tensorfold", "list", "--json"])
   assert.strictEqual(M.tfAddedChoices({ added: null }), null)
+})
+
+test("runPlanLines: a set-up shows what is downloaded and loaded, not the measuring run's bench; a measure shows everything", () => {
+  const plan = ["Measure x at context 8192 (now a drafted variant)", "download: 12.0 GiB to download", "load: X on tensorfold, context 8192; it expects about 24 GiB RAM",
+    "while it runs, every other command waits for it: typically a few minutes", "then: restarts the model if it runs, runs the bench, leaves it running"]
+  assert.deepStrictEqual(M.runPlanLines(plan, "setup"), [plan[1], plan[2], "then: it starts if there is room for it"])
+  assert.deepStrictEqual(M.runPlanLines(plan, "measure"), plan)
+  assert.deepStrictEqual(M.runPlanLines(["something else"], "setup"), ["something else"])
+  assert.deepStrictEqual(M.runPlanLines(null, "setup"), [])
 })
