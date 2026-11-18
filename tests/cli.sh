@@ -1671,7 +1671,7 @@ later comfyui status $g --dir fresh --json | python3 -c "import json,sys; d=json
 ds comfyui adopt $g --dir /home/demo/code/dgx-comfyui --label dev >/dev/null
 ds comfyui update $g --dir dev 2>&1 | grep -q "uncommitted changes; commit or stash them, or move it yourself: git -C /home/demo/code/dgx-comfyui"; ok $? "demo update refuses an edited checkout, with the git commands"
 ds comfyui adopt $g --dir /media/demo/usb/dgx-comfyui --label usb >/dev/null
-ds comfyui update $g --dir usb >/dev/null; ok $? "demo update moves a clean checkout"
+ds comfyui update $g --dir usb >/dev/null; ok $? "demo update moves a clean checkout on a tag"
 dj 'd["state"] == "running"' comfyui job $g --dir usb --json
 ds comfyui forget $g --dir /home/demo/new >/dev/null; ds comfyui forget $g --dir /home/demo/code/dgx-comfyui >/dev/null; ds comfyui forget $g --dir /media/demo/usb/dgx-comfyui >/dev/null
 # recipes in demo mode: the first model of the Krea recipe is on disk; the MiniMax recipe needs a token
@@ -1753,13 +1753,13 @@ case "$*" in
   "recipe list --json") echo '{"schema":1,"recipes":[{"name":"r1","valid":true,"title":"R1","description":"","models":1,"total_bytes":10,"nodes":0}]}';;
   "recipe show r1 --json") echo '{"schema":1,"name":"","title":"R1","models":[{"file":"a.bin","dest":"loras","url":"u","size":10,"sha256":"0"}],"nodes":[],"flags":[],"total_bytes":10}';;
   "recipe check "*" --json"|"recipe check "*" --verify --json") name=$3; have=0; [ ! -e "$PWD/data/models/loras/a.bin" ] || have=1
-    src='{"ok":true,"problem":"","detail":[]}'; [ ! -e "$PWD/GATED" ] || src='{"ok":false,"problem":"gated","detail":["HF_TOKEN","401"]}'; [ ! -e "$PWD/GONE" ] || src='{"ok":false,"problem":"gone","detail":["404"]}'
+    src='{"ok":true,"problem":"","detail":[]}'; [ ! -e "$PWD/GATED" ] || [ -n "${HF_TOKEN:-}" ] || src='{"ok":false,"problem":"gated","detail":["HF_TOKEN","401"]}'; [ ! -e "$PWD/GONE" ] || src='{"ok":false,"problem":"gone","detail":["404"]}'
     [ ! -e "$PWD/STALE" ] || echo '{"schema":1,"title":"S","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"size"}],"download_bytes":0}'
     [ -e "$PWD/STALE" ] && exit 0
     if [ "$name" = big ]; then echo '{"schema":1,"title":"Big","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":99999999999999,"state":"missing","source":{"ok":true,"problem":"","detail":[]}}],"download_bytes":99999999999999}'
     elif [ $have = 1 ]; then echo '{"schema":1,"title":"R1","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"have"}],"download_bytes":0}'
     else printf '{"schema":1,"title":"R1","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"missing","source":%s}],"download_bytes":10}\n' "$src"; fi;;
-  "recipe install r1 --yes") mkdir -p data/models/loras; head -c 10 /dev/zero >data/models/loras/a.bin; echo "recipe r1 installed";;
+  "recipe install r1 --yes") mkdir -p data/models/loras; head -c 10 /dev/zero >data/models/loras/a.bin; echo "recipe r1 installed (token ${HF_TOKEN:+seen})";;
   *) echo "Error: unknown $*" >&2; exit 2;;
 esac
 F
@@ -1810,12 +1810,13 @@ unit="" log=""
 while [ $# -gt 0 ]; do
   case $1 in
     --unit) unit=$2; shift 2;;
-    -p) case $2 in StandardOutput=append:*) log=${2#StandardOutput=append:};; esac; shift 2;;
+    -p) case $2 in StandardOutput=append:*) log=${2#StandardOutput=append:};; EnvironmentFile=-*) envfile=${2#EnvironmentFile=-};; esac; shift 2;;
     --) shift; break;;
     *) shift;;
   esac
 done
 if [ -e "$FAKE_HOST/job-hold" ]; then echo running >"$FAKE_HOST/job-$unit"; exit 0; fi
+[ ! -f "${envfile:-}" ] || { set -a; . "$envfile"; set +a; }
 "$@" >>"$log" 2>&1; echo $? >"$FAKE_HOST/job-$unit"
 F
 cat >"$FAKE_HOSTBIN/loginctl" <<'F'
@@ -1883,7 +1884,9 @@ rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 
 # update: only a clean checkout moves (the fake tool written above is committed first, so the checkout starts clean)
 git -C "$home/dgx-comfyui" add -A; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qm faketool
-s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "no upstream; move it yourself: git -C $home/dgx-comfyui fetch --tags"; ok $? "update refuses a checkout on a branch with no upstream, and gives the git commands"
+s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "is on the branch main, which may be a checkout you work in; move it yourself: git -C $home/dgx-comfyui fetch --tags"; ok $? "update refuses a checkout on a branch, however clean, and gives the git commands"
+git -C "$home/dgx-comfyui" branch -q -u main 2>/dev/null; git -C "$home/dgx-comfyui" branch --set-upstream-to=main main >/dev/null 2>&1
+s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "is on the branch main"; ok $? "also one that tracks an upstream"
 echo x >>"$home/dgx-comfyui/lib/jsonout.py"; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qam wip 2>/dev/null; echo y >>"$home/dgx-comfyui/lib/jsonout.py"
 s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "uncommitted changes"; ok $? "update refuses uncommitted changes"
 s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.2.0 >/dev/null; ok $? "update moves a clean checkout"
@@ -1905,8 +1908,16 @@ s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="succeeded" and any("=
 present "$new/data/models/loras/a.bin"; ok $? "and the model is there"
 s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "already installed"; ok $? "installing it again says so"
 touch "$new/GATED"; rm "$new/data/models/loras/a.bin"
-s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "gated: it needs HF_TOKEN. startdgx never stores a token"; ok $? "a gated model is refused, naming the token and where it goes on the host"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "gated: it needs HF_TOKEN. startdgx never stores a token; put HF_TOKEN=... in ~/.config/startdgx/comfyui.env on the host (then chmod 600 it)"; ok $? "a gated model is refused, naming the token and the file it goes in on the host"
 rm -f "$FAKE_HOST"/job-startdgx-comfyui-*; s comfyui recipe install me@dgx r1 --dir fresh >/dev/null 2>&1; ok $((!$?)) "and no job was started for it"
+# the user's own token file: read only if private, used by the check here and by the job (EnvironmentFile)
+mkdir -p "$home/.config/startdgx"; echo "HF_TOKEN=hf_abc" >"$home/.config/startdgx/comfyui.env"; chmod 644 "$home/.config/startdgx/comfyui.env"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "can be read by others; run: chmod 600"; ok $? "a token file others can read is refused"
+chmod 600 "$home/.config/startdgx/comfyui.env"
+s comfyui recipe install me@dgx r1 --dir fresh >/dev/null; ok $? "with a private token file the gated recipe starts"
+s comfyui job me@dgx --dir fresh --json | py 'any("token seen" in l for l in d["log"])'; ok $? "and the job has the token (through the unit's EnvironmentFile, never on a command line)"
+grep -q "hf_abc" "$FAKE_LOG" "$FAKE_LOG.args"; ok $((!$?)) "the token appears in no ssh command"
+rm -f "$home/.config/startdgx/comfyui.env" "$new/data/models/loras/a.bin"; rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 rm "$new/GATED"; touch "$new/GONE"
 s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "can't be fetched (gone)"; ok $? "a source that is gone is refused"
 rm "$new/GONE"; touch "$new/STALE"

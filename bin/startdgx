@@ -3093,7 +3093,7 @@ def demo_comfyui(args):
             for m in recipe_doc["models"]:
               if m.get("source") and not m["source"]["ok"]:
                 var = m["source"]["detail"][0]
-                raise Error(f"{m['file']} is gated: it needs {var}. startdgx never stores a token; put {var}=... in ~/.config/environment.d/comfyui.conf on the host and log out and in, then try again")
+                raise Error(f"{m['file']} is gated: it needs {var}. startdgx never stores a token; put {var}=... in ~/.config/startdgx/comfyui.env on the host (then chmod 600 it) and try again")
             if not recipe_doc["download_bytes"] and all(n["installed"] for n in recipe_doc["nodes"]):
               raise Error(f"{args.name} is already installed")
             demo_comfyui_remember(item, job)
@@ -3113,6 +3113,8 @@ def demo_comfyui(args):
           raise Error(f"{item['path']} has uncommitted changes; commit or stash them, or move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
         if tool["unpushed"]:
           raise Error(f"{item['path']} has commits that aren't pushed; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
+        if tool["branch"]:
+          raise Error(f"{item['path']} is on the branch {tool['branch']}, which may be a checkout you work in; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
         if item.get("state") == "up":
           raise Error(f"ComfyUI in {item['path']} is running; stop it first")
         demo_comfyui_remember(item, job)
@@ -3319,8 +3321,24 @@ def resolve(name):
   if len(installs) > 1:
     fail("Several ComfyUI installs are managed here; say which: " + ", ".join(r.get("label") or r["path"] for r in installs))
   return os.path.realpath(installs[0]["path"]), installs[0]
+TOKENS = os.path.join(HOME, ".config/startdgx/comfyui.env")
+def tokens():
+  """HF_TOKEN and CIVITAI_TOKEN from the file the user keeps for them; startdgx never writes it. It must be private to the user."""
+  out = {}
+  try:
+    mode = os.stat(TOKENS).st_mode
+  except OSError:
+    return out
+  if mode & 0o077:
+    fail(TOKENS + " can be read by others; run: chmod 600 " + TOKENS)
+  for line in open(TOKENS):
+    key, _, value = line.strip().partition("=")
+    if key in ("HF_TOKEN", "CIVITAI_TOKEN") and value:
+      out[key] = value.strip("'\\"")
+  return out
 def user_env():
   env = dict(os.environ)
+  env.update(tokens())
   runtime = "/run/user/%d" % os.getuid()
   env.setdefault("XDG_RUNTIME_DIR", runtime)
   env.setdefault("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + runtime + "/bus")
@@ -3420,7 +3438,7 @@ def start_job(path, script, *args):
   subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, env=user_env())
   subprocess.run(["systemctl", "--user", "reset-failed", unit], capture_output=True, env=user_env())
   r = subprocess.run(["systemd-run", "--user", "--unit", unit, "--description=startdgx ComfyUI job", "-p", "RemainAfterExit=yes",
-                      "-p", "StandardOutput=append:" + log, "-p", "StandardError=append:" + log, "--", "bash", "-c", script, "startdgx-comfyui", *args],
+                      "-p", "StandardOutput=append:" + log, "-p", "StandardError=append:" + log, "-p", "EnvironmentFile=-" + TOKENS, "--", "bash", "-c", script, "startdgx-comfyui", *args],
                      capture_output=True, text=True, env=user_env())
   if r.returncode != 0:
     fail("Couldn't start the job: " + say_line(r.stderr or r.stdout))
@@ -3528,13 +3546,12 @@ elif mode == "update":
     fail(path + " isn't a git checkout of dgx-comfyui")
   no_job_running(path)
   t = item["tool"]
-  tracking = bool(git(path, "rev-parse", "--abbrev-ref", "@{u}"))
   if t["dirty"]:
     fail(path + " has uncommitted changes; commit or stash them, or move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
   if t["unpushed"]:
     fail(path + " has commits that aren't pushed; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
-  if t["branch"] and not tracking:
-    fail(path + " is on the branch " + t["branch"] + " with no upstream; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
+  if t["branch"]:
+    fail(path + " is on the branch " + t["branch"] + ", which may be a checkout you work in; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
   if path in running_roots():
     fail("ComfyUI in " + path + " is running; stop it first")
   with locked():
@@ -3575,7 +3592,7 @@ elif mode == "recipe":
       src = m["source"]
       if src["problem"] == "gated":
         var = src["detail"][0] if src["detail"] else "the token"
-        fail(m["file"] + " is gated: it needs " + var + ". startdgx never stores a token; put " + var + "=... in ~/.config/environment.d/comfyui.conf on the host and log out and in, then try again")
+        fail(m["file"] + " is gated: it needs " + var + ". startdgx never stores a token; put " + var + "=... in ~/.config/startdgx/comfyui.env on the host (then chmod 600 it) and try again")
       fail(m["file"] + " can't be fetched (" + src["problem"] + "); the recipe is out of date")
     bad = [m["file"] for m in r["models"] if m["state"] in ("size", "hash")]
     if bad:

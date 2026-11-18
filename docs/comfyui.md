@@ -23,7 +23,7 @@ All take `HOST`; `--dir` names an install by its label or its folder (absolute, 
 | `autostart on\|off` | `on` is `start`. `off` removes the service (it stops, and no longer starts at boot), only if the unit is this install's. |
 | `plan [--dir D]` | The host's disks with free space, and whether D can take an install (absent or empty, writable, 40 GiB free). |
 | `install --dir D [--label L]` | Clones dgx-comfyui at the pinned release into D and runs its `install`, as a **detached job** (`systemd-run --user`, about 15 minutes). Refused if the account doesn't linger, and says the `sudo loginctl enable-linger` to run. A failed install is run again where it stopped. |
-| `update [--dir D] [--comfyui]` | Moves the tool to the pinned release, then runs `install` (or the tool's own `update` with `--comfyui`). Only a **clean** checkout moves: uncommitted or unpushed work, or a branch with no upstream, is refused with the `git` commands to run yourself. |
+| `update [--dir D] [--comfyui]` | Moves the tool to the pinned release, then runs `install` (or the tool's own `update` with `--comfyui`). Only a **clean, detached** checkout moves (one `install.sh` or startdgx left on a release tag). Uncommitted or unpushed work, or any branch, is refused with the `git` commands to run yourself: a checkout on a branch may be one someone works in, and an install made by `install.sh` sits on `main`. |
 | `job` | The install/update/recipe job: `running`, `succeeded` or `failed`, and the end of its log (`~/.local/state/startdgx/comfyui/`). |
 | `recipe list\|show\|check\|install` | ComfyUI workflows (a recipe: nodes and models with size and sha256). `install` is a job, refused first if a source is gated, gone, or the disk is too small. |
 
@@ -31,7 +31,7 @@ The pins are `COMFYUI_REPO` and `COMFYUI_TAG` in `bin/startdgx` (`engine --json`
 
 ## Tokens
 
-Gated downloads need `HF_TOKEN` or `CIVITAI_TOKEN`. startdgx never stores or sends one. When a recipe is gated the refusal names the token and says to put it in `~/.config/environment.d/comfyui.conf` on the host (the job runs under the user's systemd manager).
+Gated downloads need `HF_TOKEN` or `CIVITAI_TOKEN`. startdgx never stores, writes or sends one. You keep them in `~/.config/startdgx/comfyui.env` on the host (`HF_TOKEN=...`, one per line, `chmod 600`: a file others can read is refused). The pre-check reads that file, and the install job gets it as the unit's `EnvironmentFile`, so a token is on no command line and in no ssh command. A user manager that lingers never sees `~/.config/environment.d` changes, which is why it isn't used. When a recipe is gated and the file has no token, the refusal names the token and the file.
 
 ## The memory bar
 
