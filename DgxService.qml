@@ -95,6 +95,13 @@ Item {
   property string hfError: ""
   property string hfAsked: ""
   readonly property bool hfSearching: hfQuery.busy
+  // TensorFold's list on the same card (`tensorfold list --json`, also from this computer): Model.parseTfList's answer, why it failed.
+  property var tfList: null
+  property string tfError: ""
+  property int tfCount: 0
+  // A save of the look is in flight: when it answers, the list is read again so the marks it cleared go.
+  property bool tfSaving: false
+  readonly property bool tfLoading: tfQuery.busy
 
   // A model's context sizes, for its settings window and the Add recipe card's variants (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
   property string variantsHost: ""
@@ -492,9 +499,12 @@ Item {
 
   // Drafts `repo` for `host` and adds it through the Add recipe path (check, then add): one action. A write: closing the card
   // doesn't end it.
-  function draftRecipe(host, repo) {
+  function draftRecipe(host, repo) { service.draftWith(host, repo, Model.draftCommand(host, repo)) }
+  // The same for an entry of TensorFold's list: its CLI step names the entry, the rest is the Add recipe path.
+  function draftTensorfold(host, row) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id)) }
+  function draftWith(host, label, command) {
     if (service.recipeBusy) return
-    service.draftRepo = repo
+    service.draftRepo = label
     service.draftId = ""
     service.draftError = ""
     service.draftWarnings = []
@@ -502,7 +512,7 @@ Item {
     service.recipeResult = null
     service.recipeError = ""
     service.draftStep = "drafting"
-    draftProc.command = [service.script].concat(Model.draftCommand(host, repo))
+    draftProc.command = [service.script].concat(command)
     draftProc.running = true
   }
 
@@ -511,7 +521,14 @@ Item {
     service.hfError = ""
     hfQuery.ask(service.hfAsked, [service.script].concat(Model.hfSearchCommand(query)))
   }
-  function cancelHf() { hfQuery.cancel() }
+  function cancelHf() { hfQuery.cancel(); tfQuery.cancel() }
+  // Reads TensorFold's list; `update` also saves this look, so the next one says what is new or changed since.
+  function loadTf(update) {
+    service.tfError = ""
+    service.tfSaving = !!update
+    service.tfCount += 1
+    tfQuery.ask("tf" + service.tfCount, [service.script].concat(Model.tfListCommand(update)))
+  }
 
   function removeRecipe(host, id) {
     if (service.recipeBusy) return
@@ -908,6 +925,19 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.userRecipes = Model.userRecipes(list)
       else service.userRecipesError = code === 0 ? "The machine's recipes could not be read" : Model.errorLine(err, "The machine's recipes could not be read")
+    }
+  }
+
+  Query {
+    id: tfQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== "tf" + service.tfCount) return
+      const list = code === 0 ? Model.parseTfList(out) : null
+      const saved = service.tfSaving
+      service.tfSaving = false
+      if (list) service.tfList = list
+      else service.tfError = code === 0 ? "TensorFold's answer could not be read" : Model.errorLine(err, "The list did not load")
+      if (list && saved) Qt.callLater(function () { service.loadTf(false) })
     }
   }
 

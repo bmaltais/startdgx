@@ -1392,6 +1392,54 @@ function draftDone(host, id) {
   return id + " is on " + hostName(host) + ", drafted, not yet fitting. It shows in the model picker; Measure… in Add recipe… replaces its placeholder numbers."
 }
 
+// ---- TensorFold's list on the Find card ---------------------------------------------------------------------------------------
+// `startdgx tensorfold list --json` ({ first_look, recipes: [{ id, name, format, estimate_gb, repo, draftable, reason, status }] }), read
+// from this computer like the Hugging Face search. Its memory figure is the list's estimate, so a draft from a row is `drafted` and
+// never fits until a measuring run (docs/adr/0001). `status` says what the last saved look didn't have: "new" or "changed".
+
+function parseTfList(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || !Array.isArray(p.recipes)) return null
+  const rows = []
+  for (let i = 0; i < p.recipes.length; i++) {
+    const r = p.recipes[i]
+    if (!isPlainObject(r) || typeof r.id !== "string" || r.id === "" || typeof r.name !== "string") return null
+    rows.push({ id: r.id, name: r.name, format: String(r.format || ""), estimate: Number(r.estimate_gb) > 0 ? Number(r.estimate_gb) : 0,
+                repo: typeof r.repo === "string" ? r.repo : "", draftable: r.draftable === true, reason: String(r.reason || ""),
+                status: r.status === "new" || r.status === "changed" ? r.status : "" })
+  }
+  return { firstLook: p.first_look === true, rows: rows }
+}
+
+// The CLI's arguments: the list, or the list and the look saved ("Mark as seen").
+function tfListCommand(update) {
+  return ["tensorfold", "list", "--json"].concat(update ? ["--update"] : [])
+}
+
+// The CLI's arguments to draft an entry for `host`, the entry after `--`.
+function tfDraftCommand(host, entry) {
+  return ["tensorfold", "draft", "--host", host, "--json", "--", String(entry)]
+}
+
+// A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).
+function tfRowText(row) {
+  const memory = row.estimate > 0 ? Math.round(row.estimate * 10) / 10 + " GB estimated by TensorFold" : "no memory estimate"
+  return (row.format !== "" ? row.format + " \u00b7 " : "") + memory
+}
+
+// What a row can't do, as the reason the card shows beside it: "" when it can be drafted.
+function tfRowNote(row) {
+  return row.draftable ? "" : row.reason !== "" ? row.reason : "Can't be drafted"
+}
+
+// The line under the heading once the list is read: how many, and how many are new or changed since the saved look.
+function tfSummary(list) {
+  if (!list) return ""
+  const fresh = list.rows.filter(function (r) { return r.status !== "" }).length
+  const base = list.rows.length + (list.rows.length === 1 ? " RECIPE" : " RECIPES") + " FOR ONE DGX SPARK"
+  return base + (list.firstLook ? " \u00b7 NO EARLIER LOOK SAVED" : fresh > 0 ? " \u00b7 " + fresh + " NEW OR CHANGED" : " \u00b7 NOTHING NEW")
+}
+
 // ---- With an agent… on a result -------------------------------------------------------------------------------
 // The agent runs in Omarchy's terminal through `startdgx launch author HOST REPO`, so the draft's errors and the agent show
 // there; the panel sends nothing else and never an agent command of its own (it is the CLI's config).

@@ -2053,7 +2053,7 @@ DRAFT_FILES = ["*.safetensors", "*.json", "chat_template.jinja"]
 # What a card's license may be to go into a draft: a license id, never free text (it is written into a file the engine reads).
 DRAFT_LICENSE_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}")
 DRAFT_FREE_LICENSES = re.compile(r"^(apache-2\.0|mit|isc|unlicense|cc0-1\.0|cc-by-4\.0|bsd(-[0-9a-z]+)*|bsl-1\.0|mpl-2\.0)$")
-DRAFT_TEMPLATE = """# Drafted by startdgx from {repo}. The memory numbers are placeholders equal to the weights' size and the variant is
+DRAFT_TEMPLATE = """# Drafted by startdgx from {repo}. The memory numbers are placeholders (the weights' size, or the estimate of the list it came from) and the variant is
 # `drafted`, so it never counts as fitting: measure it (recipe measure) or confirm numbers of your own.
 name = {name}
 summary = {summary}
@@ -2134,20 +2134,22 @@ def draft_discard(path):
         os.remove(name)
 
 
-def hf_draft_source(base, repo):
-  """(commit sha, license or None, weights' bytes) of a repo that passes the checks a search row passes, else an Error."""
-  info = hf_get(base, f"api/models/{repo}")
+def hf_draft_source(base, repo, revision=None):
+  """(commit sha, license or None, weights' bytes, config) of a repo that passes the checks a search row passes, else an Error.
+  `revision` (a commit sha) reads that commit instead of main, and the sha comes back only if Hugging Face confirms it."""
+  ref = revision or "main"
+  info = hf_get(base, f"api/models/{repo}/revision/{revision}" if revision else f"api/models/{repo}")
   if not isinstance(info, dict) or info.get("id") != repo:
-    raise Error(f"{repo} wasn't found on Hugging Face (or needs a login)")
+    raise Error(f"{repo} wasn't found on Hugging Face (or needs a login)" + (f" at {revision[:12]}" if revision else ""))
   if info.get("gated"):
     raise Error(f"{repo} is gated: startdgx doesn't use Hugging Face tokens, so it can't download it")
-  config = hf_get(base, f"{repo}/raw/main/config.json")
+  config = hf_get(base, f"{repo}/raw/{ref}/config.json")
   if not hf_passes_find(config, hf_known_families()):
     raise Error(f"{repo} is outside what Find on Hugging Face lists: its config.json must say MLX affine 4-bit of a known family")
   sha = info.get("sha")
-  if not isinstance(sha, str) or not re.match(r"^[0-9a-f]{40}$", sha):
-    raise Error(f"Hugging Face gave no commit for {repo}")
-  size = hf_weights_bytes(hf_get(base, f"api/models/{repo}/tree/main"))
+  if not isinstance(sha, str) or not re.match(r"^[0-9a-f]{40}$", sha) or (revision and sha != revision):
+    raise Error(f"Hugging Face gave no commit for {repo}" + (f" matching {revision[:12]}" if revision else ""))
+  size = hf_weights_bytes(hf_get(base, f"api/models/{repo}/tree/{ref}"))
   if not size:
     raise Error(f"{repo} has no .safetensors weights")
   return sha, draft_license(info), size, config
@@ -2201,7 +2203,7 @@ def draft_recipe(args, replace=False):
   rid = args.id or draft_id(repo)
   if not RID_RE.match(rid):
     raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
-  sha, license_id, size, config = hf_draft_source(hf_base(), repo)
+  sha, license_id, size, config = hf_draft_source(hf_base(), repo, getattr(args, "revision", None))
   if args.host and rid in draft_host_ids(args.host):
     raise Error(f"{args.host} already has a recipe '{rid}' (curated or yours): pick another id with --id")
   out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
@@ -2209,7 +2211,7 @@ def draft_recipe(args, replace=False):
   path = os.path.join(out, f"{rid}.toml")
   if os.path.lexists(path) and not (replace and draft_unedited(path)):
     raise Error(f"{path} already exists: pick another id with --id, or delete the file")
-  gib = -(-size * 10 // 2**30) / 10
+  gib = getattr(args, "estimate_gib", None) or -(-size * 10 // 2**30) / 10
   warnings = []
   if license_id is None:
     warnings.append("License unknown: Hugging Face reports none startdgx can use for this repo, so read its model card before you use it")
@@ -2217,7 +2219,7 @@ def draft_recipe(args, replace=False):
     warnings.append(f"License '{license_id}' may restrict use: read its terms before you use it")
   vision = bool(config.get("vision_config"))
   text = DRAFT_TEMPLATE.format(repo=repo, name=toml_str(draft_name(repo)), repo_q=toml_str(repo), revision=sha,
-                               summary=toml_str(f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
+                               summary=toml_str(getattr(args, "summary", None) or f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
                                license=toml_str(license_id or "unknown"), files=toml_str(DRAFT_FILES), ctx=DRAFT_CTX, gib=gib,
                                vision_input=DRAFT_VISION_INPUT if vision else "", vision_server=DRAFT_VISION_SERVER if vision else "")
   data = text.encode("utf-8")
@@ -2243,6 +2245,152 @@ def draft_recipe(args, replace=False):
   result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
             "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config)}
   return result
+
+
+# ---- TensorFold's recipe list --------------------------------------------------------------------------------
+# tensorfold.dev publishes what runs on a machine class as /recipes/catalog.json. startdgx reads it from this computer (read-only,
+# like Hugging Face), lists what it has for one DGX Spark (128 GB) and what changed since the last look, and drafts a recipe from
+# an entry through `recipe draft`: the catalog's memory figure is an estimate, so the draft's variant is `drafted` and never counts
+# as fitting until a measuring run (docs/adr/0001). The list is a third party's: every field is checked and printed as plain text.
+
+TF_DEFAULT_CATALOG = "https://tensorfold.dev/recipes/catalog.json"
+TF_DEVICE = "dgx-spark"
+TF_MAX_BYTES = 8 * 2**20
+TF_CHECKPOINT_RE = re.compile(r"^https://huggingface\.co/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/tree/([0-9a-f]{40})$")
+TF_FORMAT = "MLX 4-bit"  # the one format the pinned TensorFold runtime is set up for: the others need a runtime startdgx doesn't pin
+
+
+def tf_clean(text, limit=80):
+  """A third party's text as one safe line: no control characters, bounded."""
+  return re.sub(r"[\x00-\x1f\x7f]", "", text)[:limit] if isinstance(text, str) else ""
+
+
+def tf_source():
+  return os.path.join(DEMO_FIXTURES, "tensorfold", "catalog.json") if DEMO else os.environ.get("STARTDGX_TENSORFOLD_CATALOG") or TF_DEFAULT_CATALOG
+
+
+def tf_catalog():
+  """The parsed catalog document, else an Error."""
+  source = tf_source()
+  try:
+    if re.match(r"^https?://", source):
+      request = urllib.request.Request(source, headers={"User-Agent": "startdgx", "Accept": "application/json"})
+      with urllib.request.urlopen(request, timeout=HF_TIMEOUT) as response:
+        raw = response.read(TF_MAX_BYTES + 1)
+    else:
+      with open(source, "rb") as handle:
+        raw = handle.read(TF_MAX_BYTES + 1)
+  except urllib.error.HTTPError as error:
+    raise Error(f"tensorfold.dev answered {error.code}") from error
+  except (urllib.error.URLError, OSError) as error:
+    raise Error("Can't reach tensorfold.dev: check the network") from error
+  if len(raw) > TF_MAX_BYTES:
+    raise Error("tensorfold.dev's list is larger than startdgx reads")
+  try:
+    document = json.loads(raw)
+  except ValueError:
+    document = None
+  if not isinstance(document, dict) or document.get("schemaVersion") != 1 or not isinstance(document.get("records"), list):
+    raise Error("tensorfold.dev's list is not in a form startdgx reads (schemaVersion 1)")
+  return document
+
+
+def tf_number(value):
+  return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+
+def tf_rows(document):
+  """One row per catalog record that has a deployment for one DGX Spark: {id, name, format, estimate_gb, weight_gb, repo, revision,
+  url, draftable, reason}. A record whose checkpoint is not a pinned Hugging Face commit is listed, and not draftable."""
+  rows = []
+  for record in document["records"]:
+    deployment = record.get("deployments", {}).get(TF_DEVICE) if isinstance(record, dict) and isinstance(record.get("deployments"), dict) else None
+    if not isinstance(deployment, dict) or not isinstance(record.get("id"), str) or not RID_RE.match(record["id"]):
+      continue
+    fmt = tf_clean(deployment.get("format"))
+    match = TF_CHECKPOINT_RE.match(deployment.get("checkpoint", "")) if isinstance(deployment.get("checkpoint"), str) else None
+    repo, revision = (match.group(1), match.group(2)) if match and valid_repo(match.group(1)) else (None, None)
+    base_format = fmt.split(" \u00b7 ")[0]
+    reason = "" if repo and base_format == TF_FORMAT else (f"{base_format or 'its format'} needs a runtime startdgx doesn't pin" if repo else "no pinned Hugging Face checkpoint")
+    source = record.get("source")
+    rows.append({"id": record["id"], "name": tf_clean(record.get("name")) or record["id"], "format": fmt, "estimate_gb": tf_number(deployment.get("estimateGB")),
+                 "weight_gb": tf_number(deployment.get("weightGB")), "repo": repo, "revision": revision,
+                 "url": source if isinstance(source, str) and source.startswith("https://") else "", "draftable": reason == "", "reason": reason})
+  return rows
+
+
+def tf_seen_path():
+  return os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "startdgx"),
+                      "tensorfold-seen.json")
+
+
+def tf_seen():
+  """The last saved look, {id: revision or ""}, or None when there is none."""
+  try:
+    with open(tf_seen_path()) as handle:
+      seen = json.load(handle)
+  except (OSError, ValueError):
+    return None
+  return seen if isinstance(seen, dict) else None
+
+
+def tf_save_seen(rows):
+  path = tf_seen_path()
+  try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as handle:
+      json.dump({r["id"]: r["revision"] or "" for r in rows}, handle, indent=2)
+    os.replace(path + ".tmp", path)
+  except OSError as error:
+    raise Error(f"{path} can't be written: {error.strerror}") from error
+
+
+def tf_status(row, seen):
+  """"new" for an entry the last saved look didn't have, "changed" for one pinned to another commit, else "" (also with no saved look)."""
+  if seen is None:
+    return ""
+  if row["id"] not in seen:
+    return "new"
+  return "changed" if (row["revision"] or "") != seen[row["id"]] else ""
+
+
+def cmd_tensorfold_list(args):
+  rows = tf_rows(tf_catalog())
+  seen = tf_seen()
+  for row in rows:
+    row["status"] = tf_status(row, seen)
+  if args.update:
+    tf_save_seen(rows)
+  if args.json:
+    print(json.dumps({"device": TF_DEVICE, "first_look": seen is None, "recipes": rows}))
+    return
+  print(f"tensorfold.dev, one DGX Spark (128 GB): {len(rows)} recipes" + ("" if seen is not None else " (no earlier look saved: --update saves this one, and later runs say what is new or changed)"))
+  for row in rows:
+    memory = f"{row['estimate_gb']:g} GB estimated" if row["estimate_gb"] else "memory not estimated"
+    mark = {"new": " [new]", "changed": " [changed]"}.get(row["status"], "")
+    print(f"  {row['id']}{mark}: {row['name']}, {row['format']}, {memory}" + (f"; draft it with: startdgx tensorfold draft {row['id']}" if row["draftable"] else f"; not draftable: {row['reason']}"))
+  if args.update:
+    print("Saved this look.")
+
+
+def cmd_tensorfold_draft(args):
+  rows = {r["id"]: r for r in tf_rows(tf_catalog())}
+  row = rows.get(args.entry)
+  if row is None:
+    raise Error(f"tensorfold.dev has no recipe '{args.entry}' for one DGX Spark: list them with startdgx tensorfold list")
+  if not row["draftable"]:
+    raise Error(f"{row['name']} can't be drafted: {row['reason']}")
+  estimate = row["estimate_gb"]
+  basis = f"tensorfold.dev's estimate of {estimate:g} GB" if estimate else "the weights' size"
+  args.repo, args.revision, args.estimate_gib = row["repo"], row["revision"], estimate
+  args.summary = f"Drafted from tensorfold.dev's list ({row['name']}, {row['format']}). The memory numbers are placeholders from {basis}, never a fit until it is measured."
+  result = draft_recipe(args, replace=True)
+  if args.json:
+    print(json.dumps(result))
+    return
+  print_draft(result)
+  print(f"  Its memory is {basis}; measure it before it counts as fitting.")
+
 
 
 def print_draft(result):
@@ -4101,6 +4249,21 @@ def build_parser():
   hs.add_argument("query")
   hs.add_argument("--json", action="store_true", help="as [{repo, params, size_bytes, license, base_model, label}]")
   hs.set_defaults(fn=cmd_hf_search)
+  tp = sub.add_parser("tensorfold", description="TensorFold's recipe list (tensorfold.dev), read-only, from this computer: what it has for one DGX Spark, "
+                      "and a drafted recipe from an entry. Its memory figures are estimates, so a draft never counts as fitting until measured.")
+  tv = tp.add_subparsers(dest="verb", required=True, metavar="list|draft")
+  tl = tv.add_parser("list", description="The recipes tensorfold.dev lists for one DGX Spark (128 GB), with what is new or changed since the look saved last.")
+  tl.add_argument("--update", action="store_true", help="save this look, so the next run says what changed since")
+  tl.add_argument("--json", action="store_true", help='as {device, first_look, recipes: [{id, name, format, estimate_gb, weight_gb, repo, revision, url, draftable, reason, status}]}')
+  tl.set_defaults(fn=cmd_tensorfold_list)
+  td = tv.add_parser("draft", description="Write a user recipe from an entry of the list: its pinned checkpoint, license and one drafted variant "
+                     "whose memory is the list's estimate (never a fit until measured). Only MLX 4-bit entries can be drafted.")
+  td.add_argument("entry", help="the entry's id, from `tensorfold list`")
+  td.add_argument("--id", help="the recipe id (default: the repo's)")
+  td.add_argument("--host", help="have this machine's engine validate it and refuse an id it already has")
+  td.add_argument("--out", help="the folder to write it to")
+  td.add_argument("--json", action="store_true", help="as recipe draft --json")
+  td.set_defaults(fn=cmd_tensorfold_draft)
   la = sub.add_parser("launch", description="Open a floating terminal running startdgx install HOST, uninstall HOST, "
                       "logs HOST [MODEL] or author HOST REPO (recipe author --agent --here), for the panel: sudo there can ask for a password.")
   la.add_argument("verb", metavar="install|uninstall|logs|author")

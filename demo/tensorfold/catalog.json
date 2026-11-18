@@ -1,0 +1,92 @@
+{
+ "schemaVersion": 1,
+ "engineVersion": "1.2.9",
+ "devices": [
+  {
+   "id": "dgx-spark"
+  }
+ ],
+ "records": [
+  {
+   "id": "lfm2.5-24b-a2b",
+   "name": "LFM2.5-24B-A2B",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/lfm2.5-24b-a2b.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "MLX 4-bit",
+     "estimateGB": 24,
+     "weightGB": 1,
+     "checkpoint": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-MLX-4bit/tree/0f74678ad5062e607c5469c35151dc6fcbd966b6",
+     "runtime": "Podman \u00b7 CUDA",
+     "context": 8192,
+     "parallel": 1
+    },
+    "apple-silicon": {
+     "format": "MLX 4-bit",
+     "estimateGB": 24,
+     "weightGB": 1,
+     "checkpoint": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-MLX-4bit/tree/0f74678ad5062e607c5469c35151dc6fcbd966b6",
+     "runtime": "Podman \u00b7 CUDA",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  },
+  {
+   "id": "qwen3.6-35b-a3b",
+   "name": "Qwen3.6-35B-A3B",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/qwen3.6-35b-a3b.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "NVFP4 \u00b7 MTP",
+     "estimateGB": 32,
+     "weightGB": 1,
+     "checkpoint": "https://huggingface.co/nvidia/Qwen3.6-35B-A3B-NVFP4/tree/1355db6a052410cfd62085d94b58866fd0f2f7c1",
+     "runtime": "Podman \u00b7 CUDA",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  },
+  {
+   "id": "mac-only",
+   "name": "Mac Only",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/mac-only.md",
+   "deployments": {
+    "apple-silicon": {
+     "format": "MLX 4-bit",
+     "estimateGB": 8,
+     "weightGB": 1,
+     "checkpoint": "https://huggingface.co/mlx-community/Mac-Only/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "runtime": "Podman \u00b7 CUDA",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  },
+  {
+   "id": "odd-link",
+   "name": "Odd Link",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/odd-link.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "MLX 4-bit",
+     "estimateGB": null,
+     "weightGB": 1,
+     "checkpoint": "https://example.com/not/hf",
+     "runtime": "Podman \u00b7 CUDA",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  }
+ ]
+}
