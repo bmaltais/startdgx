@@ -1401,3 +1401,23 @@ function queryExited(q) {
   const next = !current && q.wanted !== null ? q.wanted : null
   return { query: { running: next, wanted: current ? null : q.wanted, killed: false }, key: q.running, current: current, launch: next }
 }
+
+// ---- the window's titlebar --------------------------------------------------------------------
+// In Omarchy's window mode a floating window carries a titlebar (the hyprbars plugin, drawn by omarchy-hyprland-titlebars)
+// with its own close button, so the window's corner X would be a second one. The titlebar shows when the window floats,
+// is tagged as being on a floating workspace, and the plugin is loaded (without it nothing would close the window).
+// `clientsJson` is `hyprctl clients -j` and `pluginsText` is `hyprctl plugin list`.
+var TITLEBAR_TAG = "omarchy-floating-workspace"
+var TITLEBAR_EVENTS = ["changefloatingmode", "movewindowv2", "configreloaded", "openwindow"]
+
+function hasTitlebar(clientsJson, pluginsText, title, wmClass) {
+  if (!/hyprbars/i.test(pluginsText || "")) return false
+  var clients
+  try { clients = JSON.parse(clientsJson) } catch (e) { return false }
+  if (!Array.isArray(clients)) return false
+  return clients.some(function (c) {
+    // A rule's tag arrives as "name*"; the star only says where it came from.
+    return c.title === title && c.class === wmClass && c.floating === true
+      && (c.tags || []).some(function (t) { return String(t).replace(/\*$/, "") === TITLEBAR_TAG })
+  })
+}
