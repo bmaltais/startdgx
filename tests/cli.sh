@@ -825,6 +825,10 @@ uj; ok $? "with the same steps, what it keeps and what is left for you, as the t
 cond='any("delete ~/.local/share/omarchy/agent-local" in step for step in d["steps"]) and not any("1.0 MiB" in k for k in d["kept"])'
 uj --delete-models; ok $? "and with --delete-models, the weights go in the steps"
 same "$(tree)" "$before" && none_of "$FAKE_HOST/root-call"; ok $? "uninstall --dry-run --json writes nothing"
+mkdir -p "$FAKE_HOST/home/.local/share/startdgx"; printf '{"installs": [{"path": "/x/dgx-comfyui"}, {"path": "/y/dgx-comfyui"}]}\n' >"$FAKE_HOST/home/.local/share/startdgx/comfyui.json"
+cond='any("2 ComfyUI install(s)" in k and "forget" in k for k in d["kept"]) and not any("comfyui" in step.lower() for step in d["steps"])'
+uj; ok $? "uninstall says it keeps the ComfyUI installs startdgx manages, and removes nothing of theirs"
+rm -f "$FAKE_HOST/home/.local/share/startdgx/comfyui.json"
 out=$(FAKE_ID='me;x' s uninstall --dry-run me@spark 2>&1); ok $((!$?)) "uninstall refuses a host that reports an odd user"
 echo "$out" | grep -q 'unexpected user'; ok $? "and says so, before comparing it with the manifest's"
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
@@ -1915,6 +1919,15 @@ touch "$FAKE_HOST/job-hold"; s comfyui recipe install me@dgx r1 --dir fresh >/de
 s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "is running in .*; follow it with"; ok $? "recipe install is refused while a job runs"
 rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 
+# forget --stop-service removes the install's own service, and only that one
+s comfyui forget me@dgx --dir "$home/dgx-comfyui" >/dev/null
+s comfyui adopt me@dgx --dir "$home/dgx-comfyui" >/dev/null; mkdir -p "$home/.config/systemd/user"; echo "WorkingDirectory=$home/dgx-comfyui" >"$home/.config/systemd/user/dgx-comfyui.service"
+s comfyui forget me@dgx --dir "$home/dgx-comfyui" --stop-service --json | py 'd["service_removed"] is True'; ok $? "forget --stop-service also removes its service"
+none_of "$home/.config/systemd/user/dgx-comfyui.service"; ok $? "so the unit is gone"
+s comfyui adopt me@dgx --dir "$home/dgx-comfyui" >/dev/null; echo "WorkingDirectory=$tmp/usb/dgx-comfyui" >"$home/.config/systemd/user/dgx-comfyui.service"
+s comfyui forget me@dgx --dir "$home/dgx-comfyui" --stop-service --json | py 'd["service_removed"] is False'; ok $? "and leaves a service that belongs to another install"
+present "$home/.config/systemd/user/dgx-comfyui.service"; ok $? "in place"
+rm -f "$home/.config/systemd/user/dgx-comfyui.service"; s comfyui adopt me@dgx --dir "$home/dgx-comfyui" --label main >/dev/null
 # the release the panel offers a move to
 git -C "$tmp/usb/dgx-comfyui" tag v0.0.5 2>/dev/null; git -C "$home/dgx-comfyui" tag -d v0.1.0 >/dev/null; git -C "$home/dgx-comfyui" tag v0.0.5
 s comfyui status me@dgx --dir main --json | py 'd["install"]["tool"]["tag"]=="v0.0.5"'; ok $? "status reads an older tag"

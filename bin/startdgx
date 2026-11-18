@@ -133,6 +133,7 @@ for path in {ENGINE_DIR} {ENGINE_STATE} {ENGINE_CONFIG} {ENGINE_DATA} {SHARE_UNI
   if [ -e "$HOME/$path" ]; then echo "exists=$path"; fi
 done
 if [ -d ~/{ENGINE_DATA} ]; then echo "models_bytes=$(du -sb ~/{ENGINE_DATA} | cut -f1)"; fi
+if [ -f ~/{COMFYUI_RECORDS} ]; then echo "comfyui=$(grep -o '"path"' ~/{COMFYUI_RECORDS} | wc -l | tr -d ' ')"; fi
 if [ -d ~/{ENGINE_RECIPES} ]; then echo "recipes=$(ls ~/{ENGINE_RECIPES}/*.toml 2>/dev/null | wc -l | tr -d ' ')"; fi
 exit 0
 '''
@@ -1759,6 +1760,9 @@ def cmd_uninstall(args):
     raise Error(f"The manifest on {host} is for {pre.get('user')} ({pre.get('home')}), not {state['user']} ({state['home']})")
   user_steps, user_kept = user_plan(manifest, state, args)
   root_steps, root_kept = root_plan(manifest, state, args)
+  managed = state.get("comfyui", "0")
+  if managed.isdigit() and int(managed):
+    user_kept.append(f"keep the {managed} ComfyUI install(s) startdgx manages, with their folders and ~/{COMFYUI_RECORDS}; startdgx comfyui forget drops one")
   if args.remove_packages and removable_packages(manifest):
     check_apt_removal(host, removable_packages(manifest))
   final = [f"delete {MANIFEST} and the backups", f"forget {host} here"]
@@ -3040,8 +3044,9 @@ def demo_comfyui(args):
       else:
         if found is None or not found["managed"]:
           raise Error(f"{path} isn't managed")
-        found.update(managed=False, label="")
-        answer = {"forgot": path}
+        stopped = bool(args.stop_service and found.get("autostart"))
+        found.update(managed=False, label="", **({"state": "stopped", "autostart": False} if stopped else {}))
+        answer = {"forgot": path, "service_removed": stopped}
       print(json.dumps(answer) if args.json else comfyui_done(args.verb, answer, args.host))
       return
     if args.verb == "plan":
@@ -3352,6 +3357,8 @@ def tool(path, *argv, timeout=120):
     r = subprocess.run([os.path.join(path, "dgx-comfyui.sh"), *argv], capture_output=True, text=True, timeout=timeout, env=user_env(), stdin=subprocess.DEVNULL, cwd=path)
   except subprocess.TimeoutExpired:
     fail("dgx-comfyui.sh " + argv[0] + " didn't finish in time")
+  except OSError as error:
+    fail("can't run " + os.path.join(path, "dgx-comfyui.sh") + ": " + error.strerror)
   return r
 import hashlib
 LOGDIR = os.path.join(HOME, ".local/state/startdgx/comfyui")
@@ -3478,13 +3485,19 @@ elif mode == "adopt":
   print(json.dumps({"adopted": path}))
 elif mode == "forget":
   path = clean_path(ARGV[1])
+  stopped = False
+  if len(ARGV) > 2 and ARGV[2] == "stop-service" and is_dgx(path) and unit_root() == path:
+    r = tool(path, "service", "--disable")
+    if r.returncode != 0:
+      fail(say_line(r.stderr or r.stdout))
+    stopped = True
   with locked():
     installs = load()
     rest = [r for r in installs if os.path.realpath(r["path"]) != path]
     if len(rest) == len(installs):
       fail(path + " isn't managed")
     save(rest)
-  print(json.dumps({"forgot": path}))
+  print(json.dumps({"forgot": path, "service_removed": stopped}))
 elif mode == "plan":
   print(json.dumps(plan(ARGV[1] if len(ARGV) > 1 else "")))
 elif mode == "install":
@@ -3662,7 +3675,7 @@ def comfyui_install_line(item):
 def comfyui_done(verb, answer, host):
   if verb == "adopt":
     return f"Now managing {answer['adopted']} on {host}; nothing in it was changed"
-  return f"Forgot {answer['forgot']} on {host}; the folder is untouched"
+  return f"Forgot {answer['forgot']} on {host}" + ("; its service was stopped and removed" if answer.get("service_removed") else "") + "; the folder is untouched"
 
 
 def cmd_comfyui_list(args):
@@ -3685,7 +3698,7 @@ def cmd_comfyui_adopt(args):
 
 
 def cmd_comfyui_forget(args):
-  answer = comfyui_run(target(args.host), args, "forget", comfyui_dir(args.dir))
+  answer = comfyui_run(target(args.host), args, "forget", comfyui_dir(args.dir), *(["stop-service"] if args.stop_service else []))
   print(json.dumps(answer) if args.json else comfyui_done("forget", answer, args.host))
 
 
@@ -3982,6 +3995,8 @@ def build_parser():
       c.add_argument("state", choices=("on", "off"))
     if verb == "adopt":
       c.add_argument("--label", help="a short name for it in the panel")
+    if verb == "forget":
+      c.add_argument("--stop-service", action="store_true", help="also stop and remove its background service (dgx-comfyui.sh service --disable)")
     c.add_argument("--json", action="store_true")
     c.add_argument("--timeout", type=int, default=60, help="seconds to wait for the host (default: 60)")
     c.set_defaults(fn=cmd_comfyui)
