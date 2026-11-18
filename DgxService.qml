@@ -42,6 +42,10 @@ Item {
   property var pending: ({})
   // "target/model" -> its recipe (from `list`): a model asked to be set up that its machine doesn't list yet.
   property var setups: ({})
+  // Where each machine's models should end up, { host: { recipe id: "usb" } } (`destination`, kept on this computer), and the setups asked for
+  // with the model store as destination that haven't finished: when one does, the model is stopped and moved there (Model.moveAfterStep).
+  property var destinations: ({})
+  property var moveAfter: ({})
   // The host states as drawn: each machine's status with those setups in it, so a model asked for shows at once.
   readonly property var shownState: Model.withSetups(service.hostState, service.setups)
 
@@ -169,7 +173,27 @@ Item {
   function statusRead(host, status) {
     service.setHostState(host, { loaded: true, online: true, error: "", status: status, lastSeenMs: Date.now() })
     service.setups = Model.settleSetups(service.setups, host, status)
+    service.settleMoves(host, status)
     service.notifyChanges()
+  }
+  function settleMoves(host, status) {
+    const step = Model.moveAfterStep(service.moveAfter, host, status)
+    service.moveAfter = step.waiting
+    for (const a of step.actions) {
+      if (a.type === "stop") service.stop(a.host, a.id)
+      else service.move(a.host, a.id, a.to)
+    }
+  }
+  function destinationOf(host, id) { return (service.destinations[host] || {})[id] === "usb" ? "usb" : "nvme" }
+  function loadDestinations(host) { destQuery.ask(host, [service.script, "destination", host, "--json"]) }
+  function setDestination(host, id, to) {
+    const all = Object.assign({}, service.destinations)
+    const mine = Object.assign({}, all[host] || {})
+    if (to === "usb") mine[id] = "usb"; else delete mine[id]
+    all[host] = mine
+    service.destinations = all
+    destSetProc.command = [service.script, "destination", host, id, "--to", to, "--json"]
+    destSetProc.running = true
   }
   function storageRead(host, storage, error) {
     const errors = Object.assign({}, service.storageErrors)
@@ -375,6 +399,12 @@ Item {
     const next = Object.assign({}, service.setups)
     next[Model.modelKey(host, r.id)] = r
     service.setups = next
+    // The store as destination: this setup's model is moved there when it is done.
+    if (service.destinationOf(host, r.id) === "usb") {
+      const waiting = Object.assign({}, service.moveAfter)
+      waiting[Model.modelKey(host, r.id)] = { seen: 0, stopping: false }
+      service.moveAfter = waiting
+    }
     p.run("use", r.id, null, yes ? { yes: true } : undefined)
   }
   // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
@@ -939,6 +969,21 @@ Item {
       if (list) service.userRecipes = Model.userRecipes(list)
       else service.userRecipesError = code === 0 ? "The machine's recipes could not be read" : Model.errorLine(err, "The machine's recipes could not be read")
     }
+  }
+
+  Query {
+    id: destQuery
+    onAnswered: function (key, code, out) {
+      const found = code === 0 ? Model.parseJson(out) : null
+      if (!found || typeof found !== "object") return
+      const all = Object.assign({}, service.destinations)
+      all[key] = found
+      service.destinations = all
+    }
+  }
+  Process {
+    id: destSetProc
+    stdout: StdioCollector {}
   }
 
   Query {

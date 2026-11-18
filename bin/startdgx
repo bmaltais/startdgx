@@ -1117,6 +1117,47 @@ def print_moved(model, to, moved_bytes, freed=0, kept=0):
     print(f"{model}: on {where} ({size_text(moved_bytes)})")
 
 
+# destination: where a model's files should end up (the internal disk, or the machine's model store), chosen before the first download. The
+# engine downloads to the internal disk and has no say about the store, so this is only the person's choice, kept on this computer; the panel
+# acts on it when a setup finishes (it moves the model, as the move command does). Nothing on any machine is read or changed here.
+def destination_path():
+  return os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "startdgx"),
+                      "destinations.json")
+
+
+def destination_load():
+  try:
+    with open(destination_path()) as handle:
+      found = json.load(handle)
+  except (OSError, ValueError):
+    return {}
+  return found if isinstance(found, dict) else {}
+
+
+def cmd_destination(args):
+  found = destination_load()
+  mine = found.get(args.host) if isinstance(found.get(args.host), dict) else {}
+  if args.to:
+    rid = recipe(args.model)
+    if args.to == "usb":
+      mine[rid] = "usb"
+    else:
+      mine.pop(rid, None)
+    found[args.host] = mine
+    path = destination_path()
+    try:
+      os.makedirs(os.path.dirname(path), exist_ok=True)
+      with open(path + ".tmp", "w") as handle:
+        json.dump(found, handle, indent=2)
+      os.replace(path + ".tmp", path)
+    except OSError as error:
+      raise Error(f"{path} can't be written: {error.strerror}") from error
+  if args.model:
+    print(json.dumps({"to": mine.get(recipe(args.model), "nvme")}) if args.json else mine.get(recipe(args.model), "nvme"))
+  else:
+    print(json.dumps({k: v for k, v in mine.items() if v == "usb"}) if args.json else "\n".join(f"{k}: {v}" for k, v in sorted(mine.items())))
+
+
 def cmd_delete(args):
   if args.dry_run:
     rid, host = recipe(args.model), target(args.host)
@@ -4229,6 +4270,13 @@ def build_parser():
   mv = add("move", cmd_move, model=True, timeout=3600, description="Move a stopped model's weights between the host's internal disk and its model store (see storage). "
            "--to usb copies them to the store, checks them and links the model's folder to the copy; the internal copy is then deleted. --to nvme copies them back and keeps the store's copy.")
   mv.add_argument("--to", required=True, choices=("usb", "nvme"), help="usb: the model store; nvme: back to the internal disk")
+  de = sub.add_parser("destination", description="Where a model's files should end up: nvme (the internal disk, the default) or usb (the host's model store). "
+                      "Kept on this computer and read by the panel, which moves the model to the store when its setup finishes. With no model, lists the host's choices.")
+  de.add_argument("host")
+  de.add_argument("model", nargs="?")
+  de.add_argument("--to", choices=("usb", "nvme"), help="record the choice for MODEL")
+  de.add_argument("--json", action="store_true")
+  de.set_defaults(fn=cmd_destination)
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
   add("add", cmd_add)
   i = add("install", cmd_install, timeout=3600)

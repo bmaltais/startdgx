@@ -918,7 +918,19 @@ function recipePages(c) {
     hint: "Take it off this machine's list. Nothing else is deleted: its file is still on this computer." })
   else if (mine) general.push({ key: "remove-note", type: "info", label: "Remove recipe", hint: "A model is set up from it on this machine: remove the model first." })
   const pages = [{ title: "Contexts", fields: fields }, { title: "General", fields: general }]
-  return run.length ? [{ title: "Run", fields: run }].concat(pages) : pages
+  const where = destinationFields(c)
+  return (run.length ? [{ title: "Run", fields: run }] : []).concat(where.length ? [{ title: "Storage", fields: where }] : [], pages)
+}
+
+// Where the files of a model not downloaded yet should end up, on a machine that has a model store. The engine downloads to the internal
+// disk, so the choice is acted on when the setup finishes: the panel moves the model to the store then (`move`), which needs the room on
+// the internal disk meanwhile. `c.store` is the machine's model store ({ path, present }) or null; `c.destination` is "usb" or "nvme".
+function destinationFields(c) {
+  if (!c.store || !c.store.path) return []
+  if (c.recipe.installed === true) return [{ key: "dest-note", type: "info", label: "Download to", hint: "A model is set up from this recipe: its files are where they are. Move them in the model's own settings (Storage)." }]
+  return [{ key: "dest", type: "choice", stacked: true, label: "Download to", disabled: c.busy === true,
+    options: [{ value: "nvme", label: "Internal disk" }, { value: "usb", label: "Model store" }],
+    hint: "Model store: " + c.store.path + (c.store.present === false ? " (not mounted)" : "") + ". The download goes to the internal disk first and moves to the store when it is done, once the model has stopped: the disk needs room for the model until then, and the model is left stopped on the store." }]
 }
 
 // A recipe added from TensorFold's list: the three choices tensorfold.dev offers for it, in its own window, with what it was given picked.
@@ -945,7 +957,9 @@ function tfRunFields(c) {
 // The values for a recipe's window: the choices the machine was given, where there are any.
 function recipeValues(c) {
   const a = c && c.tf && c.tf.added
-  return a ? { "tf-context": a.context, "tf-parallel": a.parallel, "tf-input": a.input } : {}
+  const values = { dest: c && c.destination === "usb" ? "usb" : "nvme" }
+  if (a) Object.assign(values, { "tf-context": a.context, "tf-parallel": a.parallel, "tf-input": a.input })
+  return values
 }
 
 // The list's row for a recipe of this machine that was added from it, or null.
@@ -956,6 +970,7 @@ function tfAddedRow(list, recipeId) {
 
 // What a click in a recipe's window asks for, as a dispatch action, or null. Curated recipes ask for nothing.
 function recipeChange(host, r, key, value, tf) {
+  if (key === "dest") return value === "usb" || value === "nvme" ? { type: "setDestination", host: host, id: r.id, to: value } : null
   if (!isUserRecipe(r)) return null
   if (key.indexOf("tf-") === 0 && tf && tf.added) {
     const now = tfAddedChoices(tf)
@@ -1189,6 +1204,33 @@ function settleSetups(setups, host, status) {
     delete out[key]
   }
   return out
+}
+
+// A setup that was asked for with the model store as its destination: what to do as each status read comes in. `waiting` is { "host/id":
+// { seen } }. While it downloads there is nothing to do; when it has finished and the model runs, stop it; once it has been stopped on two
+// reads in a row (the engine may be about to start it), move it. A setup that failed is dropped. -> { waiting, actions: [{ type, host, id }] }.
+function moveAfterStep(waiting, host, status) {
+  const models = status && isPlainObject(status.models) ? status.models : {}
+  const next = Object.assign({}, waiting)
+  const actions = []
+  for (const key in waiting) {
+    if (key.indexOf(host + "/") !== 0) continue
+    const id = key.substring(host.length + 1)
+    const e = models[id]
+    if (!e) continue
+    const unit = e.unit
+    if (unit === "installing") {
+      if (e.install && e.install.phase === "failed") delete next[key]
+      else next[key] = { seen: 0, stopping: false }
+    } else if (unit === "active" || unit === "activating") {
+      if (!waiting[key].stopping) { actions.push({ type: "stop", host: host, id: id }); next[key] = { seen: 0, stopping: true } }
+    } else if (unit === "inactive" || unit === "failed") {
+      const seen = (waiting[key].seen || 0) + 1
+      if (seen >= 2) { actions.push({ type: "move", host: host, id: id, to: "usb" }); delete next[key] }
+      else next[key] = { seen: seen, stopping: waiting[key].stopping }
+    }
+  }
+  return { waiting: next, actions: actions }
 }
 
 // What a model's Remove does: "remove" (stop it if it runs, delete its weights), "cancel" (stop a setup and delete
