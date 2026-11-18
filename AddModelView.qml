@@ -136,7 +136,9 @@ FocusScope {
           readonly property bool current: index === card.cursor
           readonly property bool can: modelData.action === "use"
           readonly property bool removable: Model.isUserRecipe(recipeRow.r) && recipeRow.r.installed !== true
-          readonly property var measureCtx: Model.pickerMeasureCtx(recipeRow.r)
+          // A recipe added from TensorFold's list is set up and run as it is: measuring is in its settings, not on its row.
+          readonly property bool fromList: Model.tfAddedRow(card.dgx.tfList, recipeRow.r.id) !== null
+          readonly property var measureCtx: recipeRow.fromList ? null : Model.pickerMeasureCtx(recipeRow.r)
           readonly property string facts: Model.recipeFacts(recipeRow.r)
           readonly property string marks: Model.recipeMarks(recipeRow.r).join(" · ")
           width: ListView.view.width
@@ -253,7 +255,7 @@ FocusScope {
               Layout.alignment: Qt.AlignVCenter
               Layout.preferredWidth: implicitHeight
               iconText: "\uf013"
-              tooltipText: "Settings of " + String(recipeRow.r.name || recipeRow.r.id) + ": its context sizes" + (Model.isUserRecipe(recipeRow.r) ? ", measuring, adding a size, removing it" : "")
+              tooltipText: "Settings of " + String(recipeRow.r.name || recipeRow.r.id) + ": " + (recipeRow.fromList ? "context, requests at once, input" : "its context sizes" + (Model.isUserRecipe(recipeRow.r) ? ", measuring, adding a size, removing it" : ""))
               foreground: Color.muted
               onClicked: card.svc.dispatch({ type: "recipeSettings", host: card.host, recipe: recipeRow.r })
             }

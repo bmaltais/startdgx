@@ -57,12 +57,14 @@ FocusScope {
     return list.find(function (r) { return r.id === card.model }) || card.recipeRow
   }
 
+  // A recipe added from TensorFold's list: its row there, with the choices the machine was given.
+  readonly property var tfRow: card.kind === "recipe" ? Model.tfAddedRow(card.dgx.tfList, card.model) : null
   readonly property var pages: card.kind === "comfy"
     ? (card.comfyInfo ? Model.comfyPages({ host: card.host, info: card.comfyInfo, answer: card.comfyAnswer, error: card.comfyMine ? card.dgx.comfyStatusError : "", pending: card.comfyPending,
         workflows: card.comfyWorkflows, health: card.comfyHealth }) : [])
     : card.kind === "recipe"
     ? Model.recipePages({ recipe: card.recipeNow, variants: card.mine ? card.dgx.variants : null, loading: card.mine && card.dgx.variantsLoading,
-        error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "" })
+        error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "", tf: card.tfRow })
     : card.kind === "host"
     ? Model.hostPages({
         machine: card.machine, update: Model.engineUpdate(card.status), needsSetup: !!card.dgx.setupNeeded[card.host],
@@ -72,7 +74,7 @@ FocusScope {
         location: Model.locationOf(card.storage, card.model), choices: card.choices,
         variantsLoading: card.mine && card.dgx.variantsLoading, variantsError: card.mine ? card.dgx.variantsError : "",
         away: Model.isAway(card.dgx.shownState[card.host]) }) : []
-  readonly property var values: card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? ({}) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
+  readonly property var values: card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
 
   // The model went (a removal finished): nothing left to set.
   readonly property bool gone: (card.kind === "model" && !card.entry) || (card.kind === "comfy" && !card.comfyInstall)
@@ -106,8 +108,8 @@ FocusScope {
     subtitle: card.kind === "comfy" ? "COMFYUI  ·  ON " + card.machine.toUpperCase() : card.kind === "recipe" ? "RECIPE  ·  ON " + card.machine.toUpperCase() : card.kind === "host" ? "SETTINGS" : "SETTINGS  ·  ON " + card.machine.toUpperCase()
     pages: card.pages
     values: card.values
-    footerText: card.problem !== "" ? card.problem : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
-    footerIsError: card.problem !== "" || (card.svc.notice !== "" && card.svc.noticeIsError)
+    footerText: card.problem !== "" ? card.problem : card.kind === "recipe" && card.dgx.draftError !== "" ? card.dgx.draftError : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
+    footerIsError: card.problem !== "" || (card.kind === "recipe" && card.dgx.draftError !== "") || (card.svc.notice !== "" && card.svc.noticeIsError)
 
     onChanged: function (key, value) {
       card.problem = ""
@@ -115,7 +117,7 @@ FocusScope {
         const action = Model.comfyChange(card.host, card.comfyInfo, card.comfyAnswer, key, value)
         if (action) card.svc.dispatch(action)
       } else if (card.kind === "recipe") {
-        const action = Model.recipeChange(card.host, card.recipeNow, key, value)
+        const action = Model.recipeChange(card.host, card.recipeNow, key, value, card.tfRow)
         if (action) card.svc.dispatch(action)
       } else if (card.kind === "host") {
         const r = Model.hostChange(card.host, key, value, card.storage)

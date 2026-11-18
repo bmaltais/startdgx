@@ -435,6 +435,8 @@ Item {
   }
   property string recipePathAsked: ""
 
+  // Whether the last draft was from TensorFold's list (else Hugging Face's).
+  property bool draftFromList: false
   function finishRecipe(code, out, err, verb) {
     const r = code === 0 ? Model.parseRecipeResult(out) : null
     if (!r) {
@@ -451,6 +453,8 @@ Item {
       service.loadUserRecipes(service.recipeHost)
       // The add is the person's say-so for an estimate from TensorFold's list: confirm it, so the machine counts the model as fitting.
       if (service.draftSource === "estimated" && r.id === service.draftId) Qt.callLater(function () { service.confirmRecipe(service.recipeHost, r.id) })
+      // TensorFold's list says what each machine was given: read it again, for the rows and for the recipe's window.
+      if (service.draftFromList) service.loadTf(false, service.recipeHost)
     }
   }
 
@@ -504,9 +508,9 @@ Item {
 
   // Drafts `repo` for `host` and adds it through the Add recipe path (check, then add): one action. A write: closing the card
   // doesn't end it.
-  function draftRecipe(host, repo) { service.draftWith(host, repo, Model.draftCommand(host, repo)) }
+  function draftRecipe(host, repo) { service.draftFromList = false; service.draftWith(host, repo, Model.draftCommand(host, repo)) }
   // The same for an entry of TensorFold's list: its CLI step names the entry, the rest is the Add recipe path.
-  function draftTensorfold(host, row, picked, replace) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings, replace)) }
+  function draftTensorfold(host, row, picked, replace) { service.draftFromList = true; service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings, replace)) }
   function draftWith(host, label, command) {
     if (service.recipeBusy) return
     service.draftRepo = label

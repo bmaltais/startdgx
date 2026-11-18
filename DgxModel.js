@@ -880,6 +880,7 @@ var CONTEXT_SIZES = [32768, 65536, 131072, 196608, 262144]
 function recipePages(c) {
   const r = c.recipe
   const mine = isUserRecipe(r)
+  const run = tfRunFields(c)
   const fields = []
   const rows = c.variants ? variantRows(c.variants) : []
   if (!c.variants) fields.push({ key: "loading", type: "info", label: "Context sizes", hint: "The sizes the recipe has, and where each one's numbers come from.",
@@ -916,12 +917,53 @@ function recipePages(c) {
   if (mine && r.installed !== true) general.push({ key: "remove", type: "action", label: "Remove recipe", button: "Remove", danger: true, disabled: c.busy,
     hint: "Take it off this machine's list. Nothing else is deleted: its file is still on this computer." })
   else if (mine) general.push({ key: "remove-note", type: "info", label: "Remove recipe", hint: "A model is set up from it on this machine: remove the model first." })
-  return [{ title: "Contexts", fields: fields }, { title: "General", fields: general }]
+  const pages = [{ title: "Contexts", fields: fields }, { title: "General", fields: general }]
+  return run.length ? [{ title: "Run", fields: run }].concat(pages) : pages
+}
+
+// A recipe added from TensorFold's list: the three choices tensorfold.dev offers for it, in its own window, with what it was given picked.
+// `c.tf` is the list's row for it (`added` says what the machine was given); changing one writes the recipe again (tfDraftCommand), which the
+// engine refuses while a model is set up from it. The numbers stay TensorFold's estimate for its defaults; Contexts has the optional Measure….
+function tfRunFields(c) {
+  const row = c.tf
+  if (!row || !row.settings || !row.added) return []
+  const locked = c.recipe.installed === true
+  const off = locked || c.busy === true
+  const names = [{ key: "context", name: "contexts", label: "Context" }, { key: "parallel", name: "requests", label: "Requests at once" }, { key: "input", name: "inputs", label: "Input" }]
+  const hints = { context: "How much text the model keeps in view. More takes more memory.", parallel: "How many requests it serves at the same time.", input: "Whether it reads images too." }
+  const fields = names.map(function (n) {
+    return { key: "tf-" + n.key, type: "choice", stacked: true, label: n.label, hint: hints[n.key], disabled: off,
+             options: row.settings[n.name].map(function (v) { return { value: v, label: tfChoiceLabel(n.key, v) } }) }
+  })
+  fields.push({ key: "tf-note", type: "info", label: "Memory", hint: "TensorFold's figure is for its default settings; the others are close, not measured. Measure… (Contexts) finds the real numbers." })
+  if (locked) fields.push({ key: "tf-locked", type: "info", label: "Changing these", hint: "A model is set up from this recipe: remove the model first." })
+  else if (row.outdated) fields.push({ key: "tf-update", type: "action", label: "Update available", button: "Update", disabled: c.busy === true,
+    hint: "TensorFold has moved on since this was added. Update adds it again from the current list, with these choices." })
+  return fields
+}
+
+// The values for a recipe's window: the choices the machine was given, where there are any.
+function recipeValues(c) {
+  const a = c && c.tf && c.tf.added
+  return a ? { "tf-context": a.context, "tf-parallel": a.parallel, "tf-input": a.input } : {}
+}
+
+// The list's row for a recipe of this machine that was added from it, or null.
+function tfAddedRow(list, recipeId) {
+  const rows = list && Array.isArray(list.rows) ? list.rows : []
+  return rows.filter(function (r) { return r.added && r.added.recipeId === recipeId })[0] || null
 }
 
 // What a click in a recipe's window asks for, as a dispatch action, or null. Curated recipes ask for nothing.
-function recipeChange(host, r, key, value) {
+function recipeChange(host, r, key, value, tf) {
   if (!isUserRecipe(r)) return null
+  if (key.indexOf("tf-") === 0 && tf && tf.added) {
+    const now = tfAddedChoices(tf)
+    if (key === "tf-update") return { type: "tfChange", host: host, row: tf, choices: now }
+    const k = key.substring(3)
+    if (["context", "parallel", "input"].indexOf(k) < 0 || String(now[k]) === String(value)) return null
+    return { type: "tfChange", host: host, row: tf, choices: Object.assign({}, now, { [k]: value }) }
+  }
   if (key.indexOf("measure-") === 0) return { type: "measureRecipe", host: host, recipe: r, ctx: Number(key.substring(8)) }
   if (key === "confirm") return { type: "confirmRecipe", host: host, id: r.id }
   if (key === "add-ctx") return { type: "addContext", host: host, id: r.id, ctx: Number(value) }
@@ -1401,7 +1443,7 @@ function draftErrorText(line) {
 
 function draftDone(host, id, source) {
   return source === "estimated"
-    ? id + " is on " + hostName(host) + ", with TensorFold's memory estimate. Set up… downloads it and starts it there; Measure… later replaces the estimate with real numbers."
+    ? id + " is in " + hostName(host) + "'s model list. Nothing is downloaded until you set it up there; its gear changes context, requests at once and input."
     : id + " is on " + hostName(host) + " but not measured yet, so it can't run. Measure… downloads it and tests it there; after that it is a model like the others."
 }
 
@@ -1508,7 +1550,7 @@ function findState(recipeId, recipes, status) {
 }
 
 function findStateText(s) {
-  return s.state === "on" ? "Already on this machine" : s.state === "ready" ? (s.measured ? "Added \u00b7 measured" : "Added \u00b7 memory estimated")
+  return s.state === "on" ? "Already on this machine" : s.state === "ready" ? (s.measured ? "Added \u00b7 measured" : "In the model list")
     : s.state === "unmeasured" ? "Added, not measured yet" : s.state === "nofit" ? "Added, but it doesn't fit this machine" : ""
 }
 

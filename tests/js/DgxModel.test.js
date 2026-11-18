@@ -1714,7 +1714,7 @@ test("parseDraftResult carries the recipe's name and context, for Measure… on 
   assert.strictEqual(d.ctx, 8192)
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).ctx, 0)
   assert.match(M.draftDone("me@gx10", "x"), /not measured yet, so it can't run/)
-  assert.match(M.draftDone("me@gx10", "x", "estimated"), /memory estimate. Set up/)
+  assert.match(M.draftDone("me@gx10", "x", "estimated"), /model list. Nothing is downloaded/)
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [], source: "estimated" })).source, "estimated")
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).source, "drafted")
 })
@@ -1737,7 +1737,7 @@ test("findState: where a Find row stands on the machine, from its recipe list", 
   assert.strictEqual(M.findState("x-tensorfold", [mine({ installed: true })], {}).state, "on")
   assert.strictEqual(M.findState("x-tensorfold", [mine({})], { models: { "x-tensorfold": { unit: "installing" } } }).state, "on")
   assert.strictEqual(M.findStateText({ state: "unmeasured" }), "Added, not measured yet")
-  assert.strictEqual(M.findStateText({ state: "ready", measured: false }), "Added \u00b7 memory estimated")
+  assert.strictEqual(M.findStateText({ state: "ready", measured: false }), "In the model list")
   assert.strictEqual(M.findStateText({ state: "ready", measured: true }), "Added \u00b7 measured")
   assert.strictEqual(M.findStateText({ state: "" }), "")
   assert.strictEqual(M.parseTfList(JSON.stringify({ recipes: [{ id: "a", name: "A", recipe_id: "a-tensorfold" }] })).rows[0].recipeId, "a-tensorfold")
@@ -1805,4 +1805,35 @@ test("runPlanLines: a set-up shows what is downloaded and loaded, not the measur
   assert.deepStrictEqual(M.runPlanLines(plan, "measure"), plan)
   assert.deepStrictEqual(M.runPlanLines(["something else"], "setup"), ["something else"])
   assert.deepStrictEqual(M.runPlanLines(null, "setup"), [])
+})
+
+test("recipePages: a recipe added from TensorFold's list has a Run page with its three choices, locked while a model is set up from it", () => {
+  const settings = { defaults: { context: 16384, parallel: 1, input: "text" }, contexts: [16384, 65536], requests: [1, 4], inputs: ["text", "images"] }
+  const tf = { id: "e", settings: settings, outdated: false, added: { recipeId: "mine", revision: "r", context: 16384, parallel: 1, input: "text" } }
+  const pages = M.recipePages({ recipe: mineRow(), variants: vs, busy: false, tf: tf })
+  assert.strictEqual(pages[0].title, "Run")
+  assert.deepStrictEqual(pages[0].fields.slice(0, 3).map(f => f.key), ["tf-context", "tf-parallel", "tf-input"])
+  assert.deepStrictEqual(pages[0].fields[0].options, [{ value: 16384, label: "16K" }, { value: 65536, label: "64K" }])
+  assert.strictEqual(pages[0].fields[0].disabled, false)
+  assert.deepStrictEqual(M.recipeValues({ tf: tf }), { "tf-context": 16384, "tf-parallel": 1, "tf-input": "text" })
+  const locked = M.recipePages({ recipe: mineRow({ installed: true }), variants: vs, busy: false, tf: tf })
+  assert.strictEqual(locked[0].fields[0].disabled, true)
+  assert.ok(locked[0].fields.some(f => f.key === "tf-locked"))
+  assert.strictEqual(M.recipePages({ recipe: mineRow(), variants: vs, busy: false })[0].title, "Contexts", "no Run page for another recipe")
+})
+
+test("recipeChange: a choice on the Run page writes the recipe again with the others kept; the same value asks for nothing", () => {
+  const settings = { defaults: { context: 16384, parallel: 1, input: "text" }, contexts: [16384, 65536], requests: [1, 4], inputs: ["text", "images"] }
+  const tf = { id: "e", settings: settings, added: { recipeId: "mine", revision: "r", context: 16384, parallel: 1, input: "text" } }
+  const r = mineRow()
+  assert.deepStrictEqual(M.recipeChange("h", r, "tf-context", 65536, tf), { type: "tfChange", host: "h", row: tf, choices: { context: 65536, parallel: 1, input: "text" } })
+  assert.strictEqual(M.recipeChange("h", r, "tf-context", 16384, tf), null)
+  assert.deepStrictEqual(M.recipeChange("h", r, "tf-update", true, tf).choices, { context: 16384, parallel: 1, input: "text" })
+})
+
+test("tfAddedRow finds the list's row for a recipe the machine was given from it", () => {
+  const list = { rows: [{ id: "a", added: null }, { id: "b", added: { recipeId: "r-b" } }] }
+  assert.strictEqual(M.tfAddedRow(list, "r-b").id, "b")
+  assert.strictEqual(M.tfAddedRow(list, "x"), null)
+  assert.strictEqual(M.tfAddedRow(null, "x"), null)
 })
