@@ -16,9 +16,10 @@ ColumnLayout {
   property var hostState: null        // { loaded, online, error, status, lastSeenMs }, or null before the first answer
   property var pending: ({})          // "host/model" -> "start" | "stop" | "delete", "host/model#share" -> "share" | "unshare"
   property real nowMs: 0
-  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model" or "host#add"
+  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model", "host#add" or "host#comfy/path"
   property var storage: null          // `startdgx storage` (DgxModel.parseStorage), or null until read
   property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
+  property var comfy: []              // the managed ComfyUI installs `startdgx comfyui list` last said ([] while unread or none)
 
   signal selectRequested(string key)
   signal actionRequested(var action)
@@ -41,6 +42,8 @@ ColumnLayout {
     const status = section.hostState ? section.hostState.status : null
     return status && status.models && status.models[id] ? status.models[id] : ({ recipe: id, unit: "inactive" })
   }
+  // One row per install: what `list` knows of it (its folder, version) and what the status poll saw (running, memory).
+  readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null) })
   readonly property bool headCurrent: section.cursorKey === section.host
   readonly property string machine: Model.hostName(section.host)
 
@@ -246,6 +249,33 @@ ColumnLayout {
     PanelToolTip {
       visible: addHover.hovered
       text: "Choose a model from " + section.machine + "'s catalog and set it up there  (a)"
+    }
+  }
+  // Its ComfyUI installs, when it has any managed: a small heading, then a row each. An away machine's last known ones, dimmed.
+  Text {
+    visible: section.comfyRows.length > 0
+    Layout.fillWidth: true
+    Layout.leftMargin: Style.spacing.xxl
+    Layout.topMargin: Style.spacing.md
+    textFormat: Text.PlainText
+    text: "ComfyUI \u00b7 " + Model.comfySummary(section.comfyRows)
+    color: Color.muted
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+    elide: Text.ElideRight
+  }
+  Repeater {
+    model: section.comfyRows
+    delegate: ComfyRow {
+      id: comfyRow
+      required property var modelData
+      Layout.fillWidth: true
+      Layout.leftMargin: Style.spacing.xxl
+      info: comfyRow.modelData
+      away: section.away
+      current: section.cursorKey === Model.comfyKey(section.host, comfyRow.modelData.path)
+      onCurrentChanged: if (current) section.revealRequested(comfyRow)
+      onSelectRequested: section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData.path))
     }
   }
 }

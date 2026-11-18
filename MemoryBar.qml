@@ -44,7 +44,9 @@ ColumnLayout {
             width: Math.max(2, track.width * seg.modelData.gib / bar.mem.total)
             // The first model is the accent; each next one steps toward the foreground, so neighbours stay apart.
             // What other programs hold is the foreground, muted: it isn't one of ours.
+            // ComfyUI is ours but not a model: a brighter foreground, apart from both the models' accents and the muted rest.
             color: seg.modelData.other ? Util.alpha(Color.foreground, 0.45)
+                 : seg.modelData.comfy ? Util.alpha(Color.foreground, 0.8)
                                        : Qt.tint(Color.accent, Util.alpha(Color.foreground, Math.min(0.7, 0.28 * seg.index)))
             Behavior on width { NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic } }
             HoverHandler { id: segHover }

@@ -39,6 +39,12 @@ Item {
     if (!poller.answering) return
     poller.storageAsked = true
     if (!storageProc.running) storageProc.running = true
+    poller.pollComfy()
+  }
+  // The managed ComfyUI installs change only when one is adopted, installed or forgotten, so they are read with the storage
+  // (while the window is open, every 30 s): a host script that looks at each install's folder. A machine without any answers quickly.
+  function pollComfy() {
+    if (poller.answering && !comfyProc.running) comfyProc.running = true
   }
 
   function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
@@ -155,6 +161,15 @@ Item {
       poller.done = Model.settle(poller.done, answered)
       poller.publish()
     }
+  }
+
+  Process {
+    id: comfyProc
+    command: [poller.owner.script, "comfyui", "list", poller.host, "--json", "--timeout", "30"]
+    stdout: StdioCollector { id: comfyOut; waitForEnd: true }
+    stderr: StdioCollector { id: comfyErr; waitForEnd: true }
+    // A failed read is not shown: the installs keep their last good list, and the machine's own status says if it is away.
+    onExited: function (code) { poller.owner.comfyRead(poller.host, Model.comfyAnswer(code, comfyOut.text, comfyErr.text, poller.host).installs) }
   }
 
   Process {

@@ -315,8 +315,8 @@ function subtitle(s) {
 // (`ram_available_gib`, its MemAvailable), a segment for the model that is loading (what the machine holds beyond the
 // running ones, up to what it needs) and one "Other programs" segment for what the machine uses beyond those models: a
 // model loaded through ComfyUI, a download. Under the desktop's reserve (RESERVE_GIB) it is just the desktop, and no
-// segment. It is the same figure the engine checks before it starts a model.
-// null while the machine's total is unknown.
+// segment. It is the same figure the engine checks before it starts a model. A running ComfyUI has a segment of its own
+// (`comfy: true`) between the models and the rest. null while the machine's total is unknown.
 function hostMemory(status, profile) {
   const total = Number(status && status.ram_total_gib) || 0
   if (!(total > 0)) return null
@@ -329,6 +329,16 @@ function hostMemory(status, profile) {
     if (gib <= 0) continue
     segments.push({ id: String(e.recipe), name: String(e.name || e.recipe), gib: gib })
     models += gib
+  }
+  // A running ComfyUI is ours too (the status poll reads its process's resident memory): its own segment, not other programs'.
+  let comfy = 0
+  const running = comfyRunning(status)
+  for (const path in running) {
+    const gib = running[path] / 1024
+    if (!(gib > 0)) continue
+    segments.push({ id: "comfyui:" + path, name: "ComfyUI", gib: gib, comfy: true })
+    models += gib
+    comfy += gib
   }
   const available = status && status.ram_available_gib
   const held = available === undefined || available === null || !isFinite(Number(available)) ? models : Math.max(models, total - Number(available))
@@ -350,7 +360,7 @@ function hostMemory(status, profile) {
   const other = beyond >= RESERVE_GIB ? beyond : 0
   if (other > 0) segments.push({ id: "other", name: "Other programs", gib: other, other: true })
   const used = Math.min(models + loadingGib + other, total)
-  return { total: total, used: used, free: total - used, other: other, loading: loading ? String(loading.name || loading.recipe) : "", segments: segments }
+  return { total: total, used: used, free: total - used, other: other, comfy: comfy, loading: loading ? String(loading.name || loading.recipe) : "", segments: segments }
 }
 
 // What the memory bar says: "28 of 122 GiB in use", the model that is loading, the part nothing of ours holds, or that nothing is loaded.
@@ -359,6 +369,7 @@ function memoryText(mem) {
   if (mem.segments.length === 0) return "Nothing loaded \u00b7 " + Math.round(mem.total) + " GiB free"
   const text = Math.round(mem.used) + " of " + Math.round(mem.total) + " GiB in use"
   const parts = [text]
+  if (mem.comfy > 0) parts.push("ComfyUI " + Math.round(mem.comfy) + " GiB")
   if (mem.loading) parts.push(mem.loading + " loading")
   if (mem.other > 0) parts.push(Math.round(mem.other) + " GiB by other programs")
   return parts.join(" \u00b7 ")
@@ -436,8 +447,9 @@ function actionNotice(kind, stdout) {
 // ---- keyboard ----------------------------------------------------------------------------------------
 
 // The manager's rows, top to bottom, for the keyboard cursor: each machine, then its models, then its Add model…
-// row (only on a machine that answers: a picker needs its catalog).
-function rows(hostList, hostStates) {
+// row (only on a machine that answers: a picker needs its catalog), then its ComfyUI installs (`comfy`: host -> the
+// installs `comfyui list` last said).
+function rows(hostList, hostStates, comfy) {
   const out = []
   for (let i = 0; i < hostList.length; i++) {
     const host = hostList[i]
@@ -446,6 +458,8 @@ function rows(hostList, hostStates) {
     const list = modelList(hs ? hs.status : null)
     for (let j = 0; j < list.length; j++) out.push({ kind: "model", host: host, id: list[j].recipe })
     if (hs && hs.loaded && hs.online) out.push({ kind: "add", host: host })
+    const installs = comfy && comfy[host] ? comfy[host] : []
+    for (let j = 0; j < installs.length; j++) out.push({ kind: "comfy", host: host, id: String(installs[j].path) })
   }
   return out
 }
@@ -1439,4 +1453,64 @@ function hasTitlebar(clientsJson, pluginsText, title, wmClass) {
     return c.title === title && c.class === wmClass && c.floating === true
       && (c.tags || []).some(function (t) { return String(t).replace(/\*$/, "") === TITLEBAR_TAG })
   })
+}
+
+// ---- ComfyUI installs --------------------------------------------------------------------------------------
+// `startdgx comfyui list --json` (the installs startdgx manages on a machine) and, from the status poll, which of them runs.
+
+// A ComfyUI row's key, for the cursor and the marks: a path has slashes, so it can't be told from a model's "host/id".
+function comfyKey(host, path) { return host + "#comfy/" + path }
+
+// The installs `comfyui list` sent, or null when the answer isn't one.
+function parseComfyList(text) {
+  const parsed = parseJson(text)
+  if (!isPlainObject(parsed) || !Array.isArray(parsed.installs)) return null
+  for (let i = 0; i < parsed.installs.length; i++) {
+    const item = parsed.installs[i]
+    if (!isPlainObject(item) || typeof item.path !== "string" || item.path === "") return null
+  }
+  return parsed.installs
+}
+
+function comfyAnswer(code, stdout, stderr, host) {
+  if (code !== 0) return { installs: null, error: errorLine(stderr, host + " didn't answer") }
+  const installs = parseComfyList(stdout)
+  return installs ? { installs: installs } : { installs: null, error: host + " sent an unreadable ComfyUI answer" }
+}
+
+// The running managed installs the status poll saw, { path: MiB }.
+function comfyRunning(status) {
+  const out = {}
+  const list = status && Array.isArray(status.comfyui) ? status.comfyui : []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (isPlainObject(item) && typeof item.path === "string") out[item.path] = Number(item.rss_mib) || 0
+  }
+  return out
+}
+
+// What a ComfyUI install's row shows: { path, name, state, version, note, gib }. `state` is running, stopped, or one
+// that can't run: unfinished (its ComfyUI isn't installed yet), missing (its folder is gone), unsupported (a foreign
+// folder). `note` says why such a row, or an install too old for startdgx to read, can't be used as it is.
+function comfyRow(install, status) {
+  const path = String(install.path)
+  const tool = isPlainObject(install.tool) ? install.tool : {}
+  const rss = comfyRunning(status)[path]
+  const name = String(install.label || "") || path.replace(/\/+$/, "").split("/").pop() || path
+  const version = tool.tag ? String(tool.tag) : tool.branch ? String(tool.branch) + (tool.dirty ? " \u00b7 changed" : "") : String(tool.commit || "")
+  let state = "stopped"
+  let note = ""
+  if (install.present === false) { state = "missing"; note = "Its folder is gone" }
+  else if (install.kind && install.kind !== "dgx-comfyui") { state = "unsupported"; note = "Not a dgx-comfyui folder" }
+  else if (install.installed === false) { state = "unfinished"; note = "ComfyUI isn't installed in it yet" }
+  else if (rss !== undefined) state = "running"
+  if (state !== "missing" && state !== "unsupported" && install.json_capable === false) note = "Too old for startdgx to read: update it"
+  return { path: path, name: name, state: state, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0 }
+}
+
+// A machine's ComfyUI line under its name: "2 ComfyUI installs, one running", or "" for none.
+function comfySummary(rows) {
+  if (rows.length === 0) return ""
+  const running = rows.filter(function (r) { return r.state === "running" }).length
+  return rows.length + (rows.length === 1 ? " install" : " installs") + (running > 0 ? ", " + running + " running" : "")
 }
