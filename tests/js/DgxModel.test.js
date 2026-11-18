@@ -1731,3 +1731,31 @@ test("findState: where a Find row stands on the machine, from its recipe list", 
   assert.strictEqual(M.findStateText({ state: "" }), "")
   assert.strictEqual(M.parseTfList(JSON.stringify({ recipes: [{ id: "a", name: "A", recipe_id: "a-tensorfold" }] })).rows[0].recipeId, "a-tensorfold")
 })
+
+const tfSet = { defaults: { context: 8192, parallel: 1, input: "text" }, contexts: [8192, 16384], requests: [1, 2], inputs: ["text", "images"] }
+
+test("parseTfList carries an entry's choices, or null", () => {
+  const l = M.parseTfList(JSON.stringify({ recipes: [{ id: "a", name: "A", settings: tfSet }, { id: "b", name: "B", settings: null }, { id: "c", name: "C", settings: { defaults: {}, contexts: [], requests: [1], inputs: ["text"] } }] }))
+  assert.deepStrictEqual(l.rows[0].settings, tfSet)
+  assert.strictEqual(l.rows[1].settings, null)
+  assert.strictEqual(l.rows[2].settings, null)
+})
+
+test("tfDraftCommand sends only the choices that differ from the entry's defaults", () => {
+  const cmd = (c) => M.tfDraftCommand("me@gx10", "a", c, tfSet)
+  assert.deepStrictEqual(cmd({ context: 8192, parallel: 1, input: "text" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "a"])
+  assert.deepStrictEqual(cmd({ context: 16384, parallel: 2, input: "images" }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--context", "16384", "--parallel", "2", "--input", "images", "--", "a"])
+  assert.deepStrictEqual(cmd({ parallel: 2 }), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--parallel", "2", "--", "a"])
+  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "a", { context: 16384 }, null), ["tensorfold", "draft", "--host", "me@gx10", "--json", "--", "a"])
+})
+
+test("tfChoiceLabel, tfValues and tfCustomized: what a choice reads as, the values shown and whether they differ", () => {
+  assert.strictEqual(M.tfChoiceLabel("context", 16384), "16K")
+  assert.strictEqual(M.tfChoiceLabel("parallel", 2), "2")
+  assert.strictEqual(M.tfChoiceLabel("input", "images"), "Text + images")
+  assert.deepStrictEqual(M.tfValues(tfSet, { context: 16384 }), { context: 16384, parallel: 1, input: "text" })
+  assert.strictEqual(M.tfValues(null, {}), null)
+  assert.strictEqual(M.tfCustomized(tfSet, {}), false)
+  assert.strictEqual(M.tfCustomized(tfSet, { parallel: 1 }), false)
+  assert.strictEqual(M.tfCustomized(tfSet, { input: "images" }), true)
+})

@@ -1574,6 +1574,21 @@ import json,sys,tomllib
 d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb')); v=r['variant'][0]
 sys.exit(not (d['source']=='drafted' and r['artifacts'][0]['revision']=='0f74678ad5062e607c5469c35151dc6fcbd966b6' and v['source']=='drafted' and v['peak_ram_gib']==24 and 'estimate of 24 GB' in r['summary']))"
 ok $? "tensorfold draft pins the catalog's commit, takes its estimate as the drafted placeholder and says so"
+dtf '{r["id"]: r["settings"] is not None for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and d["recipes"][0]["settings"]["contexts"] == [8192, 16384, 32768] and d["recipes"][0]["settings"]["defaults"] == {"context": 8192, "parallel": 1, "input": "text"}' list --json
+ok $? "an entry carries the choices it offers (context, requests, input), validated, or none"
+ds tensorfold draft lfm2.5-24b-a2b --context 32768 --parallel 2 --input images --id custom-lfm --out "$tmp/tfc" --json | python3 -c "
+import json,sys,tomllib
+d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb'))
+sys.exit(not (d['ctx']==32768 and r['variant'][0]['ctx']==32768 and r['server']['args']==['--parallel','2','--vision','--vision-max-images','50'] and r['input']==['text','image'] and 'context 32768' in r['summary'] and r['variant'][0]['source']=='drafted'))"
+ok $? "tensorfold draft takes the context, the requests at once and the input, as the recipe's variant, server args and input"
+ds tensorfold draft lfm2.5-24b-a2b --parallel 1 --id plain-lfm --out "$tmp/tfc" --json | python3 -c "
+import json,sys,tomllib
+d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb'))
+sys.exit(not (d['ctx']==8192 and 'server' not in r and 'input' not in r))"
+ok $? "the entry's own defaults add nothing"
+ds tensorfold draft lfm2.5-24b-a2b --context 4096 --out "$tmp/tfc" >/dev/null 2>"$tmp/ctx.err"; ok $((!$?)) "a context the entry doesn't offer is refused"
+grep -q "offers context 8192, 16384, 32768" "$tmp/ctx.err"; ok $? "and the refusal lists what it offers"
+ds tensorfold draft odd-link --parallel 2 >/dev/null 2>&1; ok $((!$?)) "a choice on an entry that offers none is refused"
 ds tensorfold draft qwen3.6-35b-a3b >/dev/null 2>&1; ok $((!$?)) "tensorfold draft refuses a format the runtime isn't pinned for"
 ds tensorfold draft odd-link >/dev/null 2>&1; ok $((!$?)) "and an entry with no pinned checkpoint"
 ds tensorfold draft mac-only >/dev/null 2>&1; ok $((!$?)) "and one the list has no Spark deployment for"

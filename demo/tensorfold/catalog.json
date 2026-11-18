@@ -21,7 +21,28 @@
      "checkpoint": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-MLX-4bit/tree/0f74678ad5062e607c5469c35151dc6fcbd966b6",
      "runtime": "Podman \u00b7 CUDA",
      "context": 8192,
-     "parallel": 1
+     "parallel": 1,
+     "settings": {
+      "defaults": {
+       "context": 8192,
+       "parallel": 1,
+       "input": "text"
+      },
+      "contexts": [
+       8192,
+       16384,
+       32768
+      ],
+      "requests": [
+       1,
+       2,
+       4
+      ],
+      "inputs": [
+       "text",
+       "images"
+      ]
+     }
     },
     "apple-silicon": {
      "format": "MLX 4-bit",

@@ -1398,6 +1398,15 @@ function draftDone(host, id) {
 // from this computer like the Hugging Face search. Its memory figure is the list's estimate, so a draft from a row is `drafted` and
 // never fits until a measuring run (docs/adr/0001). `status` says what the last saved look didn't have: "new" or "changed".
 
+// The choices an entry offers, { defaults: { context, parallel, input }, contexts, requests, inputs }, or null (the CLI has checked them;
+// this only keeps the card from reading what isn't there).
+function tfSettings(x) {
+  if (!isPlainObject(x) || !isPlainObject(x.defaults) || !Array.isArray(x.contexts) || !Array.isArray(x.requests) || !Array.isArray(x.inputs)) return null
+  if (x.contexts.length === 0 || x.requests.length === 0 || x.inputs.length === 0) return null
+  return { defaults: { context: Number(x.defaults.context), parallel: Number(x.defaults.parallel), input: String(x.defaults.input) },
+           contexts: x.contexts.map(Number), requests: x.requests.map(Number), inputs: x.inputs.map(String) }
+}
+
 function parseTfList(text) {
   const p = parseJson(text)
   if (!isPlainObject(p) || !Array.isArray(p.recipes)) return null
@@ -1406,6 +1415,7 @@ function parseTfList(text) {
     const r = p.recipes[i]
     if (!isPlainObject(r) || typeof r.id !== "string" || r.id === "" || typeof r.name !== "string") return null
     rows.push({ id: r.id, name: r.name, format: String(r.format || ""), estimate: Number(r.estimate_gb) > 0 ? Number(r.estimate_gb) : 0,
+                settings: tfSettings(r.settings),
                 repo: typeof r.repo === "string" ? r.repo : "", recipeId: typeof r.recipe_id === "string" ? r.recipe_id : "", draftable: r.draftable === true, reason: String(r.reason || ""),
                 status: r.status === "new" || r.status === "changed" ? r.status : "" })
   }
@@ -1417,9 +1427,39 @@ function tfListCommand(update) {
   return ["tensorfold", "list", "--json"].concat(update ? ["--update"] : [])
 }
 
-// The CLI's arguments to draft an entry for `host`, the entry after `--`.
-function tfDraftCommand(host, entry) {
-  return ["tensorfold", "draft", "--host", host, "--json", "--", String(entry)]
+// The CLI's arguments to draft an entry for `host`, the entry after `--`. `choices` ({ context, parallel, input }, any of them) are
+// sent only where they differ from what the entry defaults to, so an untouched entry is drafted exactly as before.
+function tfDraftCommand(host, entry, choices, settings) {
+  const args = []
+  const d = settings ? settings.defaults : null
+  if (choices && d) {
+    if (choices.context !== undefined && Number(choices.context) !== d.context) args.push("--context", String(choices.context))
+    if (choices.parallel !== undefined && Number(choices.parallel) !== d.parallel) args.push("--parallel", String(choices.parallel))
+    if (choices.input !== undefined && String(choices.input) !== d.input) args.push("--input", String(choices.input))
+  }
+  return ["tensorfold", "draft", "--host", host, "--json"].concat(args, ["--", String(entry)])
+}
+
+// What a choice reads as on the card: "16K", "2", "Text + images".
+var TF_INPUT_NAMES = { text: "Text only", images: "Text + images", video: "Text + images + video" }
+function tfChoiceLabel(key, value) {
+  if (key === "context") return Math.round(Number(value) / 1024) + "K"
+  if (key === "input") return TF_INPUT_NAMES[value] || String(value)
+  return String(value)
+}
+
+// The values to show for an entry: its defaults, with what the person picked on top.
+function tfValues(settings, picked) {
+  if (!settings) return null
+  return { context: picked && picked.context !== undefined ? picked.context : settings.defaults.context,
+           parallel: picked && picked.parallel !== undefined ? picked.parallel : settings.defaults.parallel,
+           input: picked && picked.input !== undefined ? picked.input : settings.defaults.input }
+}
+
+// Whether the picked values differ from the defaults.
+function tfCustomized(settings, picked) {
+  const v = tfValues(settings, picked)
+  return !!v && (v.context !== settings.defaults.context || v.parallel !== settings.defaults.parallel || v.input !== settings.defaults.input)
 }
 
 // The list as the card shows it: the rows that can be added, and the ones that can't yet (collapsed into one line until asked for).
