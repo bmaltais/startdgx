@@ -78,6 +78,7 @@ Item {
     if (root.card === "find") core.cancelHf()
     if (root.card === "findComfy") core.cancelComfyFind()
     if (root.card === "comfySettings") core.cancelComfyStatus()
+    if (root.card === "installComfy") core.cancelComfyPlan()
     root.card = ""
   }
   function close() {
@@ -164,6 +165,15 @@ Item {
     core.hfAsked = ""
     if (!core.recipeBusy) core.draftRepo = ""
     root.card = "find"
+  }
+  // The Install ComfyUI card: the folder to put it in, on a disk of the machine, checked as it is typed.
+  function showInstallComfy(host) {
+    if (!core.hosts[host]) return
+    root.ensureManager()
+    root.cardHost = host
+    root.card = "installComfy"
+    core.comfyPlan = null
+    core.comfyPlanFor(host, "")
   }
   // The Find existing ComfyUI card: what the machine has (`comfyui discover`, read-only), with an Adopt for each dgx-comfyui folder.
   function showFindComfy(host) {
@@ -255,6 +265,8 @@ Item {
     case "addRecipe": root.showAddRecipe(action.host, ""); break
     case "findModel": root.showFind(action.host, ""); break
     case "findComfy": root.showFindComfy(action.host); break
+    case "installComfy": root.showInstallComfy(action.host); break
+    case "comfyInstallNow": core.comfyAct(action.host, "install", action.path, action.label || ""); root.closeCard(); break
     case "comfyToggle": core.comfyAct(action.host, action.kind, action.path); break
     case "comfyAdopt": core.comfyAct(action.host, "adopt", action.path, action.label || ""); break
     case "comfySettings": root.showComfySettings(action.host, action.path, action.page); break
@@ -441,7 +453,7 @@ Item {
         active: root.card !== ""
         sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
-          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : addCard
+          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : root.card === "installComfy" ? installComfyCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
@@ -451,6 +463,7 @@ Item {
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }
       Component { id: findCard; FindView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
+      Component { id: installComfyCard; InstallComfyView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: comfyForgetCard; ComfyForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardModel } }
       Component { id: findComfyCard; FindComfyView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: recipeRunCard; RecipeRunView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; mode: cardLoader.owner.cardMode; recipe: cardLoader.owner.cardRecipe; ctx: cardLoader.owner.cardCtx } }

@@ -27,7 +27,7 @@ FocusScope {
   // A row's key: "host" for a machine, "host/model" for a model, "host#add" for its Add model… row, "host#comfy/path" for a ComfyUI install, "host#comfyfind" for its Find row.
   function keyOf(r) {
     if (!r) return ""
-    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.kind === "comfy" ? Model.comfyKey(r.host, r.id) : r.kind === "comfyfind" ? r.host + "#comfyfind" : Model.modelKey(r.host, r.id)
+    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.kind === "comfy" ? Model.comfyKey(r.host, r.id) : r.kind === "comfyfind" ? r.host + "#comfyfind" : r.kind === "comfyinstall" ? r.host + "#comfyinstall" : Model.modelKey(r.host, r.id)
   }
 
   // The manager's clock, for the load and stop bars and "last seen": four times a second while a bar moves,
@@ -174,6 +174,7 @@ FocusScope {
               cursorKey: view.cursorKey
               storage: view.dgx.storage[modelData] || null
               comfy: view.dgx.comfyui[modelData] || []
+              comfyJobs: view.dgx.comfyJob
               needsSetup: !!view.dgx.setupNeeded[modelData]
               onSelectRequested: key => view.select(key)
               onActionRequested: action => view.svc.dispatch(action)

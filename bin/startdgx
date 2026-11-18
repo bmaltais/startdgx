@@ -3027,7 +3027,8 @@ def demo_comfyui_pick(installs, which):
 def demo_comfyui(args):
   """The ComfyUI commands on a demo machine: its installs are in comfyui.json (none on a machine without the file).
   Adopting or forgetting one flips its `managed`; start and stop flip its `state` (up or stopped) at once."""
-  with demo_state(write=args.verb not in ("discover", "list", "status", "plan", "job") and not (args.verb == "recipe" and args.action != "install")) as state:
+  # `status` and `job` write: reading a job that has run its time marks the install installed, and that has to stay.
+  with demo_state(write=args.verb not in ("discover", "list", "plan") and not (args.verb == "recipe" and args.action != "install")) as state:
     installs = demo_host(state, args.host).setdefault("comfyui", {"installs": []})["installs"]
     if args.verb in ("adopt", "forget"):
       path = comfyui_dir(args.dir)
