@@ -24,10 +24,10 @@ FocusScope {
   readonly property var currentRow: view.rows.length ? view.rows[Math.min(view.cursor, view.rows.length - 1)] : null
   readonly property string cursorKey: view.keyOf(view.currentRow)
 
-  // A row's key: "host" for a machine, "host/model" for a model, "host#add" for its Add model… row, "host#comfy/path" for a ComfyUI install.
+  // A row's key: "host" for a machine, "host/model" for a model, "host#add" for its Add model… row, "host#comfy/path" for a ComfyUI install, "host#comfyfind" for its Find row.
   function keyOf(r) {
     if (!r) return ""
-    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.kind === "comfy" ? Model.comfyKey(r.host, r.id) : Model.modelKey(r.host, r.id)
+    return r.kind === "host" ? r.host : r.kind === "add" ? r.host + "#add" : r.kind === "comfy" ? Model.comfyKey(r.host, r.id) : r.kind === "comfyfind" ? r.host + "#comfyfind" : Model.modelKey(r.host, r.id)
   }
 
   // The manager's clock, for the load and stop bars and "last seen": four times a second while a bar moves,
@@ -51,6 +51,11 @@ FocusScope {
     view.forceActiveFocus()
   }
   function keyFor(key, repeat) {
+    const row = view.currentRow
+    if (row && row.kind === "comfy" && !Model.isAway(view.dgx.shownState[row.host])) {
+      const start = Model.comfyKeyAction(key, row, view.dgx.comfyToggle(row.host, row.id), repeat)
+      if (start) return start
+    }
     return Model.keyAction(key, view.currentRow,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.entry(view.currentRow.host, view.currentRow.id) : null,
       view.currentRow && view.currentRow.kind === "model" ? view.dgx.pending[view.cursorKey] || "" : "",

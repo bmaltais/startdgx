@@ -96,8 +96,8 @@ test("rows: a machine's ComfyUI installs follow its Add model row", () => {
   const comfy = { h1: [{ path: "/a" }, { path: "/b" }], h2: [{ path: "/c" }] }
   const r = M.rows(["h1", "h2"], { h1: up, h2: { loaded: true, online: false, status: null } }, comfy)
   assert.deepStrictEqual(r.map((x) => x.kind + ":" + x.host + (x.id ? "/" + x.id : "")),
-    ["host:h1", "add:h1", "comfy:h1//a", "comfy:h1//b", "host:h2", "comfy:h2//c"])
-  assert.deepStrictEqual(M.rows(["h1"], { h1: up }).map((x) => x.kind), ["host", "add"], "none listed: as before")
+    ["host:h1", "add:h1", "comfy:h1//a", "comfy:h1//b", "comfyfind:h1", "host:h2", "comfy:h2//c"])
+  assert.deepStrictEqual(M.rows(["h1"], { h1: up }).map((x) => x.kind), ["host", "add", "comfyfind"], "none listed: just the Find row")
 })
 
 test("keyAction: on a ComfyUI row the machine's keys act for its machine", () => {
@@ -105,4 +105,95 @@ test("keyAction: on a ComfyUI row the machine's keys act for its machine", () =>
   assert.deepStrictEqual(M.keyAction("a", row, null, "", false, false, ""), { type: "addModel", host: "h" })
   assert.deepStrictEqual(M.keyAction("g", row, null, "", false, false, ""), { type: "hostSettings", host: "h" })
   assert.strictEqual(M.keyAction("d", row, null, "", false, false, ""), null, "no remove on an install")
+})
+
+const rowOf = (over, status) => M.comfyRow(install(over), status || {})
+
+test("comfyToggle: Start when stopped and nothing else runs, Stop when running, nothing while a click waits", () => {
+  const stopped = rowOf({})
+  const running = rowOf({}, { comfyui: [{ path: "/home/u/dgx-comfyui", rss_mib: 1024 }] })
+  assert.deepStrictEqual(M.comfyToggle(stopped, "", [stopped]), { action: "start", reason: "" })
+  assert.deepStrictEqual(M.comfyToggle(running, "", [running]), { action: "stop", reason: "" })
+  assert.strictEqual(M.comfyToggle(stopped, "start", [stopped]).action, "")
+  assert.strictEqual(M.comfyToggle(running, "stop", [running]).action, "")
+  assert.strictEqual(M.comfyToggle(null, "", []).action, "")
+})
+
+test("comfyToggle: one ComfyUI runs at a time, so a stopped install says which to stop", () => {
+  const a = rowOf({ path: "/a", label: "main" }, { comfyui: [{ path: "/a", rss_mib: 1 }] })
+  const b = rowOf({ path: "/b" })
+  const t = M.comfyToggle(b, "", [a, b])
+  assert.strictEqual(t.action, "")
+  assert.match(t.reason, /ComfyUI in main is running: stop it first/)
+  assert.strictEqual(M.comfyToggle(a, "", [a, b]).action, "stop", "the running one can still stop")
+})
+
+test("comfyToggle: what can't run has no button", () => {
+  for (const over of [{ installed: false }, { present: false }]) {
+    const r = rowOf(over)
+    assert.strictEqual(M.comfyToggle(r, "", [r]).action, "")
+  }
+})
+
+test("comfyKeyAction: Enter and s start or stop the install under the cursor, once", () => {
+  const row = { kind: "comfy", host: "h", id: "/a" }
+  const toggle = { action: "start", reason: "" }
+  assert.deepStrictEqual(M.comfyKeyAction("enter", row, toggle, false), { type: "comfyToggle", host: "h", path: "/a", kind: "start" })
+  assert.deepStrictEqual(M.comfyKeyAction("S", row, { action: "stop" }, false), { type: "comfyToggle", host: "h", path: "/a", kind: "stop" })
+  assert.strictEqual(M.comfyKeyAction("enter", row, toggle, true), null, "a held key acts once")
+  assert.strictEqual(M.comfyKeyAction("enter", row, { action: "" }, false), null)
+  assert.strictEqual(M.comfyKeyAction("x", row, toggle, false), null)
+  assert.strictEqual(M.comfyKeyAction("enter", { kind: "model", host: "h", id: "m" }, toggle, false), null)
+  assert.strictEqual(M.comfyKeyAction("enter", null, toggle, false), null)
+})
+
+test("comfyCommand: the CLI call for each action", () => {
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "start", path: "/a" }), ["comfyui", "start", "h", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "stop", path: "/a" }), ["comfyui", "stop", "h", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "adopt", path: "/a", label: "usb" }), ["comfyui", "adopt", "h", "--dir", "/a", "--label", "usb", "--timeout", "60"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "adopt", path: "/a" }), ["comfyui", "adopt", "h", "--dir", "/a", "--timeout", "60"])
+  assert.strictEqual(M.comfyCommand("h", { kind: "nope", path: "/a" }), null)
+})
+
+test("comfyMarks: a click shows from the moment it is asked until the status shows it took", () => {
+  const up = { comfyui: [{ path: "/a", rss_mib: 5 }] }
+  const key = M.comfyKey("h", "/a")
+  // Running or waiting.
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "start", path: "/a" }, { kind: "stop", path: "/b" }], [], {}, 0).marks, { [key]: "start", [M.comfyKey("h", "/b")]: "stop" })
+  // Finished, but the process isn't there yet: the mark stays.
+  const wait = [{ kind: "start", path: "/a", until: 30000 }]
+  assert.deepStrictEqual(M.comfyMarks("h", [], wait, {}, 1000).marks, { [key]: "start" })
+  // Until it shows, or 30 s have passed.
+  assert.deepStrictEqual(M.comfyMarks("h", [], wait, up, 1000), { marks: {}, settling: [] })
+  assert.deepStrictEqual(M.comfyMarks("h", [], wait, {}, 31000), { marks: {}, settling: [] })
+  // A stop waits for the process to go.
+  const stopWait = [{ kind: "stop", path: "/a", until: 30000 }]
+  assert.deepStrictEqual(M.comfyMarks("h", [], stopWait, up, 1000).marks, { [key]: "stop" })
+  assert.deepStrictEqual(M.comfyMarks("h", [], stopWait, {}, 1000), { marks: {}, settling: [] })
+})
+
+test("comfyFindRows: what the Find card offers for each folder", () => {
+  const found = [
+    install({ managed: false, sources: ["scan"] }),
+    install({ path: "/m", managed: true, sources: ["record", "scan"] }),
+    install({ path: "/usb", managed: false, json_capable: false, sources: ["service", "scan"], tool: { tag: "v0.0.5" } }),
+    install({ path: "/run", managed: false, sources: ["process"] }),
+    { path: "/ComfyUI", kind: "foreign", present: true, managed: false, sources: ["scan"], reason: "a ComfyUI without dgx-comfyui.sh: startdgx doesn't manage it" },
+    install({ path: "/gone", managed: false, present: false })]
+  const rows = M.comfyFindRows(found)
+  assert.deepStrictEqual(rows.map((r) => r.offer), ["adopt", "", "adopt", "adopt", "", ""])
+  assert.strictEqual(rows[0].text, "v0.1.0")
+  assert.strictEqual(rows[1].managed, true)
+  assert.strictEqual(rows[2].text, "v0.0.5 · older than startdgx reads · starts at boot")
+  assert.strictEqual(rows[3].text, "v0.1.0 · running now")
+  assert.match(rows[4].text, /doesn't manage it/)
+})
+
+test("rows and keys: the Find row ends a machine's ComfyUI group and opens the card", () => {
+  const up = { loaded: true, online: true, status: { models: {} } }
+  const r = M.rows(["h"], { h: up }, { h: [{ path: "/a" }] })
+  assert.deepStrictEqual(r.map((x) => x.kind), ["host", "add", "comfy", "comfyfind"])
+  assert.deepStrictEqual(M.rows(["h"], { h: { loaded: true, online: false, status: null } }, {}).map((x) => x.kind), ["host"], "not on a machine that is away")
+  assert.deepStrictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", false, false, ""), { type: "findComfy", host: "h" })
+  assert.strictEqual(M.keyAction("enter", { kind: "comfyfind", host: "h" }, null, "", true, false, ""), null, "away: nothing")
 })

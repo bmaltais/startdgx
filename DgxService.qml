@@ -29,6 +29,12 @@ Item {
   // `startdgx comfyui list` per machine, as last read ("target" -> the managed installs, DgxModel.parseComfyList). A read that
   // fails keeps the last good one; what is running comes with the status poll, not from here.
   property var comfyui: ({})
+  // The Find existing ComfyUI card (`comfyui discover --json`): the machine asked, what it found (null until it answers) and why a
+  // look failed.
+  property string comfyFindHost: ""
+  property var comfyFound: null
+  property string comfyFindError: ""
+  readonly property bool comfyFinding: comfyFindQuery.busy
   // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
   // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
   property var marks: ({})
@@ -163,6 +169,30 @@ Item {
       delete errors[host]
     } else errors[host] = error
     service.storageErrors = errors
+  }
+  // Start or stop an install, or adopt one the Find card found (the label is optional).
+  function comfyAct(host, kind, path, label) {
+    const p = service.poller(host)
+    if (p) p.runComfy(kind, path, label)
+  }
+  // The Start or Stop an install's button and key offer (DgxModel.comfyToggle), for the cursor's keys.
+  function comfyToggle(host, path) {
+    const installs = service.comfyui[host] || []
+    const status = service.shownState[host] ? service.shownState[host].status : null
+    const rows = installs.map(function (i) { return Model.comfyRow(i, status) })
+    const info = rows.filter(function (r) { return r.path === path })[0]
+    return Model.comfyToggle(info, service.pending[Model.comfyKey(host, path)] || "", rows)
+  }
+  function findComfy(host) {
+    if (service.comfyFindHost !== host) service.comfyFound = null
+    service.comfyFindHost = host
+    service.comfyFindError = ""
+    comfyFindQuery.ask(host, [service.script, "comfyui", "discover", host, "--json", "--timeout", "90"])
+  }
+  function cancelComfyFind() { comfyFindQuery.cancel() }
+  // An adopted install: the list has it now, and the Find card, if it is open on this machine, shows it as managed.
+  function comfyAdopted(host) {
+    if (service.comfyFindHost === host && service.comfyFound !== null) service.findComfy(host)
   }
   function comfyRead(host, installs) {
     if (!installs) return
@@ -579,6 +609,16 @@ Item {
       const list = code === 0 ? Model.parseRecipes(out) : null
       if (list) service.recipes = list
       else service.recipesError = code === 0 ? "The machine's catalog could not be read" : Model.errorLine(err, "The machine's catalog could not be read")
+    }
+  }
+
+  Query {
+    id: comfyFindQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.comfyFindHost) return
+      const found = code === 0 ? Model.parseComfyList(out) : null
+      if (found) service.comfyFound = found
+      else service.comfyFindError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }
 

@@ -1,5 +1,5 @@
 // One machine: its name, what it is, whether it answers (and why not), the gear that opens its settings window (logs,
-// update, the model store, uninstall, forget), its models and, on a machine that answers, an Add model… row that opens its model picker. The manager owns the cursor and every decision; this file only paints and passes on
+// update, the model store, uninstall, forget), its models and, on a machine that answers, an Add model… row that opens its model picker, then its managed ComfyUI installs and a Find existing ComfyUI… row. The manager owns the cursor and every decision; this file only paints and passes on
 // what was asked for, as the same actions the keys make (DgxModel.keyAction).
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -16,7 +16,7 @@ ColumnLayout {
   property var hostState: null        // { loaded, online, error, status, lastSeenMs }, or null before the first answer
   property var pending: ({})          // "host/model" -> "start" | "stop" | "delete", "host/model#share" -> "share" | "unshare"
   property real nowMs: 0
-  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model", "host#add" or "host#comfy/path"
+  property string cursorKey: ""       // the row under the keyboard cursor: "host", "host/model", "host#add", "host#comfy/path" or "host#comfyfind"
   property var storage: null          // `startdgx storage` (DgxModel.parseStorage), or null until read
   property bool needsSetup: false     // a setup failed for want of the machine's one-time root setup: offer Install…
   property var comfy: []              // the managed ComfyUI installs `startdgx comfyui list` last said ([] while unread or none)
@@ -37,13 +37,24 @@ ColumnLayout {
     if (next.join("\n") !== section.ids.join("\n")) section.ids = next
   }
   onEntriesChanged: section.syncIds()
-  Component.onCompleted: section.syncIds()
+  Component.onCompleted: { section.syncIds(); section.syncComfy() }
   function entryOf(id) {
     const status = section.hostState ? section.hostState.status : null
     return status && status.models && status.models[id] ? status.models[id] : ({ recipe: id, unit: "inactive" })
   }
   // One row per install: what `list` knows of it (its folder, version) and what the status poll saw (running, memory).
   readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null) })
+  // The ComfyUI rows are made per folder and kept across polls, like the models' (a new list would rebuild them every poll, and
+  // the list would jump), so the folders are only replaced when they change.
+  property var comfyPaths: []
+  function syncComfy() {
+    const next = section.comfy.map(function (i) { return String(i.path) })
+    if (next.join("\n") !== section.comfyPaths.join("\n")) section.comfyPaths = next
+  }
+  onComfyChanged: section.syncComfy()
+  function comfyInfo(path) {
+    return section.comfyRows.filter(function (r) { return r.path === path })[0] || ({ path: path, name: path, state: "stopped", version: "", note: "", gib: 0 })
+  }
   readonly property bool headCurrent: section.cursorKey === section.host
   readonly property string machine: Model.hostName(section.host)
 
@@ -253,29 +264,76 @@ ColumnLayout {
   }
   // Its ComfyUI installs, when it has any managed: a small heading, then a row each. An away machine's last known ones, dimmed.
   Text {
-    visible: section.comfyRows.length > 0
+    visible: section.comfyRows.length > 0 || (section.loaded && !section.away)
     Layout.fillWidth: true
     Layout.leftMargin: Style.spacing.xxl
     Layout.topMargin: Style.spacing.md
     textFormat: Text.PlainText
-    text: "ComfyUI \u00b7 " + Model.comfySummary(section.comfyRows)
+    text: section.comfyRows.length > 0 ? "ComfyUI \u00b7 " + Model.comfySummary(section.comfyRows) : "ComfyUI"
     color: Color.muted
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     elide: Text.ElideRight
   }
   Repeater {
-    model: section.comfyRows
+    model: section.comfyPaths
     delegate: ComfyRow {
       id: comfyRow
-      required property var modelData
+      required property string modelData
       Layout.fillWidth: true
       Layout.leftMargin: Style.spacing.xxl
-      info: comfyRow.modelData
+      info: section.comfyInfo(comfyRow.modelData)
       away: section.away
-      current: section.cursorKey === Model.comfyKey(section.host, comfyRow.modelData.path)
+      pending: section.pending[Model.comfyKey(section.host, comfyRow.modelData)] || ""
+      toggle: Model.comfyToggle(comfyRow.info, comfyRow.pending, section.comfyRows)
+      current: section.cursorKey === Model.comfyKey(section.host, comfyRow.modelData)
       onCurrentChanged: if (current) section.revealRequested(comfyRow)
-      onSelectRequested: section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData.path))
+      onSelectRequested: section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
+      onToggleRequested: {
+        section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
+        section.actionRequested({ type: "comfyToggle", host: section.host, path: comfyRow.modelData, kind: comfyRow.toggle.action })
+      }
+    }
+  }
+
+  // Find existing ComfyUI…: opens the card that lists what the machine has and adopts a folder. Only on a machine that answers.
+  Rectangle {
+    id: findRow
+    readonly property bool current: section.cursorKey === section.host + "#comfyfind"
+    visible: section.loaded && !section.away
+    Layout.fillWidth: true
+    Layout.leftMargin: Style.spacing.xxl
+    implicitHeight: findText.implicitHeight + Style.spacing.md * 2
+    radius: Math.max(Style.cornerRadius, Style.space(6))
+    color: findHover.hovered || findRow.current ? Util.alpha(Color.foreground, 0.06) : "transparent"
+    border.width: Style.normalBorderWidth
+    border.color: findRow.current ? Util.alpha(Color.accent, 0.7) : "transparent"
+    onCurrentChanged: if (current) section.revealRequested(findRow)
+    HoverHandler { id: findHover; cursorShape: Qt.PointingHandCursor }
+    MouseArea {
+      anchors.fill: parent
+      onClicked: {
+        section.selectRequested(section.host + "#comfyfind")
+        section.actionRequested({ type: "findComfy", host: section.host })
+      }
+    }
+    Text {
+      id: findText
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.spacing.xxl
+      anchors.rightMargin: Style.spacing.lg
+      textFormat: Text.PlainText
+      text: "+  Find existing ComfyUI…"
+      color: findHover.hovered || findRow.current ? Color.foreground : Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      elide: Text.ElideRight
+    }
+    PanelToolTip {
+      visible: findHover.hovered
+      text: "Look for ComfyUI installs on " + section.machine + " and let startdgx manage one  (Enter)"
     }
   }
 }

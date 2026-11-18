@@ -35,7 +35,7 @@ Gated downloads need `HF_TOKEN` or `CIVITAI_TOKEN`. startdgx never stores, write
 
 ## In the panel
 
-Each machine lists its managed installs under its models (`comfyui list`, read with the storage every 30 s while the manager is open), with what the status poll saw of the running one. Read-only so far: starting, stopping, a settings window, Install ComfyUI… and Find existing… come next.
+Each machine lists its managed installs under its models (`comfyui list`, read with the storage every 30 s while the manager is open), with what the status poll saw of the running one. A row has a Start or Stop button (and Enter or `s` on it); one ComfyUI runs at a time, so a stopped install's button is greyed out, with the running one named. **Find existing ComfyUI…** ends the group: it opens a card with what `comfyui discover` found, and Adopt records a dgx-comfyui folder (nothing in it changes). A foreign ComfyUI is listed, not offered. A started or stopped install keeps its "Starting" or "Stopping" until the status poll shows it took (at most 30 s). Still to come: a settings window per install (Open UI, boot switch, workflows, Update, Doctor, Forget) and Install ComfyUI….
 
 ## The memory bar
 
