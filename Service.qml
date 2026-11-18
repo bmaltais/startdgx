@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "DgxModel.js" as Model
@@ -307,7 +308,28 @@ Item {
     minimumSize: Qt.size(Style.space(480), Style.space(300))
 
     // Closed by the compositor (its close key or button): the manager is closed too, so the next open starts one.
-    onVisibleChanged: if (!visible && root.shown && root.ready) root.close()
+    onVisibleChanged: {
+      if (!visible && root.shown && root.ready) root.close()
+      else if (visible) titlebarSoon.restart()
+    }
+
+    // Whether Omarchy's window mode draws a titlebar (with its own close button) over this window; see DgxModel.hasTitlebar.
+    // Asked of Hyprland when the window opens and when it floats, moves or the config reloads (which loads the plugin).
+    property bool titlebar: false
+    Timer { id: titlebarSoon; interval: 250; onTriggered: if (!titlebarProbe.running) titlebarProbe.running = true }
+    Connections {
+      target: Hyprland
+      function onRawEvent(event) { if (win.visible && Model.TITLEBAR_EVENTS.indexOf(event.name) >= 0) titlebarSoon.restart() }
+    }
+    Process {
+      id: titlebarProbe
+      command: ["sh", "-c", "hyprctl clients -j 2>/dev/null; echo '@@plugins'; hyprctl plugin list 2>/dev/null"]
+      stdout: StdioCollector { id: titlebarOut; waitForEnd: true }
+      onExited: {
+        const parts = titlebarOut.text.split("@@plugins")
+        win.titlebar = Model.hasTitlebar(parts[0], parts[1] || "", win.title, "org.quickshell")
+      }
+    }
 
     // The manager at a given size (IPC `size`, for the test session; 0 0 is the default size).
     function resizeTo(w, h) {
@@ -327,7 +349,7 @@ Item {
         onEscapePressed: root.close()
       }
 
-      // Close button in the top-right corner (the compositor's own close key works too).
+      // Close button in the top-right corner (the compositor's own close key works too). Not under a titlebar: it has one.
       Button {
         anchors.top: parent.top
         anchors.right: parent.right
@@ -335,7 +357,7 @@ Item {
         anchors.rightMargin: Style.spacing.lg
         z: 10
         // A card has its own close button; two together read ambiguously.
-        visible: root.card === ""
+        visible: root.card === "" && !win.titlebar
         iconText: "\uf00d"
         tooltipText: "Close"
         onClicked: root.close()

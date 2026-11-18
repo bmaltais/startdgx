@@ -1635,3 +1635,16 @@ test("modelColumns: context in K and memory in GiB, empty where unknown", () => 
 test("locationShort: a column's word for where the files are", () => {
   assert.deepStrictEqual(["nvme", "usb", "both", "usb-missing", "mixed", "", "x"].map(M.locationShort), ["NVMe", "USB", "NVMe + USB", "USB missing", "Part USB", "", ""])
 })
+
+test("hasTitlebar: only a floating window on a floating workspace, with the titlebar plugin loaded", () => {
+  const win = (over) => Object.assign({ title: "StartDGX", class: "org.quickshell", floating: true, tags: ["omarchy-floating-workspace", "omarchy-mode-floated", "omarchy-mode-opened*"] }, over)
+  const ask = (clients, plugins) => M.hasTitlebar(JSON.stringify(clients), plugins === undefined ? "Plugin hyprbars by Vaxry:\n\tHandle: 1" : plugins, "StartDGX", "org.quickshell")
+  assert.strictEqual(ask([win({})]), true)
+  assert.strictEqual(ask([win({ floating: false })]), false, "a tiled window has no titlebar: its X stays")
+  assert.strictEqual(ask([win({ tags: [] })]), false, "a window floated by hand, outside window mode, has none either")
+  assert.strictEqual(ask([win({})], "no plugins loaded"), false, "without the plugin nothing else would close it")
+  assert.strictEqual(ask([win({ title: "Other" })]), false, "another window's titlebar is not ours")
+  assert.strictEqual(ask([win({ tags: ["omarchy-floating-workspace*"] })]), true, "a tag a rule gave carries a star")
+  assert.strictEqual(M.hasTitlebar("not json", "hyprbars", "StartDGX", "org.quickshell"), false)
+  assert.strictEqual(M.hasTitlebar("{}", "hyprbars", "StartDGX", "org.quickshell"), false)
+})
