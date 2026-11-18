@@ -63,6 +63,7 @@ Item {
   // Jobs (an install or update) run on the machine on their own, so they are asked about: `comfyui job` for each install not yet installed
   // and each one a job was started on this session, every few seconds while the window is open (DgxModel.comfyWatchPaths).
   property var comfyStarted: []
+  property var comfyStartedKind: ({})   // path -> install, update or recipe (DgxModel.comfyJobKind), for the row's wording
   property var comfyJobQueue: []
   function pollComfyJobs() {
     if (!poller.answering || comfyJobProc.running) return
@@ -226,7 +227,7 @@ Item {
       poller.comfyJobQueue = poller.comfyJobQueue.slice(1)
       const job = code === 0 ? Model.parseComfyJob(comfyJobOut.text) : null
       if (job) {
-        poller.owner.comfyJobRead(poller.host, path, job)
+        poller.owner.comfyJobRead(poller.host, path, Object.assign({}, job, { kind: poller.comfyStartedKind[path] || "" }))
         // A job we started has ended: the install is (or is not) installed now, which the list says.
         if (job.state !== "running" && poller.comfyStarted.indexOf(path) >= 0) {
           poller.comfyStarted = poller.comfyStarted.filter(function (p) { return p !== path })
@@ -250,7 +251,12 @@ Item {
       else {
         poller.owner.notice = Model.actionNotice("comfyui", comfyActOut.text)
         // A started or stopped ComfyUI shows in the status seconds later: its mark stays until it does.
-        if (job.kind === "install" || job.kind === "update" || job.kind === "update-comfyui") poller.comfyStarted = poller.comfyStarted.concat([job.path])
+        if (Model.comfyJobKind(job.kind) !== "") {
+          poller.comfyStarted = poller.comfyStarted.concat([job.path])
+          const kinds = Object.assign({}, poller.comfyStartedKind)
+          kinds[job.path] = Model.comfyJobKind(job.kind)
+          poller.comfyStartedKind = kinds
+        }
         const shown = Model.comfyMark(job.kind)
         if (shown === "start" || shown === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: shown, path: job.path, until: Date.now() + 30000 }])
       }
@@ -259,7 +265,7 @@ Item {
       // What the action changed: the status (running), and the list (adopted).
       poller.poll()
       poller.pollComfy()
-      if (job.kind === "install" || job.kind === "update" || job.kind === "update-comfyui") Qt.callLater(poller.pollComfyJobs)
+      if (Model.comfyJobKind(job.kind) !== "") Qt.callLater(poller.pollComfyJobs)
       Qt.callLater(poller.launchComfy)
     }
   }

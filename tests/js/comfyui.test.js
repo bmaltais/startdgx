@@ -393,3 +393,86 @@ test("comfyPages: the About page offers Update only when there is something to u
   assert.strictEqual(field(current, "update").hint, "Up to date (v0.1.0)")
   assert.strictEqual(field(current, "update-comfyui"), undefined)
 })
+
+const recipeList = [
+  { name: "krea", valid: true, title: "Krea-2 Turbo", description: "", models: 4, total_bytes: 19 * 2 ** 30, nodes: 0 },
+  { name: "mini", valid: true, title: "MiniMax", description: "needs a token", models: 2, total_bytes: 56 * 2 ** 30, nodes: 1 },
+  { name: "bad", valid: false, title: "Broken", models: 0, total_bytes: 0, nodes: 0 }]
+const model = (state, over) => Object.assign({ file: "a.safetensors", dest: "loras", size: 10, state: state }, over)
+
+test("parseComfyRecipes and parseComfyRecipeCheck: the lists the CLI sends, or null", () => {
+  assert.strictEqual(M.parseComfyRecipes(JSON.stringify({ path: "/p", recipes: recipeList })).length, 3)
+  assert.strictEqual(M.parseComfyRecipes("x"), null)
+  assert.strictEqual(M.parseComfyRecipes(JSON.stringify({ recipes: [{ title: "no name" }] })), null)
+  assert.ok(M.parseComfyRecipeCheck(JSON.stringify({ path: "/p", recipe: { models: [], nodes: [] } })))
+  assert.strictEqual(M.parseComfyRecipeCheck(JSON.stringify({ recipe: {} })), null)
+  assert.strictEqual(M.parseComfyRecipeCheck("x"), null)
+})
+
+test("comfyRecipePlan: what a checked workflow needs, and whether it can be installed", () => {
+  const need = M.comfyRecipePlan({ models: [model("have"), model("missing", { source: { ok: true, problem: "", detail: [] } })], nodes: [{ id: "n", installed: false }], download_bytes: 6 * 2 ** 30 })
+  assert.deepStrictEqual([need.action, need.text], ["install", "Needs 1 of 2 models to download (6.0 GiB) and 1 node to install."])
+  const done = M.comfyRecipePlan({ models: [model("have")], nodes: [{ id: "n", installed: true }], download_bytes: 0 })
+  assert.deepStrictEqual([done.action, done.text], ["", "Installed: all 1 models and 1 nodes are there."])
+  const gated = M.comfyRecipePlan({ models: [model("missing", { file: "m.bin", source: { ok: false, problem: "gated", detail: ["HF_TOKEN", "401"] } })], nodes: [] })
+  assert.strictEqual(gated.action, "")
+  assert.match(gated.text, /m\.bin is gated: it needs HF_TOKEN\. startdgx never stores a token: put HF_TOKEN=… in ~\/\.config\/startdgx\/comfyui\.env/)
+  assert.match(M.comfyRecipePlan({ models: [model("missing", { source: { ok: false, problem: "gone", detail: [] } })], nodes: [] }).text, /can't be fetched \(gone\)/)
+  assert.match(M.comfyRecipePlan({ models: [model("size", { file: "x.bin" })], nodes: [] }).text, /x\.bin on disk doesn't match/)
+})
+
+test("comfyWorkflowFields: one action per workflow, Check then Install", () => {
+  const info = M.comfyRow(install({}), {})
+  const fields = (w) => M.comfyPages({ host: "h", info: info, answer: answerOf({}), error: "", pending: "", workflows: w }).find((p) => p.title === "Workflows").fields
+  const unchecked = fields({ list: recipeList, checks: {}, checking: "" })
+  assert.deepStrictEqual(unchecked.map((f) => f.key), ["wf-check:krea", "wf-check:mini", "wf-check:bad"])
+  assert.strictEqual(unchecked[0].button, "Check")
+  assert.strictEqual(unchecked[0].hint, "4 models · 19.0 GiB")
+  assert.strictEqual(unchecked[1].hint, "2 models · 56.0 GiB · 1 node · needs a token")
+  assert.strictEqual(unchecked[2].type, "info", "an invalid recipe is only said")
+  const checked = fields({ list: recipeList, checks: { krea: { models: [model("missing", { source: { ok: true, problem: "", detail: [] } })], nodes: [], download_bytes: 1 } }, checking: "" })
+  assert.deepStrictEqual([checked[0].key, checked[0].button], ["wf-install:krea", "Install"])
+  // One check at a time, and none while a job runs.
+  assert.strictEqual(fields({ list: recipeList, checks: {}, checking: "mini" })[0].disabled, true)
+  assert.strictEqual(fields({ list: recipeList, checks: {}, checking: "mini" })[1].button, "Checking…")
+  assert.strictEqual(M.comfyPages({ host: "h", info: info, answer: answerOf({}), error: "", pending: "update", workflows: { list: recipeList, checks: {}, checking: "" } }).find((p) => p.title === "Workflows").fields[0].disabled, true)
+  assert.strictEqual(fields({ list: null, loading: true })[0].hint, "Reading…")
+  assert.strictEqual(fields({ list: null, error: "too old" })[0].hint, "too old")
+  assert.strictEqual(fields({ list: [], checks: {}, checking: "" })[0].hint, "This install has no workflow recipes.")
+  assert.strictEqual(fields({ installable: false, reason: "Update it first." })[0].hint, "Update it first.")
+})
+
+test("comfyChange: a click on a workflow asks for its check or its install", () => {
+  const info = M.comfyRow(install({}), {})
+  assert.deepStrictEqual(M.comfyChange("h", info, answerOf({}), "wf-check:krea", true), { type: "comfyRecipeCheck", host: "h", path: "/home/u/dgx-comfyui", name: "krea" })
+  assert.deepStrictEqual(M.comfyChange("h", info, answerOf({}), "wf-install:a:b", true), { type: "comfyRecipeInstall", host: "h", path: "/home/u/dgx-comfyui", name: "a:b" })
+  assert.strictEqual(M.comfyChange("h", info, answerOf({}), "wf-other:x", true), null)
+  assert.deepStrictEqual(M.comfyChange("h", info, answerOf({}), "doctor", true), { type: "comfyDoctor", host: "h", path: "/home/u/dgx-comfyui" })
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "recipe-install", path: "/a", label: "krea" }), ["comfyui", "recipe", "install", "h", "krea", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "recipe-install", path: "/a", label: "krea" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "recipe" })
+  assert.strictEqual(M.comfyRow(install({}), {}, { state: "running", kind: "recipe", log: [] }).work, "Installing workflow")
+})
+
+test("comfyHealthFields: run the checks, then what they said", () => {
+  const info = M.comfyRow(install({}), {})
+  const fields = (h) => M.comfyPages({ host: "h", info: info, answer: answerOf({}), error: "", pending: "", health: h }).find((p) => p.title === "Health").fields
+  const before = fields({ available: true, running: false })
+  assert.deepStrictEqual([before.length, before[0].button, before[0].disabled], [1, "Run checks", false])
+  assert.strictEqual(fields({ available: true, running: true })[0].button, "Checking…")
+  assert.deepStrictEqual([fields({ available: false, reason: "Update it first." })[0].disabled, fields({ available: false, reason: "Update it first." })[0].hint], [true, "Update it first."])
+  const doc = { healthy: false, problems: 1, changes: 0, items: [{ level: "log", text: "Host" }, { level: "ok", text: "GB10" }, { level: "warn", text: "swap is enabled" }, { level: "bad", text: "manager is missing" }] }
+  const after = fields({ available: true, running: false, doc: doc })
+  assert.deepStrictEqual(after.slice(1).map((f) => [f.label, f.hint]), [["1 problem", ""], ["Host", ""], ["OK", "GB10"], ["Warning", "swap is enabled"], ["Problem", "manager is missing"]])
+  assert.strictEqual(fields({ available: true, running: false, doc: { healthy: true, problems: 0, items: [] } })[1].label, "Healthy")
+  assert.strictEqual(fields({ available: true, running: false, error: "h didn't answer" })[1].hint, "h didn't answer")
+  assert.ok(M.parseComfyDoctor(JSON.stringify({ path: "/p", doctor: doc })))
+  assert.strictEqual(M.parseComfyDoctor("x"), null)
+  assert.strictEqual(M.parseComfyDoctor("{}"), null)
+})
+
+test("comfyListPartial: a look that was cut short says so", () => {
+  assert.strictEqual(M.comfyListPartial(JSON.stringify({ installs: [], partial: true })), true)
+  assert.strictEqual(M.comfyListPartial(JSON.stringify({ installs: [], partial: false })), false)
+  assert.strictEqual(M.comfyListPartial(JSON.stringify({ installs: [] })), false)
+  assert.strictEqual(M.comfyListPartial("x"), false)
+})

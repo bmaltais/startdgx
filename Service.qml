@@ -77,7 +77,7 @@ Item {
     if (root.card === "add") core.cancelDiscover()
     if (root.card === "find") core.cancelHf()
     if (root.card === "findComfy") core.cancelComfyFind()
-    if (root.card === "comfySettings") core.cancelComfyStatus()
+    if (root.card === "comfySettings") core.cancelComfyWindow()
     if (root.card === "installComfy") core.cancelComfyPlan()
     root.card = ""
   }
@@ -192,6 +192,9 @@ Item {
     root.cardPage = page || ""
     root.card = "comfySettings"
     core.comfyStatusFor(host, path)
+    // The workflows are read when the install can have them (installed, and speaking --json).
+    const install = (core.comfyui[host] || []).filter(function (i) { return i.path === path })[0]
+    if (install && install.kind === "dgx-comfyui" && install.installed !== false && install.json_capable !== false) core.comfyRecipesFor(host, path)
   }
   function showComfyForget(host, path) {
     if (!core.hosts[host]) return
@@ -273,6 +276,9 @@ Item {
     case "comfyForget": root.showComfyForget(action.host, action.path); break
     case "comfyForgetNow": core.comfyAct(action.host, "forget", action.path, "", !!action.stopService); root.closeCard(); break
     case "comfyOpen": Qt.openUrlExternally(action.url); break
+    case "comfyRecipeCheck": core.comfyRecipeCheck(action.host, action.path, action.name); break
+    case "comfyRecipeInstall": core.comfyAct(action.host, "recipe-install", action.path, action.name); break
+    case "comfyDoctor": core.comfyDoctorFor(action.host, action.path); break
     case "use": root.setUp(action.host, action.recipe, false); break
     case "setupYours": root.showRecipeRun("setup", action.host, action.recipe, Number(action.recipe.context)); break
     case "setupNow": root.setUp(action.host, action.recipe, true); break

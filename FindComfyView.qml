@@ -86,6 +86,17 @@ FocusScope {
 
     Text {
       Layout.fillWidth: true
+      visible: card.dgx.comfyFoundPartial && !card.looking
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: "The look through " + card.machine + " was cut short (it took too long), so some folders weren't searched. If yours isn't here, adopt it with: startdgx comfyui adopt " + card.host + " --dir <folder>"
+      color: Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Text {
+      Layout.fillWidth: true
       visible: card.rows.length === 0 && !card.looking && card.dgx.comfyFindError === "" && card.dgx.comfyFound !== null
       wrapMode: Text.Wrap
       text: "No ComfyUI found in the home folder or under a linked disk such as ~/usbdisk."
