@@ -1626,6 +1626,68 @@ done
 out=$(ds recipe author $a $tf --id author-demo --agent); printf '%s' "$out" | grep -q "Demo: would run 'claude "; ok $? "demo author says what it would run in a terminal"
 out=$(ds launch author $a $tf); printf '%s' "$out" | grep -q "Demo: would run 'recipe author"; ok $? "demo launch author says what it would run"
 out=$(ds launch fix $a $draft); printf '%s' "$out" | grep -q "Demo: would run 'recipe fix"; ok $? "demo launch fix says what it would run"
+# ComfyUI in demo mode: gx10-demo has four installs found (one foreign), none managed; adopting and forgetting flip a flag.
+dj 'len(d["installs"]) == 4 and not any(i["managed"] for i in d["installs"])' comfyui discover $g --json
+ds comfyui list $g | grep -q "No ComfyUI installs managed"; ok $? "demo comfyui list starts empty"
+ds comfyui adopt $g --dir /home/demo/dgx-comfyui --label main >/dev/null; ok $? "demo adopt manages an install"
+dj '[i["label"] for i in d["installs"]] == ["main"]' comfyui list $g --json
+ds comfyui adopt $g --dir /home/demo/dgx-comfyui >/dev/null 2>&1; ok $((!$?)) "demo adopt twice is refused"
+ds comfyui adopt $g --dir /home/demo/ComfyUI >/dev/null 2>&1; ok $((!$?)) "demo adopt of a foreign ComfyUI is refused"
+ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null; ok $? "demo forget"
+dj 'd["installs"] == []' comfyui list $g --json
+dj 'd["installs"] == []' comfyui discover $a --json
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
+#@part comfyui
+# ComfyUI installs: the host script (discover, list, adopt, forget) runs for real against the fake home, through the fake ssh.
+py() { python3 -I -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if ($1) else 1)"; }
+s add me@dgx >/dev/null
+home=$FAKE_HOST/home
+mk_install() { # PATH [lean]: a dgx-comfyui folder, a git checkout; "lean" is an old one with no lib/jsonout.py
+  mkdir -p "$1/.state" "$1/lib" "$1/ComfyUI/.git"; : >"$1/dgx-comfyui.sh"; [ "${2:-}" = lean ] || : >"$1/lib/jsonout.py"
+  git -C "$1" init -q -b main; git -C "$1" add -A 2>/dev/null; git -C "$1" -c user.name=t -c user.email=t@t commit -q -m init --allow-empty
+}
+rec=$home/.local/share/startdgx/comfyui.json
+s comfyui discover me@dgx | grep -qx "No ComfyUI installs found on me@dgx"; ok $? "discover on a host with none says so"
+mk_install "$home/dgx-comfyui"; git -C "$home/dgx-comfyui" tag v0.1.0
+mkdir -p "$tmp/usb"; ln -s "$tmp/usb" "$home/usbdisk"; mk_install "$tmp/usb/dgx-comfyui" lean; echo x >"$tmp/usb/dgx-comfyui/dgx-comfyui.sh"
+mkdir -p "$home/ComfyUI-stock/comfy"; : >"$home/ComfyUI-stock/main.py"
+mkdir -p "$home/.cache/hidden"; mk_install "$home/.cache/hidden/dgx-comfyui"
+mkdir -p "$home/a/b/c/d/e/f"; mk_install "$home/a/b/c/d/e/f/dgx-comfyui"
+out=$(s comfyui discover me@dgx --json)
+printf '%s' "$out" | py 'sorted(i["path"] for i in d["installs"])==sorted(["'"$home"'/dgx-comfyui","'"$tmp"'/usb/dgx-comfyui","'"$home"'/ComfyUI-stock"])'; ok $? "discover finds installs, a symlinked mount under home and a foreign ComfyUI; not a dot folder, a nested ComfyUI or one six deep"
+printf '%s' "$out" | py '[i for i in d["installs"] if i["path"].endswith("/dgx-comfyui") and "usb" not in i["path"]][0]["tool"]["tag"]=="v0.1.0"'; ok $? "discover reports an install's tool tag"
+printf '%s' "$out" | py '[i for i in d["installs"] if "usb" in i["path"]][0]["json_capable"] is False'; ok $? "an install without lib/jsonout.py is marked too old"
+printf '%s' "$out" | py '[i for i in d["installs"] if i["path"].endswith("ComfyUI-stock")][0]["kind"]=="foreign" and not [i for i in d["installs"] if i["path"].endswith("ComfyUI-stock")][0]["managed"]'; ok $? "a ComfyUI without dgx-comfyui.sh is found, not managed"
+echo "# edit" >>"$home/dgx-comfyui/dgx-comfyui.sh"
+s comfyui discover me@dgx --json | py '[i for i in d["installs"] if i["path"]=="'"$home"'/dgx-comfyui"][0]["tool"]["dirty"] is True'; ok $? "a local edit shows as dirty"
+git -C "$home/dgx-comfyui" checkout -q -- dgx-comfyui.sh
+snap() { find "$home" "$tmp/usb" -path '*/.git' -prune -o -type f -printf '%p %T@\n' | sort | md5sum; }
+before=$(snap); s comfyui discover me@dgx >/dev/null; after_=$(snap)
+same "$before" "$after_"; ok $? "discover writes nothing"
+none_of "$rec"; ok $? "and no record exists before an adopt"
+
+# adopt
+s comfyui adopt me@dgx --dir "$home/dgx-comfyui" --label main >/dev/null; ok $? "adopt records an install"
+py 'd["installs"][0]["origin"]=="adopted" and d["installs"][0]["label"]=="main" and d["installs"][0]["tool_ref"]=="v0.1.0"' <"$rec"; ok $? "the record holds its path, label, origin and the tool's ref"
+s comfyui adopt me@dgx --dir "$home/dgx-comfyui" >/dev/null 2>&1; ok $((!$?)) "adopting it twice is refused"
+s comfyui adopt me@dgx --dir "$home/ComfyUI-stock" >/dev/null 2>&1; ok $((!$?)) "a foreign ComfyUI can't be adopted"
+s comfyui adopt me@dgx --dir "$home" >/dev/null 2>&1; ok $((!$?)) "a folder that isn't an install can't be adopted"
+for folder in "relative/dir" "$home/../etc" "~" "$(printf '/x\ny')"; do s comfyui adopt me@dgx --dir "$folder" >/dev/null 2>&1; ok $((!$?)) "adopt refuses the folder: $(printf '%s' "$folder" | tr '\n' ' ')"; done
+s comfyui adopt me@dgx --dir "$tmp/usb/dgx-comfyui" --label 'bad;label' >/dev/null 2>&1; ok $((!$?)) "adopt refuses a label with shell characters"
+rm -f "$tmp/pwned"; s comfyui adopt me@dgx --dir "/x; touch $tmp/pwned" >/dev/null 2>&1; ok $((!$?)) "a folder with shell characters is refused, not run"
+none_of "$tmp/pwned"; ok $? "and nothing it said ran on the host"
+tilde='~'; s comfyui adopt me@dgx --dir "$tilde/usbdisk/dgx-comfyui" >/dev/null; ok $? "adopt takes a ~/ path and a symlinked mount, and records the real path"
+py '[r["path"] for r in d["installs"]]==["'"$home"'/dgx-comfyui","'"$tmp"'/usb/dgx-comfyui"]' <"$rec"; ok $? "records are in the order adopted, as real paths"
+s comfyui list me@dgx --json | py '[i["label"] for i in d["installs"]]==["main",""] and all(i["managed"] for i in d["installs"])'; ok $? "list shows the managed installs"
+s comfyui discover me@dgx --json | py '[i["managed"] for i in d["installs"] if i["path"].endswith("ComfyUI-stock")]==[False] and sum(i["managed"] for i in d["installs"])==2'; ok $? "discover marks the adopted ones managed"
+none_of "$FAKE_MANIFEST"; ok $? "adopting writes no install manifest (that file means startdgx installed the engine)"
+s uninstall me@dgx --dry-run 2>&1 | grep -q "No install manifest"; ok $? "so uninstall still says the engine wasn't installed by startdgx"
+
+# forget
+s comfyui forget me@dgx --dir "$home/dgx-comfyui" >/dev/null; ok $? "forget drops the record"
+[ -f "$home/dgx-comfyui/dgx-comfyui.sh" ] && [ -d "$home/dgx-comfyui/.state" ]; ok $? "and leaves the folder alone"
+s comfyui forget me@dgx --dir "$home/dgx-comfyui" >/dev/null 2>&1; ok $((!$?)) "forgetting an unmanaged install is refused"
+s comfyui list me@dgx --json | py 'len(d["installs"])==1'; ok $? "list shows what is left"
+grep -q "python3 -I - comfyui" "$FAKE_LOG"; ok $? "every call is one ssh running the host script"
 #@part end
 echo "1..$n"; exit $bad
