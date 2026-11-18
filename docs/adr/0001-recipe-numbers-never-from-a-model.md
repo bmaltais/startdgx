@@ -11,3 +11,5 @@ The user decided a model they add should not need a measuring run first. A Tenso
 Unchanged: an entry with no estimate stays `drafted` (nothing to stand on), and every Hugging Face add stays `drafted` and needs a measuring run, since all it has is file sizes, the basis rejected above. `recipe draft` and `tensorfold draft` still write `drafted` unless the caller passes `--estimated`; only the panel's Add does.
 
 Accepted risk: a wrong estimate can set up a model that doesn't fit. The engine still checks the free memory when it starts a model, which stops a load that cannot fit.
+
+**Amended 2026-11-18 (2):** a Hugging Face add is also confirmed by the add, with a guess from its files' size (1.2 times the weights plus 2 GiB, written into the recipe's summary as a guess). The person decides that running matters more than measuring; the cost is a possible out-of-memory failure at the first start, which the model's row reports and a smaller context fixes. A recipe's numbers are still never written by a model.

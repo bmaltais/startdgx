@@ -1415,7 +1415,8 @@ function hfMemoryLine(row, ramGib) {
 
 // The CLI's arguments to draft `repo` for `host`, the repo after `--`.
 function draftCommand(host, repo) {
-  return ["recipe", "draft", "--host", host, "--json", "--", String(repo)]
+  // --estimated: the add is the person's say-so for a guess from the size of the files, so the model can be set up without a measuring run.
+  return ["recipe", "draft", "--host", host, "--json", "--estimated", "--", String(repo)]
 }
 
 // `recipe draft --json`: { id, path, warnings }, or null when it isn't a successful draft. Failures are `Error:` on stderr.
@@ -1443,7 +1444,7 @@ function draftErrorText(line) {
 
 function draftDone(host, id, source) {
   return source === "estimated"
-    ? id + " is in " + hostName(host) + "'s model list. Nothing is downloaded until you set it up there; its gear changes context, requests at once and input."
+    ? id + " is in the list above. Nothing is downloaded until you set it up; its gear changes context, requests at once and input."
     : id + " is on " + hostName(host) + " but not measured yet, so it can't run. Measure… downloads it and tests it there; after that it is a model like the others."
 }
 
@@ -1573,6 +1574,14 @@ function tfStateText(row, st) {
   const base = findStateText(st)
   const plan = tfUpdatePlan(row, st)
   return plan.kind === "update" ? (st.state === "unmeasured" ? "Added, not measured \u00b7 update available" : "Added \u00b7 update available") : plan.kind === "blocked" ? "On this machine \u00b7 update available" : base
+}
+
+// What the model picker shows under the machine's own recipes, from TensorFold's list: the entries that can be added and aren't on the machine's
+// list yet, and one line about those that can't be added yet. `recipes` is the machine's recipe list (null while read).
+function tfOffers(list, recipes, status) {
+  const parts = tfSplit(list)
+  const rows = parts.ready.filter(function (r) { return findState(r.recipeId, recipes, status).state === "" })
+  return { rows: rows, blockedText: parts.blocked.length === 0 ? "" : parts.blocked.length + " more TensorFold " + (parts.blocked.length === 1 ? "entry needs" : "entries need") + " a runtime this engine doesn't have yet." }
 }
 
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).

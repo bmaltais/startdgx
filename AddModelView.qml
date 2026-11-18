@@ -3,8 +3,10 @@
 // A machine's model picker, over the manager: its catalog (`startdgx list HOST`), best first, each recipe with
 // whether it runs there (and why not), whether it is set up, what it takes and what it is. Set up starts the
 // setup on the machine (`use --detach`), closes the card and puts the cursor on the new row, which follows the
-// download. Add recipe… (e) opens the card that adds a recipe of your own. Keyboard: Up/Down (or j/k) move, Enter sets up
-// the recipe under the cursor, r looks again, Esc closes.
+// download. Under the machine's own recipes come the models it could have: TensorFold's published list for one DGX Spark and a search of
+// Hugging Face (both read from this computer, `tensorfold list`, `hf search`), each with an Add that puts the model in the list above at once,
+// without downloading it. From a file… (e) opens the card that adds a recipe of your own. Keyboard: Up/Down (or j/k) move, Enter sets up
+// the recipe under the cursor, / searches Hugging Face, r looks again, Esc closes.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -18,6 +20,10 @@ FocusScope {
   property var svc
   property string host: ""
   property int cursor: 0
+  property string query: ""
+  // A model just added: its row in the list above gets the cursor when the list has it.
+  property string landing: ""
+  property bool showDerivatives: true
 
   readonly property var dgx: card.svc.dgx
   readonly property bool mine: card.dgx.listHost === card.host
@@ -25,6 +31,29 @@ FocusScope {
   readonly property var offers: card.mine ? Model.recipeOffers(card.dgx.recipes, card.hostState ? card.hostState.status : null) : []
   readonly property bool reading: card.dgx.listing && card.offers.length === 0
   readonly property string failure: card.mine && !card.dgx.listing ? card.dgx.recipesError : ""
+
+  readonly property var tfOffers: Model.tfOffers(card.dgx.tfList, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null)
+  readonly property var hfRows: Model.hfShown(card.dgx.hfRows, card.showDerivatives).filter(function (r) { return card.stateOf(String(r.recipe_id || "")).state === "" })
+  function stateOf(recipeId) { return Model.findState(recipeId, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null) }
+  readonly property real ramGib: card.hostState && card.hostState.status ? Number(card.hostState.status.ram_total_gib) || 0 : 0
+  // The last add: its steps, warnings and any clash or validation error, as on the card this replaced.
+  readonly property bool drafting: card.dgx.recipeHost === card.host && card.dgx.draftRepo !== ""
+  readonly property string draftStep: card.dgx.draftStep !== "" ? card.dgx.draftStep : card.dgx.recipeStep
+  readonly property var draftResult: card.drafting && card.dgx.draftId !== "" && card.dgx.recipeResult && card.dgx.recipeResult.id === card.dgx.draftId ? card.dgx.recipeResult : null
+  readonly property string draftFailure: !card.drafting ? "" : card.dgx.draftError !== "" ? card.dgx.draftError : card.dgx.recipeError
+  readonly property int shownErrors: 8
+  function land() {
+    for (let i = 0; i < card.offers.length && card.landing !== ""; i++) if (card.offers[i].recipe.id === card.landing) { card.cursor = i; card.landing = ""; list.positionViewAtIndex(i, ListView.Contain) }
+  }
+  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) { card.landing = card.draftResult.id; card.dgx.listRecipes(card.host); card.land() }
+  onOffersChanged: {
+    if (card.landing === "") card.cursor = Math.max(0, Math.min(card.cursor, card.offers.length - 1))
+    else card.land()
+  }
+  function addEntry(row) { if (!card.dgx.recipeBusy) card.dgx.draftTensorfold(card.host, row, null) }
+  function addRepo(repo) { if (!card.dgx.recipeBusy) card.dgx.draftRecipe(card.host, repo) }
+  function search() { if (!card.dgx.hfSearching && searchField.text.trim() !== "") card.dgx.searchHf(searchField.text) }
+  Component.onCompleted: { searchField.text = card.query; if (card.query !== "") card.search() }
 
   function act(offer) {
     // A recipe of yours downloads what it names and runs it: a card shows the download and asks first.
@@ -37,7 +66,6 @@ FocusScope {
   }
 
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
-  onOffersChanged: card.cursor = Math.max(0, Math.min(card.cursor, card.offers.length - 1))
 
   Keys.onPressed: event => {
     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
@@ -50,11 +78,7 @@ FocusScope {
       event.accepted = true
     }
     else if (event.text === "r") { card.dgx.listRecipes(card.host); event.accepted = true }
-    else if (event.text === "f") {
-      // A held f would reopen the card it just opened.
-      if (!event.isAutoRepeat) card.svc.dispatch({ type: "findModel", host: card.host })
-      event.accepted = true
-    }
+    else if (event.text === "/") { searchField.forceActiveFocus(); event.accepted = true }
     else if (event.text === "e") { card.svc.dispatch({ type: "addRecipe", host: card.host }); event.accepted = true }
   }
 
@@ -81,7 +105,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         elide: Text.ElideRight
-        text: card.reading ? "READING THE MACHINE'S CATALOG…" : card.failure !== "" ? "THE CATALOG COULD NOT BE READ" : "MODELS FOR THIS MACHINE"
+        text: card.reading ? "READING THE MACHINE'S CATALOG…" : card.failure !== "" ? "THE CATALOG COULD NOT BE READ" : card.tfOffers.rows.length > 0 ? "MODELS FOR THIS MACHINE · " + card.tfOffers.rows.length + " MORE FROM TENSORFOLD BELOW" : "MODELS FOR THIS MACHINE"
         color: card.failure !== "" ? Color.urgent : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
@@ -96,6 +120,75 @@ FocusScope {
       wrapMode: Text.Wrap
       text: card.failure
       color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    TextField {
+      id: searchField
+      Layout.fillWidth: true
+      placeholderText: "Search Hugging Face for MLX 4-bit models: qwen, gemma, lfm…   ( / )"
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      // Enter searches and goes no further: the card's own Enter sets up the recipe under the cursor.
+      Keys.onReturnPressed: event => { card.search(); event.accepted = true }
+      Keys.onEnterPressed: event => { card.search(); event.accepted = true }
+      // Esc drops what was typed first, then closes the card.
+      Keys.onEscapePressed: event => {
+        if (searchField.text !== "") { searchField.text = ""; event.accepted = true }
+        else event.accepted = false
+      }
+    }
+
+    // What the last add is doing or said: its step, warnings, and each error found.
+    Text {
+      Layout.fillWidth: true
+      visible: card.drafting && card.draftStep !== ""
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: Model.draftStatus(card.draftStep, card.host, card.dgx.draftRepo)
+      color: Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+    Text {
+      Layout.fillWidth: true
+      visible: card.draftFailure !== ""
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: card.draftFailure
+      color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+    Repeater {
+      model: card.drafting ? card.dgx.draftWarnings : []
+      delegate: Text {
+        required property string modelData
+        Layout.fillWidth: true
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        text: "Warning: " + modelData
+        color: Color.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+      }
+    }
+    Repeater {
+      model: card.draftResult && !card.draftResult.ok ? card.draftResult.errors.slice(0, card.shownErrors) : []
+      delegate: ErrorRow {
+        required property string modelData
+        Layout.fillWidth: true
+        message: modelData
+      }
+    }
+    Text {
+      Layout.fillWidth: true
+      visible: card.draftResult !== null && card.draftResult.ok && card.draftResult.added === true
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      text: card.draftResult ? Model.draftDone(card.host, card.draftResult.id, card.dgx.draftSource) : ""
+      color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -127,6 +220,97 @@ FocusScope {
         currentIndex: card.cursor
         onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
         boundsBehavior: Flickable.StopAtBounds
+
+        // The models this machine could have, under the ones it can run: TensorFold's list, then the Hugging Face search.
+        footer: ColumnLayout {
+          width: ListView.view.width
+          spacing: Style.spacing.md
+          Text {
+            Layout.topMargin: Style.spacing.lg
+            visible: card.tfOffers.rows.length > 0
+            text: "FROM TENSORFOLD · NOT IN THE LIST YET"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.letterSpacing: 1
+          }
+          Repeater {
+            model: card.tfOffers.rows
+            delegate: FindRow {
+              id: tfEntry
+              required property var modelData
+              Layout.fillWidth: true
+              name: tfEntry.modelData.name
+              mark: tfEntry.modelData.status
+              facts: Model.tfRowText(tfEntry.modelData)
+              busy: card.dgx.recipeBusy
+              tooltip: "Add " + tfEntry.modelData.name + " to " + Model.hostName(card.host) + "'s list with TensorFold's default settings. Nothing is downloaded until you set it up"
+              onAddRequested: card.addEntry(tfEntry.modelData)
+            }
+          }
+          Text {
+            Layout.fillWidth: true
+            visible: card.tfOffers.blockedText !== ""
+            wrapMode: Text.Wrap
+            text: card.tfOffers.blockedText
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          RowLayout {
+            Layout.topMargin: Style.spacing.lg
+            Layout.fillWidth: true
+            visible: card.dgx.hfRows !== null || card.dgx.hfSearching || card.dgx.hfError !== ""
+            Text {
+              Layout.fillWidth: true
+              text: card.dgx.hfSearching ? "SEARCHING HUGGING FACE…" : card.dgx.hfError !== "" ? "THE SEARCH DID NOT RUN" : "FROM HUGGING FACE · " + card.hfRows.length + (card.hfRows.length === 1 ? " MODEL" : " MODELS")
+              color: card.dgx.hfError !== "" ? Color.urgent : Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+            TextLink {
+              visible: Model.hfToggleText(card.dgx.hfRows, card.showDerivatives) !== ""
+              text: Model.hfToggleText(card.dgx.hfRows, card.showDerivatives)
+              tooltip: "Repos labelled abliterated or uncensored from their name or tags; the others are not touched"
+              onClicked: card.showDerivatives = !card.showDerivatives
+            }
+          }
+          Text {
+            Layout.fillWidth: true
+            visible: card.dgx.hfError !== ""
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            text: card.dgx.hfError
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            Layout.fillWidth: true
+            visible: card.dgx.hfRows !== null && card.dgx.hfError === "" && !card.dgx.hfSearching && card.hfRows.length === 0
+            wrapMode: Text.Wrap
+            text: "Nothing new: no MLX 4-bit repo of a known family matched, or what matched is in the list already."
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Repeater {
+            model: card.hfRows
+            delegate: FindRow {
+              id: hfEntry
+              required property var modelData
+              Layout.fillWidth: true
+              name: hfEntry.modelData.repo
+              mark: Model.hfLabel(hfEntry.modelData)
+              facts: Model.hfRowText(hfEntry.modelData)
+              note: Model.hfMemoryLine(hfEntry.modelData, card.ramGib)
+              busy: card.dgx.recipeBusy
+              tooltip: "Add " + hfEntry.modelData.repo + " to " + Model.hostName(card.host) + "'s list. Its memory is a guess from the size of its files; nothing is downloaded until you set it up"
+              onAddRequested: card.addRepo(hfEntry.modelData.repo)
+            }
+          }
+        }
 
         delegate: Rectangle {
           id: recipeRow
@@ -274,7 +458,7 @@ FocusScope {
             }
 
             // A recipe of yours whose numbers aren't measured: measure it from here (its context when the row has one,
-            // else Add recipe…, which lists its variants).
+            // else From a file…, which lists its variants).
             Button {
               Layout.alignment: Qt.AlignVCenter
               visible: recipeRow.measureCtx !== null
@@ -325,13 +509,7 @@ FocusScope {
         onClicked: card.dgx.listRecipes(card.host)
       }
       Button {
-        text: "Find more models…"
-        bordered: true
-        tooltipText: "Find models to add: TensorFold's published list for one DGX Spark, or a search of Hugging Face, from this computer  (f)"
-        onClicked: card.svc.dispatch({ type: "findModel", host: card.host })
-      }
-      Button {
-        text: "Add recipe…"
+        text: "From a file…"
         bordered: true
         tooltipText: "Add a recipe of your own, a .toml file from this computer, to " + Model.hostName(card.host) + "'s catalog  (e)"
         onClicked: card.svc.dispatch({ type: "addRecipe", host: card.host })

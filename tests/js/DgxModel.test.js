@@ -1122,7 +1122,7 @@ const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.
 
 test("draftCommand asks the host about the id, so a clash is refused before anything is written, and the repo comes after --", () => {
   assert.deepStrictEqual(M.draftCommand("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"),
-    ["recipe", "draft", "--host", "me@dgx", "--json", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
+    ["recipe", "draft", "--host", "me@dgx", "--json", "--estimated", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
 })
 
 test("parseDraftResult keeps the file to add and the warnings, and refuses what isn't a draft", () => {
@@ -1714,7 +1714,7 @@ test("parseDraftResult carries the recipe's name and context, for Measure… on 
   assert.strictEqual(d.ctx, 8192)
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).ctx, 0)
   assert.match(M.draftDone("me@gx10", "x"), /not measured yet, so it can't run/)
-  assert.match(M.draftDone("me@gx10", "x", "estimated"), /model list. Nothing is downloaded/)
+  assert.match(M.draftDone("me@gx10", "x", "estimated"), /in the list above. Nothing is downloaded/)
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [], source: "estimated" })).source, "estimated")
   assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).source, "drafted")
 })
@@ -1836,4 +1836,14 @@ test("tfAddedRow finds the list's row for a recipe the machine was given from it
   assert.strictEqual(M.tfAddedRow(list, "r-b").id, "b")
   assert.strictEqual(M.tfAddedRow(list, "x"), null)
   assert.strictEqual(M.tfAddedRow(null, "x"), null)
+})
+
+test("tfOffers: the entries that can be added and aren't in the machine's list yet, and one line about the rest", () => {
+  const rows = [{ id: "a", draftable: true, recipeId: "ra" }, { id: "b", draftable: true, recipeId: "rb" }, { id: "c", draftable: false, recipeId: "" }]
+  const recipes = [{ id: "rb", user: true, available: true, source: "estimated" }]
+  const o = M.tfOffers({ rows: rows }, recipes, null)
+  assert.deepStrictEqual(o.rows.map(r => r.id), ["a"])
+  assert.match(o.blockedText, /1 more TensorFold entry needs a runtime/)
+  assert.strictEqual(M.tfOffers({ rows: rows.slice(0, 2) }, [], null).blockedText, "")
+  assert.deepStrictEqual(M.tfOffers(null, null, null).rows, [])
 })
