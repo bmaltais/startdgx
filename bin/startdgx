@@ -2981,6 +2981,19 @@ DEMO_RECIPES = (
    "models": [("minimax_h3_int8.safetensors", "diffusion_models", 40_000_000_000), ("qwen3_vl_32b_int8.safetensors", "text_encoders", 16_000_000_000)]})
 
 
+def demo_comfyui_doctor(item):
+  """The tool's doctor --json for a demo install: healthy, apart from a swap warning on the dev checkout and a failed node on the dirty one."""
+  items = [{"level": "log", "text": "Host"}, {"level": "ok", "text": "GB10, 121 GiB unified memory"}, {"level": "log", "text": "Stack"},
+           {"level": "ok", "text": "torch 2.9.0+cu130"}, {"level": "ok", "text": "ComfyUI v0.45.4"}]
+  problems = 0
+  if item["tool"].get("dirty"):
+    items.append({"level": "bad", "text": "manager: ComfyUI-Manager is missing; ./dgx-comfyui.sh install puts it back"})
+    problems += 1
+  else:
+    items.append({"level": "warn", "text": "swap is enabled: heavy workloads can freeze a Spark (./dgx-comfyui.sh tune)"})
+  return {"schema": 1, "healthy": problems == 0, "problems": problems, "changes": 0, "items": items}
+
+
 def demo_comfyui_recipe(item, name, job):
   """A demo recipe as the tool's recipe check --json shapes it: the first model is on disk, the rest are missing until the recipe is installed."""
   found = next((r for r in DEMO_RECIPES if r["name"] == name), None)
@@ -3068,13 +3081,24 @@ def demo_comfyui(args):
       answer = {"job": "startdgx-comfyui-demo", "path": plan["path"], "log": "demo"}
       print(json.dumps(answer) if args.json else f"Installing ComfyUI in {plan['path']} on {args.host}; it takes about 15 minutes")
       return
-    if args.verb in ("status", "start", "stop", "autostart", "update", "job", "recipe"):
+    if args.verb in ("status", "start", "stop", "autostart", "update", "job", "recipe", "doctor"):
       item = demo_comfyui_pick(installs, comfyui_which(args.dir))
       job = demo_comfyui_job(item)
       if args.verb not in ("status", "job", "recipe") and job["state"] == "running":
         raise Error(f"an install or update is running in {item['path']}; follow it with: startdgx comfyui job")
       if args.verb == "job":
         print(json.dumps({"path": item["path"], **job}) if args.json else "\n".join([job["state"]] + ["  " + l for l in job["log"]]))
+        return
+      if args.verb == "doctor":
+        if not item.get("installed", True):
+          raise Error(f"{item['path']} has no ComfyUI yet; install it first")
+        if not item["json_capable"]:
+          raise Error(f"{item['path']} is too old for startdgx to read its doctor; update it first")
+        answer = {"path": item["path"], "doctor": demo_comfyui_doctor(item)}
+        if args.json:
+          print(json.dumps(answer))
+        else:
+          cmd_comfyui_doctor_text(answer)
         return
       if args.verb == "recipe":
         if not item.get("installed", True):
@@ -3161,7 +3185,7 @@ def demo_comfyui(args):
       return
     shown = installs if args.verb == "discover" else [i for i in installs if i["managed"]]
   shown = [{k: v for k, v in i.items() if k not in ("state", "rss_mib", "autostart", "job")} for i in shown]
-  answer = {"installs": shown}
+  answer = {"installs": shown, **({"partial": False} if args.verb == "discover" else {})}
   if args.json:
     print(json.dumps(answer))
     return
@@ -3192,6 +3216,8 @@ import fcntl, json, os, re, subprocess, sys, time
 HOME = os.path.expanduser("~")
 RECORDS, UNIT = os.path.join(HOME, "@RECORDS@"), os.path.join(HOME, "@UNIT@")
 SKIP = {"node_modules", "__pycache__", "site-packages", "ComfyUI"}
+# The look through the home folder stops after this long (a slow or synced tree), and says so, instead of running into ssh's timeout with nothing.
+START, BUDGET, CUT = time.time(), float(os.environ.get("STARTDGX_COMFYUI_WALK_SECONDS") or 40), []
 def fail(text):
   print("Error: " + text, file=sys.stderr)
   sys.exit(1)
@@ -3246,6 +3272,9 @@ def inspect(path):
     item["reason"] = "a ComfyUI without dgx-comfyui.sh: startdgx doesn't manage it" if is_comfy(path) else "not a dgx-comfyui folder"
   return item
 def walk(root, depth, found):
+  if time.time() - START > BUDGET:
+    CUT.append(root)
+    return
   try:
     names = sorted(os.listdir(root))
   except OSError:
@@ -3301,7 +3330,7 @@ def discover():
     item["managed"] = path in records
     item["label"] = records[path].get("label", "") if path in records else ""
     out.append(item)
-  print(json.dumps({"installs": out}))
+  print(json.dumps({"installs": out, "partial": bool(CUT)}))
 ANSI = re.compile("\\x1b\\\\[[0-9;]*[A-Za-z]")
 def say_line(text):
   lines = [ANSI.sub("", l).strip() for l in text.splitlines() if ANSI.sub("", l).strip()]
@@ -3563,6 +3592,19 @@ elif mode == "update":
         r["tool_ref"] = ref
     save(installs)
   print(json.dumps(start_job(path, JOB_UPDATE, path, ref, "comfyui" if comfy else "tool")))
+elif mode == "doctor":
+  path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
+  item = inspect(path)
+  if item["kind"] != "dgx-comfyui" or not item["installed"]:
+    fail(path + " has no ComfyUI yet; install it first")
+  if not item["json_capable"]:
+    fail(path + " is too old for startdgx to read its doctor; update it first")
+  # Read-only: dgx-comfyui's doctor reports every part and changes nothing.
+  r = tool(path, "doctor", "--json", timeout=300)
+  try:
+    print(json.dumps({"path": path, "doctor": json.loads(r.stdout)}))
+  except ValueError:
+    fail("dgx-comfyui.sh doctor gave no JSON: " + say_line(r.stderr or r.stdout))
 elif mode == "recipe":
   path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
   sub, name, verify = ARGV[2], ARGV[3] if len(ARGV) > 3 else "", len(ARGV) > 4 and ARGV[4] == "verify"
@@ -3703,6 +3745,8 @@ def cmd_comfyui_list(args):
     return
   for item in answer["installs"]:
     print(comfyui_install_line(item))
+  if answer.get("partial"):
+    print("The look through the home folder was cut short, so some folders weren't searched. Adopt one you know with: startdgx comfyui adopt")
   if not answer["installs"]:
     print("No ComfyUI installs " + ("found" if args.verb == "discover" else "managed") + f" on {args.host}")
 
@@ -3824,6 +3868,23 @@ def cmd_comfyui_update(args):
   print(json.dumps(answer) if args.json else f"Updating ComfyUI in {answer['path']} on {args.host} to {ref}; follow it: startdgx comfyui job {args.host} --dir {answer['path']}")
 
 
+def cmd_comfyui_doctor(args):
+  answer = comfyui_action(args, "doctor")
+  if args.json:
+    print(json.dumps(answer))
+    return
+  cmd_comfyui_doctor_text(answer)
+
+
+def cmd_comfyui_doctor_text(answer):
+  doc = answer["doctor"]
+  print(f"{answer['path']}: " + ("healthy" if doc.get("healthy") else f"{doc.get('problems', 0)} problem(s)"))
+  marks = {"ok": "ok  ", "bad": "BAD ", "warn": "warn", "info": "info", "did": "did ", "log": ""}
+  for item in doc.get("items", []):
+    level = item.get("level", "info")
+    print("  " + (marks.get(level, level) + " " if marks.get(level, level) else "") + item.get("text", ""))
+
+
 def cmd_comfyui_job(args):
   answer = comfyui_action(args, "job")
   if args.json:
@@ -3861,7 +3922,7 @@ def cmd_comfyui_recipe_text(args, answer):
 def cmd_comfyui(args):
   return {"discover": cmd_comfyui_list, "list": cmd_comfyui_list, "adopt": cmd_comfyui_adopt, "forget": cmd_comfyui_forget,
           "plan": cmd_comfyui_plan, "recipe": cmd_comfyui_recipe, "install": cmd_comfyui_install, "update": cmd_comfyui_update, "job": cmd_comfyui_job,
-          "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act}[args.verb](args)
+          "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act, "doctor": cmd_comfyui_doctor}[args.verb](args)
 
 
 def build_parser():
@@ -3982,8 +4043,8 @@ def build_parser():
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
   cp = sub.add_parser("comfyui", description="ComfyUI installs (dgx-comfyui) on a host: find existing ones and adopt them under startdgx, "
                       "list the ones it manages, or forget one. startdgx never changes or deletes an install's folder.")
-  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart|plan|install|update|job|recipe")
-  for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart", "plan", "install", "update", "job"):
+  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart|plan|install|update|job|doctor|recipe")
+  for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart", "plan", "install", "update", "job", "doctor"):
     c = cv.add_parser(verb, description={"discover": "Read-only: the installs on HOST (the service's, a running one, the ones startdgx manages and a bounded search of the home folder). A ComfyUI that dgx-comfyui didn't install is listed as not managed.",
                                           "list": "The installs startdgx manages on HOST.",
                                           "adopt": "Manage an existing dgx-comfyui install in DIR: only startdgx's own record is written.",
@@ -3995,11 +4056,12 @@ def build_parser():
                                           "plan": "Read-only: the host's disks with their free space and, with --dir, whether DIR can take an install (absent or empty, writable, 40 GiB free).",
                                           "install": "Install ComfyUI in DIR (which must be absent or empty): clone dgx-comfyui at the pinned release and run its install, as a background job that outlives this ssh session (about 15 minutes). Follow it with job.",
                                           "update": "Move the install's dgx-comfyui to the pinned release and run its install, as a job. Refused for a checkout with uncommitted or unpushed work. --comfyui also moves ComfyUI to its newest release.",
-                                          "job": "The install or update job of an install: running, succeeded or failed, and the end of its log."}[verb])
+                                          "job": "The install or update job of an install: running, succeeded or failed, and the end of its log.",
+                                          "doctor": "Read-only: the install's own dgx-comfyui.sh doctor --json, a health report of every part that changes nothing."}[verb])
     c.add_argument("host")
     if verb in ("adopt", "forget"):
       c.add_argument("--dir", required=True, metavar="DIR", help="the install's folder on the host (absolute, or starting with ~/)")
-    if verb in ("status", "start", "stop", "autostart", "update", "job"):
+    if verb in ("status", "start", "stop", "autostart", "update", "job", "doctor"):
       c.add_argument("--dir", metavar="LABEL|DIR", help="which install: its label, or its folder; optional when HOST has just one managed")
     if verb in ("plan",):
       c.add_argument("--dir", metavar="DIR", help="a folder to check for an install")

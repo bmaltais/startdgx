@@ -14,7 +14,7 @@ All take `HOST`; `--dir` names an install by its label or its folder (absolute, 
 
 | Command | What it does |
 |---|---|
-| `discover` | Read-only: installs from the service unit, a running ComfyUI, the records, and a bounded walk of `~` (5 deep, no dot folders, a symlinked top-level folder such as `~/usbdisk` followed). Runs no script of an install. A ComfyUI without `dgx-comfyui.sh` is listed as *found, not managed*. |
+| `discover` | Read-only: installs from the service unit, a running ComfyUI, the records, and a bounded walk of `~` (5 deep, no dot folders, a symlinked top-level folder such as `~/usbdisk` followed; it stops after 40 s on a slow or synced tree and says so with `partial: true`, so a result is never lost to ssh's timeout). Runs no script of an install. A ComfyUI without `dgx-comfyui.sh` is listed as *found, not managed*. |
 | `list` | The managed installs. |
 | `adopt --dir D [--label L]` | Record an existing install. Writes only startdgx's record. |
 | `forget --dir D [--stop-service]` | Drop the record. |
@@ -24,6 +24,7 @@ All take `HOST`; `--dir` names an install by its label or its folder (absolute, 
 | `plan [--dir D]` | The host's disks with free space, and whether D can take an install (absent or empty, writable, 40 GiB free). |
 | `install --dir D [--label L]` | Clones dgx-comfyui at the pinned release into D and runs its `install`, as a **detached job** (`systemd-run --user`, about 15 minutes). Refused if the account doesn't linger, and says the `sudo loginctl enable-linger` to run. A failed install is run again where it stopped. |
 | `update [--dir D] [--comfyui]` | Moves the tool to the pinned release, then runs `install` (or the tool's own `update` with `--comfyui`). Only a **clean, detached** checkout moves (one `install.sh` or startdgx left on a release tag). Uncommitted or unpushed work, or any branch, is refused with the `git` commands to run yourself: a checkout on a branch may be one someone works in, and an install made by `install.sh` sits on `main`. |
+| `doctor` | Read-only: the install's own `dgx-comfyui.sh doctor --json` (healthy, problems, and a line per part). Refused for an install too old to speak `--json`. |
 | `job` | The install/update/recipe job: `running`, `succeeded` or `failed`, and the end of its log (`~/.local/state/startdgx/comfyui/`). |
 | `recipe list\|show\|check\|install` | ComfyUI workflows (a recipe: nodes and models with size and sha256). `install` is a job, refused first if a source is gated, gone, or the disk is too small. |
 

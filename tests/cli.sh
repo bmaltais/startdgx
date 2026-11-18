@@ -1680,6 +1680,8 @@ ds comfyui adopt $g --dir /home/demo/dgx-comfyui --label main >/dev/null
 dj '[r["name"] for r in d["recipes"]] == ["image_krea2_turbo_t2i", "image_minimax_h3_image_t2i"]' comfyui recipe list $g --dir main --json
 dj '[m["state"] for m in d["recipe"]["models"]] == ["have", "missing", "missing", "missing"] and d["recipe"]["download_bytes"] == 7109291992' comfyui recipe check $g image_krea2_turbo_t2i --dir main --json
 ds comfyui recipe install $g image_minimax_h3_image_t2i --dir main 2>&1 | grep -q "gated: it needs HF_TOKEN"; ok $? "demo recipe install refuses a gated model"
+dj 'd["doctor"]["healthy"] is False or d["doctor"]["problems"] == 0 and any(i["level"] == "warn" for i in d["doctor"]["items"])' comfyui doctor $g --dir main --json
+ds comfyui doctor $g --dir main | grep -q "healthy"; ok $? "demo doctor prints a health line"
 ds comfyui recipe install $g image_krea2_turbo_t2i --dir main >/dev/null; ok $? "demo recipe install starts a job"
 dj '[m["state"] for m in d["recipe"]["models"]] == ["have", "missing", "missing", "missing"]' comfyui recipe check $g image_krea2_turbo_t2i --dir main --json
 later comfyui recipe check $g image_krea2_turbo_t2i --dir main --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (all(m['state'] == 'have' for m in d['recipe']['models']) and d['recipe']['download_bytes'] == 0))"; ok $? "and the models are there once it has run"
@@ -1751,6 +1753,7 @@ case "$*" in
   stop) echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
   install) [ ! -e "$PWD/FAIL-INSTALL" ] || { echo "Error: boom" >&2; exit 1; }; mkdir -p .state lib ComfyUI/.git; : >lib/jsonout.py; echo "installed in $PWD";;
   update) echo "ComfyUI updated in $PWD";;
+  "doctor --json") echo '{"schema":1,"healthy":false,"problems":1,"changes":0,"items":[{"level":"log","text":"Host"},{"level":"ok","text":"GB10"},{"level":"bad","text":"manager is missing"}]}';;
   "recipe list --json") echo '{"schema":1,"recipes":[{"name":"r1","valid":true,"title":"R1","description":"","models":1,"total_bytes":10,"nodes":0}]}';;
   "recipe show r1 --json") echo '{"schema":1,"name":"","title":"R1","models":[{"file":"a.bin","dest":"loras","url":"u","size":10,"sha256":"0"}],"nodes":[],"flags":[],"total_bytes":10}';;
   "recipe check "*" --json"|"recipe check "*" --verify --json") name=$3; have=0; [ ! -e "$PWD/data/models/loras/a.bin" ] || have=1
@@ -1928,6 +1931,13 @@ rm "$new/STALE"
 s comfyui recipe install me@dgx big --dir fresh 2>&1 | grep -q "needs 99999999999999 bytes"; ok $? "a recipe the disk can't hold is refused"
 s comfyui recipe install me@dgx 'r1;touch /tmp/pwned' --dir fresh >/dev/null 2>&1; ok $((!$?)) "a recipe name with shell characters is refused"
 s comfyui recipe list me@dgx --dir "$tmp/usb/dgx-comfyui" 2>&1 | grep -q "too old"; ok $? "an install too old to speak --json can't list recipes"
+s comfyui discover me@dgx --json | py 'd["partial"] is False'; ok $? "discover says when it looked everywhere"
+STARTDGX_COMFYUI_WALK_SECONDS=-1 s comfyui discover me@dgx --json | py 'd["partial"] is True'; ok $? "and when the time ran out before it did"
+STARTDGX_COMFYUI_WALK_SECONDS=-1 s comfyui discover me@dgx 2>&1 | grep -q "cut short"; ok $? "and says so in words"
+s comfyui doctor me@dgx --dir fresh --json | py 'd["path"]=="'"$new"'" and d["doctor"]["healthy"] is False and d["doctor"]["items"][2]["level"]=="bad"'; ok $? "doctor passes the install's own report through"
+s comfyui doctor me@dgx --dir fresh 2>&1 | grep -q "BAD  *manager is missing"; ok $? "and prints it as lines"
+s comfyui doctor me@dgx --dir "$tmp/usb/dgx-comfyui" 2>&1 | grep -q "too old"; ok $? "an install too old to speak --json has no doctor"
+grep -c "dgx $new doctor --json" "$FAKE_HOST/calls" | grep -qx 2; ok $? "(the doctor ran twice, nothing else changed)"
 touch "$FAKE_HOST/job-hold"; s comfyui recipe install me@dgx r1 --dir fresh >/dev/null 2>&1; rm "$FAKE_HOST/job-hold"
 s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "is running in .*; follow it with"; ok $? "recipe install is refused while a job runs"
 rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
