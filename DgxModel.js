@@ -1371,12 +1371,13 @@ function parseDraftResult(text) {
   const p = parseJson(text)
   if (!isPlainObject(p) || p.ok !== true || typeof p.id !== "string" || p.id === "" || typeof p.path !== "string" || p.path === "") return null
   if (!Array.isArray(p.warnings)) return null
-  return { id: p.id, path: p.path, warnings: p.warnings.map(String).filter(function (w) { return w !== "" }) }
+  return { id: p.id, path: p.path, name: typeof p.name === "string" && p.name !== "" ? p.name : p.id, ctx: Number(p.ctx) > 0 ? Number(p.ctx) : 0,
+           warnings: p.warnings.map(String).filter(function (w) { return w !== "" }) }
 }
 
 // What the card says while a step runs: "drafting" (the CLI), "checking" and "adding" (the machine's engine).
 function draftStatus(step, host, repo) {
-  if (step === "drafting") return "Drafting " + repo + "…"
+  if (step === "drafting") return "Writing the recipe for " + repo + "…"
   if (step === "checking") return "Asking " + hostName(host) + " to check the draft…"
   if (step === "adding") return "Adding the draft to " + hostName(host) + "…"
   return ""
@@ -1389,7 +1390,7 @@ function draftErrorText(line) {
 }
 
 function draftDone(host, id) {
-  return id + " is on " + hostName(host) + ", drafted, not yet fitting. It shows in the model picker; Measure… in Add recipe… replaces its placeholder numbers."
+  return id + " is on " + hostName(host) + " but not measured yet, so it can't run. Measure… downloads it and tests it there; after that it is a model like the others."
 }
 
 // ---- TensorFold's list on the Find card ---------------------------------------------------------------------------------------
@@ -1421,6 +1422,16 @@ function tfDraftCommand(host, entry) {
   return ["tensorfold", "draft", "--host", host, "--json", "--", String(entry)]
 }
 
+// The list as the card shows it: the rows that can be added, and the ones that can't yet (collapsed into one line until asked for).
+function tfSplit(list) {
+  const rows = list ? list.rows : []
+  return { ready: rows.filter(function (r) { return r.draftable }), blocked: rows.filter(function (r) { return !r.draftable }) }
+}
+
+function tfBlockedText(blocked) {
+  return blocked.length === 0 ? "" : blocked.length + " more can't be added yet"
+}
+
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).
 function tfRowText(row) {
   const memory = row.estimate > 0 ? Math.round(row.estimate * 10) / 10 + " GB estimated by TensorFold" : "no memory estimate"
@@ -1436,8 +1447,8 @@ function tfRowNote(row) {
 function tfSummary(list) {
   if (!list) return ""
   const fresh = list.rows.filter(function (r) { return r.status !== "" }).length
-  const base = list.rows.length + (list.rows.length === 1 ? " RECIPE" : " RECIPES") + " FOR ONE DGX SPARK"
-  return base + (list.firstLook ? " \u00b7 NO EARLIER LOOK SAVED" : fresh > 0 ? " \u00b7 " + fresh + " NEW OR CHANGED" : " \u00b7 NOTHING NEW")
+  const base = list.rows.length + (list.rows.length === 1 ? " MODEL" : " MODELS") + " FOR ONE DGX SPARK"
+  return base + (fresh > 0 ? " \u00b7 " + fresh + " NEW OR CHANGED" : "")
 }
 
 // ---- With an agent… on a result -------------------------------------------------------------------------------

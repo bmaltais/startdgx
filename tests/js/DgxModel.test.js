@@ -1139,12 +1139,12 @@ test("parseDraftResult keeps the file to add and the warnings, and refuses what 
   assert.strictEqual(M.parseDraftResult(draftJson({ warnings: "x" })), null)
 })
 
-test("draftStatus says which step runs, and the outcome in words that call the recipe drafted and not yet fitting", () => {
-  assert.strictEqual(M.draftStatus("drafting", "me@dgx", "A/B"), "Drafting A/B…")
+test("draftStatus says which step runs, and the outcome in words that say it is not measured yet and can't run", () => {
+  assert.strictEqual(M.draftStatus("drafting", "me@dgx", "A/B"), "Writing the recipe for A/B…")
   assert.strictEqual(M.draftStatus("checking", "me@dgx", "A/B"), "Asking dgx to check the draft…")
   assert.strictEqual(M.draftStatus("adding", "me@dgx", "A/B"), "Adding the draft to dgx…")
   assert.strictEqual(M.draftStatus("", "me@dgx", "A/B"), "")
-  assert.match(M.draftDone("me@dgx", "my-id"), /my-id.*dgx.*drafted, not yet fitting.*Measure/)
+  assert.match(M.draftDone("me@dgx", "my-id"), /my-id.*dgx.*not measured yet, so it can.t run.*Measure/)
 })
 
 test("draftErrorText drops the CLI's --id advice, which the card can't act on", () => {
@@ -1694,7 +1694,24 @@ test("tfRowText, tfRowNote and tfSummary: an estimate is said to be one; the rea
   assert.strictEqual(M.tfRowNote({ draftable: false, reason: "" }), "Can't be drafted")
   const row = (status) => ({ status: status })
   assert.strictEqual(M.tfSummary(null), "")
-  assert.strictEqual(M.tfSummary({ firstLook: true, rows: [row("")] }), "1 RECIPE FOR ONE DGX SPARK \u00b7 NO EARLIER LOOK SAVED")
-  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("new"), row("changed"), row("")] }), "3 RECIPES FOR ONE DGX SPARK \u00b7 2 NEW OR CHANGED")
-  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("")] }), "1 RECIPE FOR ONE DGX SPARK \u00b7 NOTHING NEW")
+  assert.strictEqual(M.tfSummary({ firstLook: true, rows: [row("")] }), "1 MODEL FOR ONE DGX SPARK")
+  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("new"), row("changed"), row("")] }), "3 MODELS FOR ONE DGX SPARK \u00b7 2 NEW OR CHANGED")
+  assert.strictEqual(M.tfSummary({ firstLook: false, rows: [row("")] }), "1 MODEL FOR ONE DGX SPARK")
+})
+
+test("tfSplit and tfBlockedText: what can be added, and the rest as one line", () => {
+  const list = { rows: [{ id: "a", draftable: true }, { id: "b", draftable: false }, { id: "c", draftable: false }] }
+  assert.deepStrictEqual(M.tfSplit(list).ready.map(r => r.id), ["a"])
+  assert.deepStrictEqual(M.tfSplit(list).blocked.map(r => r.id), ["b", "c"])
+  assert.deepStrictEqual(M.tfSplit(null), { ready: [], blocked: [] })
+  assert.strictEqual(M.tfBlockedText(M.tfSplit(list).blocked), "2 more can't be added yet")
+  assert.strictEqual(M.tfBlockedText([]), "")
+})
+
+test("parseDraftResult carries the recipe's name and context, for Measure… on the Find card; draftDone says it can't run yet", () => {
+  const d = M.parseDraftResult(JSON.stringify({ ok: true, id: "x-tensorfold", path: "/p", warnings: [], name: "X", ctx: 8192 }))
+  assert.strictEqual(d.name, "X")
+  assert.strictEqual(d.ctx, 8192)
+  assert.strictEqual(M.parseDraftResult(JSON.stringify({ ok: true, id: "y", path: "/p", warnings: [] })).ctx, 0)
+  assert.match(M.draftDone("me@gx10", "x"), /not measured yet, so it can't run/)
 })

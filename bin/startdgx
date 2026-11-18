@@ -2243,7 +2243,8 @@ def draft_recipe(args, replace=False):
       draft_discard(path)
       raise
   result = {"ok": True, "id": rid, "repo": repo, "path": path, "revision": sha, "license": license_id or "unknown", "weights_bytes": size,
-            "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config)}
+            "placeholder_gib": gib, "source": "drafted", "warnings": warnings, "judgement": draft_judgement(repo, config),
+            "name": draft_name(repo), "ctx": DRAFT_CTX}
   return result
 
 
@@ -2311,7 +2312,7 @@ def tf_rows(document):
     match = TF_CHECKPOINT_RE.match(deployment.get("checkpoint", "")) if isinstance(deployment.get("checkpoint"), str) else None
     repo, revision = (match.group(1), match.group(2)) if match and valid_repo(match.group(1)) else (None, None)
     base_format = fmt.split(" \u00b7 ")[0]
-    reason = "" if repo and base_format == TF_FORMAT else (f"{base_format or 'its format'} needs a runtime startdgx doesn't pin" if repo else "no pinned Hugging Face checkpoint")
+    reason = "" if repo and base_format == TF_FORMAT else (f"{base_format or 'its format'} needs a newer TensorFold runtime than the engine has" if repo else "no pinned Hugging Face checkpoint")
     source = record.get("source")
     rows.append({"id": record["id"], "name": tf_clean(record.get("name")) or record["id"], "format": fmt, "estimate_gb": tf_number(deployment.get("estimateGB")),
                  "weight_gb": tf_number(deployment.get("weightGB")), "repo": repo, "revision": revision,

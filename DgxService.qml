@@ -86,6 +86,9 @@ Item {
   property string draftRepo: ""
   property string draftStep: ""
   property string draftId: ""
+  // The drafted recipe's name and the context its variant is for, which Measure… on the Find card needs.
+  property string draftName: ""
+  property int draftCtx: 0
   property string draftError: ""
   property var draftWarnings: []
 
@@ -99,8 +102,6 @@ Item {
   property var tfList: null
   property string tfError: ""
   property int tfCount: 0
-  // A save of the look is in flight: when it answers, the list is read again so the marks it cleared go.
-  property bool tfSaving: false
   readonly property bool tfLoading: tfQuery.busy
 
   // A model's context sizes, for its settings window and the Add recipe card's variants (`variants HOST MODEL --json`): the contexts the recipe has measured, null until read.
@@ -522,10 +523,10 @@ Item {
     hfQuery.ask(service.hfAsked, [service.script].concat(Model.hfSearchCommand(query)))
   }
   function cancelHf() { hfQuery.cancel(); tfQuery.cancel() }
-  // Reads TensorFold's list; `update` also saves this look, so the next one says what is new or changed since.
+  // Reads TensorFold's list; `update` also saves this look, so the next visit says what is new or changed since (the marks in this answer
+  // are against the look saved before).
   function loadTf(update) {
     service.tfError = ""
-    service.tfSaving = !!update
     service.tfCount += 1
     tfQuery.ask("tf" + service.tfCount, [service.script].concat(Model.tfListCommand(update)))
   }
@@ -832,6 +833,8 @@ Item {
         return
       }
       service.draftId = d.id
+      service.draftName = d.name
+      service.draftCtx = d.ctx
       service.draftWarnings = d.warnings
       service.checkRecipe(service.recipeHost, d.path, true)
     }
@@ -933,11 +936,8 @@ Item {
     onAnswered: function (key, code, out, err) {
       if (key !== "tf" + service.tfCount) return
       const list = code === 0 ? Model.parseTfList(out) : null
-      const saved = service.tfSaving
-      service.tfSaving = false
       if (list) service.tfList = list
       else service.tfError = code === 0 ? "TensorFold's answer could not be read" : Model.errorLine(err, "The list did not load")
-      if (list && saved) Qt.callLater(function () { service.loadTf(false) })
     }
   }
 

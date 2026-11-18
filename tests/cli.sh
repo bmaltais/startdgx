@@ -1469,8 +1469,8 @@ r = tomllib.load(open(sys.argv[1], "rb"))
 sys.exit("input" in r or "server" in r)
 F
 ok $? "a text-only draft sets neither"
-dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": []}' $tf --id qwen3.8-draft
-ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings}, and --id names the file"
+dd 'd == {"ok": True, "id": "qwen3.8-draft", "repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "path": "'"$drafts"'/qwen3.8-draft.toml", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0", "weights_bytes": 16074529674, "placeholder_gib": 15.0, "source": "drafted", "warnings": [], "judgement": [], "name": "Qwen3.8 27B", "ctx": 8192}' $tf --id qwen3.8-draft
+ok $? "--json gives {ok, id, repo, path, revision, license, weights_bytes, placeholder_gib, source, warnings, name, ctx}, and --id names the file"
 present "$drafts/qwen3.8-draft.toml"; ok $? "--id picks the id as given"
 printf '%s\n' "$out" | grep -q 'apache-2.0' && printf '%s' "$out" | grep -qi 'drafted'; ok $? "the human output shows the license and that it is drafted"
 printf '%s' "$out" | grep -qi 'warning'; ok $((!$?)) "a permissive license warns of nothing"
@@ -1559,7 +1559,7 @@ ds recipe draft $tf --host $a --id "$nem" >/dev/null 2>&1; ok $((!$?)) "a demo m
 dtf() { local cond=$1; shift; ds tensorfold "$@" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
 dtf '[r["id"] for r in d["recipes"]] == ["lfm2.5-24b-a2b", "qwen3.6-35b-a3b", "odd-link"] and d["first_look"] is True' list --json
 ok $? "tensorfold list: the entries with a Spark deployment, in order (a Mac-only entry is left out)"
-dtf '{r["id"]: r["draftable"] for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and "pin" in d["recipes"][1]["reason"] and d["recipes"][2]["repo"] is None' list --json
+dtf '{r["id"]: r["draftable"] for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and "runtime" in d["recipes"][1]["reason"] and d["recipes"][2]["repo"] is None' list --json
 ok $? "only an MLX 4-bit entry with a pinned Hugging Face commit can be drafted, and the others say why"
 dtf 'd["recipes"][0]["estimate_gb"] == 24 and d["recipes"][2]["estimate_gb"] is None' list --json
 ok $? "the catalog's estimate is carried as an estimate, and a missing one stays missing"

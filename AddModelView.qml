@@ -323,9 +323,9 @@ FocusScope {
         onClicked: card.dgx.listRecipes(card.host)
       }
       Button {
-        text: "Find on Hugging Face…"
+        text: "Find more models…"
         bordered: true
-        tooltipText: "Search Hugging Face for MLX 4-bit models of a known family, from this computer  (f)"
+        tooltipText: "Find models to add: TensorFold's published list for one DGX Spark, or a search of Hugging Face, from this computer  (f)"
         onClicked: card.svc.dispatch({ type: "findModel", host: card.host })
       }
       Button {

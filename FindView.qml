@@ -1,4 +1,4 @@
-// A machine's Find on Hugging Face card, over the manager: searches Hugging Face for MLX 4-bit models of a known family
+// A machine's Find more models card, over the manager, with two sources: TensorFold's published list for one DGX Spark (the first one) and a search of Hugging Face for MLX 4-bit models of a known family
 // (`startdgx hf search --json`, run on this computer: it reaches no machine). Every row is a repo whose config.json was
 // read: its parameters, license and base model, a mark on an abliterated or uncensored derivative (a toggle hides those),
 // and the weights' size next to the machine's memory as two plain numbers. No row says it fits: only a measuring run does
@@ -18,14 +18,19 @@ FocusScope {
   property string host: ""
   property string query: ""
   // The card's source: "hf" (a search of Hugging Face) or "tf" (TensorFold's list for one DGX Spark).
-  property string source: "hf"
+  property string source: "tf"
+  property bool showBlocked: false
   readonly property bool tf: card.source === "tf"
   readonly property var tfList: card.dgx.tfList
+  readonly property var tfParts: Model.tfSplit(card.tfList)
+  // The rows to show: those that can be added, and the others too once asked for.
+  readonly property var tfShown: card.showBlocked ? card.tfParts.ready.concat(card.tfParts.blocked) : card.tfParts.ready
   readonly property bool tfLoading: card.dgx.tfLoading
 
   function pickSource(name) {
     card.source = name
-    if (name === "tf" && card.dgx.tfList === null && !card.tfLoading) card.dgx.loadTf(false)
+    // Opening the list saves this look: what is new or changed since the last visit is marked for this one.
+    if (name === "tf" && card.dgx.tfList === null && !card.tfLoading) card.dgx.loadTf(true)
   }
 
   readonly property var dgx: card.svc.dgx
@@ -64,7 +69,8 @@ FocusScope {
 
   Component.onCompleted: {
     queryField.text = card.query
-    if (card.query !== "") card.go()
+    if (card.query !== "") { card.source = "hf"; card.go() }
+    else card.pickSource("tf")
   }
   implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
 
@@ -86,7 +92,7 @@ FocusScope {
         Layout.fillWidth: true
         textFormat: Text.PlainText
         elide: Text.ElideRight
-        text: card.tf ? "Find on TensorFold" : "Find on Hugging Face"
+        text: "Find more models"
         color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
@@ -95,7 +101,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         elide: Text.ElideRight
-        text: card.tf ? (card.tfLoading ? "READING TENSORFOLD'S LIST…" : card.dgx.tfError !== "" ? "THE LIST DID NOT LOAD" : Model.tfSummary(card.tfList) || "RECIPES FOR ONE DGX SPARK")
+        text: card.tf ? (card.tfLoading ? "READING TENSORFOLD'S LIST…" : card.dgx.tfError !== "" ? "THE LIST DID NOT LOAD" : Model.tfSummary(card.tfList) || "MODELS FOR ONE DGX SPARK")
           : card.searching ? "SEARCHING HUGGING FACE…" : card.dgx.hfError !== "" ? "THE SEARCH DID NOT RUN"
           : card.dgx.hfRows !== null ? card.rows.length + (card.rows.length === 1 ? " MODEL" : " MODELS") + " FOUND" : "MLX 4-BIT MODELS OF A KNOWN FAMILY"
         color: (card.tf ? card.dgx.tfError : card.dgx.hfError) !== "" ? Color.urgent : Color.muted
@@ -109,8 +115,8 @@ FocusScope {
     RowLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.md
+      SettingsPill { text: "TensorFold"; primary: card.tf; onClicked: card.pickSource("tf") }
       SettingsPill { text: "Hugging Face"; primary: !card.tf; onClicked: card.pickSource("hf") }
-      SettingsPill { text: "TensorFold's list"; primary: card.tf; onClicked: card.pickSource("tf") }
       Item { Layout.fillWidth: true }
     }
 
@@ -119,7 +125,7 @@ FocusScope {
       visible: card.tf
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
-      text: "TensorFold's published recipes for one DGX Spark (128 GB), read from this computer; no machine is asked. Its memory figures are its own estimates, so a draft from here is not yet fitting on " + Model.hostName(card.host) + " until a measuring run. Only MLX 4-bit entries can be drafted."
+      text: "Models TensorFold publishes for one DGX Spark, read from this computer. Add puts one on " + Model.hostName(card.host) + ", not measured yet; Measure… then downloads and tests it there, and after that it runs like any other model."
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -255,6 +261,20 @@ FocusScope {
       font.pixelSize: Style.font.bodySmall
     }
 
+    // The next step, where it is: an added model is measured to be runnable (the same card as the model list's Measure…).
+    RowLayout {
+      Layout.fillWidth: true
+      visible: card.draftResult !== null && card.draftResult.ok && card.draftResult.added === true && card.dgx.draftCtx > 0
+      Button {
+        text: "Measure…"
+        bordered: true
+        fontSize: Style.font.bodySmall
+        tooltipText: "Download " + card.dgx.draftName + ", load it and bench it on " + Model.hostName(card.host) + ". Shows the download and asks first"
+        onClicked: card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: { id: card.dgx.draftId, name: card.dgx.draftName }, ctx: card.dgx.draftCtx })
+      }
+      Item { Layout.fillWidth: true }
+    }
+
     RowLayout {
       visible: !card.tf
       Layout.fillWidth: true
@@ -349,11 +369,11 @@ FocusScope {
                 onClicked: card.author(hfRow.modelData.repo)
               }
               Button {
-                text: "Draft recipe"
+                text: "Add"
                 bordered: true
                 fontSize: Style.font.bodySmall
                 opacity: card.dgx.recipeBusy ? 0.4 : 1
-                tooltipText: "Write a recipe for " + hfRow.modelData.repo + " and add it to " + Model.hostName(card.host) + " as drafted, not yet fitting"
+                tooltipText: "Add " + hfRow.modelData.repo + " to " + Model.hostName(card.host) + ". It isn't measured yet, so it can't run until you press Measure…"
                 onClicked: card.draft(hfRow.modelData.repo)
               }
             }
@@ -382,7 +402,7 @@ FocusScope {
         Layout.preferredHeight: contentHeight
         clip: true
         spacing: Style.spacing.md
-        model: card.tfList ? card.tfList.rows : []
+        model: card.tfShown
         boundsBehavior: Flickable.StopAtBounds
 
         delegate: Rectangle {
@@ -453,11 +473,11 @@ FocusScope {
               }
               Button {
                 visible: tfRow.modelData.draftable
-                text: "Draft recipe"
+                text: "Add"
                 bordered: true
                 fontSize: Style.font.bodySmall
                 opacity: card.dgx.recipeBusy ? 0.4 : 1
-                tooltipText: "Write a recipe for " + tfRow.modelData.name + " and add it to " + Model.hostName(card.host) + " as drafted, not yet fitting"
+                tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + ". It isn't measured yet, so it can't run until you press Measure…"
                 onClicked: card.draftEntry(tfRow.modelData)
               }
             }
@@ -472,7 +492,14 @@ FocusScope {
       }
     }
 
-    Item { Layout.fillHeight: true; visible: card.tf ? (card.tfList === null || card.tfList.rows.length === 0) : card.rows.length === 0 }
+    // What can't be added yet is one quiet line, with its rows a click away.
+    TextLink {
+      visible: card.tf && card.tfParts.blocked.length > 0
+      text: Model.tfBlockedText(card.tfParts.blocked) + " \u00b7 " + (card.showBlocked ? "Hide" : "Show")
+      onClicked: card.showBlocked = !card.showBlocked
+    }
+
+    Item { Layout.fillHeight: true; visible: card.tf ? card.tfShown.length === 0 : card.rows.length === 0 }
 
     RowLayout {
       Layout.fillWidth: true
@@ -492,20 +519,7 @@ FocusScope {
         opacity: card.searching ? 0.4 : 1
         onClicked: card.go()
       }
-      // Reads the list again; Mark as seen also saves this look, so the next one says what is new or changed since.
-      SettingsPill {
-        visible: card.tf
-        text: "Refresh"
-        opacity: card.tfLoading ? 0.4 : 1
-        onClicked: if (!card.tfLoading) card.dgx.loadTf(false)
-      }
-      SettingsPill {
-        visible: card.tf
-        text: "Mark as seen"
-        primary: true
-        opacity: card.tfLoading ? 0.4 : 1
-        onClicked: if (!card.tfLoading) card.dgx.loadTf(true)
-      }
+
     }
   }
 }
