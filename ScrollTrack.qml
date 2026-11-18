@@ -1,6 +1,9 @@
 // A thin scroll bar for a list, drawn like the rest of the Start family: a soft track,
 // a rounded thumb that brightens on hover, drag the thumb or click the track.
 // It only shows when the list is taller than the window; the wheel scrolls the list itself.
+// It always keeps its width and only fades: a layout skips an invisible item, so a bar that came and went with the
+// list's height would change the list's width, which changes the height of its wrapped text, which changes whether
+// the bar shows. That loop never settled on a window being resized, and the shell's one GUI thread spun at 100%.
 import QtQuick
 import qs.Commons
 
@@ -11,7 +14,8 @@ Item {
 
   readonly property real extent: bar.target ? bar.target.contentHeight - bar.target.height : 0
 
-  visible: bar.extent > 1
+  opacity: bar.extent > 1 ? 1 : 0
+  enabled: bar.extent > 1
   implicitWidth: Style.spacing.md
 
   Rectangle {

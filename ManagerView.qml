@@ -68,8 +68,6 @@ FocusScope {
   onVisibleChanged: if (visible) { view.cursor = 0; view.forceActiveFocus() }
   onRowsChanged: view.cursor = Math.max(0, Math.min(view.cursor, view.rows.length - 1))
 
-  implicitHeight: col.implicitHeight + Style.spacing.panelPadding * 2
-
   Keys.onPressed: event => {
     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
     if (event.key === Qt.Key_Escape) { view.escapePressed(); event.accepted = true }
@@ -142,7 +140,6 @@ FocusScope {
     RowLayout {
       Layout.fillWidth: true
       Layout.fillHeight: true
-      Layout.preferredHeight: flick.contentHeight
       visible: view.dgx.hostList.length > 0
       spacing: Style.spacing.md
 
@@ -150,7 +147,6 @@ FocusScope {
         id: flick
         Layout.fillWidth: true
         Layout.fillHeight: true
-        Layout.preferredHeight: contentHeight
         clip: true
         contentHeight: hostColumn.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
