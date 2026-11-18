@@ -26,6 +26,9 @@ Item {
   // read fails keeps its last good one.
   property var storage: ({})
   property var storageErrors: ({})
+  // `startdgx comfyui list` per machine, as last read ("target" -> the managed installs, DgxModel.parseComfyList). A read that
+  // fails keeps the last good one; what is running comes with the status poll, not from here.
+  property var comfyui: ({})
   // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
   // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
   property var marks: ({})
@@ -129,7 +132,7 @@ Item {
   readonly property bool removePlanning: removeQuery.busy
 
   readonly property var summary: Model.summarize(service.hostList, service.shownState, service.pending)
-  readonly property var rows: Model.rows(service.hostList, service.shownState)
+  readonly property var rows: Model.rows(service.hostList, service.shownState, service.comfyui)
 
   function entry(host, id) {
     const hs = service.shownState[host]
@@ -160,6 +163,12 @@ Item {
       delete errors[host]
     } else errors[host] = error
     service.storageErrors = errors
+  }
+  function comfyRead(host, installs) {
+    if (!installs) return
+    const next = Object.assign({}, service.comfyui)
+    next[host] = installs
+    service.comfyui = next
   }
   function statusFailed(host, why) {
     const old = service.hostState[host] || {}
@@ -487,6 +496,9 @@ Item {
     }
     service.storage = storage
     service.storageErrors = storageErrors
+    const comfyui = ({})
+    for (let m = 0; m < want.length; m++) if (service.comfyui[want[m]]) comfyui[want[m]] = service.comfyui[want[m]]
+    service.comfyui = comfyui
   }
 
   Component.onCompleted: service.refreshHosts()

@@ -33,6 +33,10 @@ The pins are `COMFYUI_REPO` and `COMFYUI_TAG` in `bin/startdgx` (`engine --json`
 
 Gated downloads need `HF_TOKEN` or `CIVITAI_TOKEN`. startdgx never stores, writes or sends one. You keep them in `~/.config/startdgx/comfyui.env` on the host (`HF_TOKEN=...`, one per line, `chmod 600`: a file others can read is refused). The pre-check reads that file, and the install job gets it as the unit's `EnvironmentFile`, so a token is on no command line and in no ssh command. A user manager that lingers never sees `~/.config/environment.d` changes, which is why it isn't used. When a recipe is gated and the file has no token, the refusal names the token and the file.
 
+## In the panel
+
+Each machine lists its managed installs under its models (`comfyui list`, read with the storage every 30 s while the manager is open), with what the status poll saw of the running one. Read-only so far: starting, stopping, a settings window, Install ComfyUI… and Find existing… come next.
+
 ## The memory bar
 
 `status` carries `comfyui: [{path, rss_mib}]` for each running managed install, read from its pid file in the same ssh call. The figure is the process's resident memory; whether it also covers the GPU's allocations on unified memory is not verified on a real host.
