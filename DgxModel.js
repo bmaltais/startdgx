@@ -1240,6 +1240,24 @@ function moveAfterStep(waiting, host, status) {
   return { waiting: next, actions: actions }
 }
 
+// A setup asked for from the panel is shared on the tailnet once it has finished downloading (sharing is on by default; the
+// model's gear turns it off). `waiting` is { "host/id": true }. A model the machine lists with its setup done (any unit but
+// installing) is shared, once; a setup that failed is dropped, and so is one already shared. -> { waiting, actions: [{ type, host, id }] }.
+function shareAfterStep(waiting, host, status) {
+  const models = status && isPlainObject(status.models) ? status.models : {}
+  const next = Object.assign({}, waiting)
+  const actions = []
+  for (const key in waiting) {
+    if (key.indexOf(host + "/") !== 0) continue
+    const id = key.substring(host.length + 1)
+    const e = models[id]
+    if (!e || e.unit === "installing" && !(e.install && e.install.phase === "failed")) continue
+    delete next[key]
+    if (e.unit !== "installing" && e.shared !== true) actions.push({ type: "share", host: host, id: id })
+  }
+  return { waiting: next, actions: actions }
+}
+
 // What a model's Remove does: "remove" (stop it if it runs, delete its weights), "cancel" (stop a setup and delete
 // what it downloaded; a failed setup is cleared the same way), or null while it waits: being removed, stopping,
 // or a click on its way.

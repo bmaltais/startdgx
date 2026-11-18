@@ -46,6 +46,8 @@ Item {
   // with the model store as destination that haven't finished: when one does, the model is stopped and moved there (Model.moveAfterStep).
   property var destinations: ({})
   property var moveAfter: ({})
+  // Setups from the panel whose model is shared on the tailnet when they finish (Model.shareAfterStep).
+  property var shareAfter: ({})
   // The host states as drawn: each machine's status with those setups in it, so a model asked for shows at once.
   readonly property var shownState: Model.withSetups(service.hostState, service.setups)
 
@@ -174,6 +176,7 @@ Item {
     service.setHostState(host, { loaded: true, online: true, error: "", status: status, lastSeenMs: Date.now() })
     service.setups = Model.settleSetups(service.setups, host, status)
     service.settleMoves(host, status)
+    service.settleShares(host, status)
     service.notifyChanges()
   }
   function settleMoves(host, status) {
@@ -183,6 +186,11 @@ Item {
       if (a.type === "stop") service.stop(a.host, a.id)
       else service.move(a.host, a.id, a.to)
     }
+  }
+  function settleShares(host, status) {
+    const step = Model.shareAfterStep(service.shareAfter, host, status)
+    service.shareAfter = step.waiting
+    for (const a of step.actions) service.share(a.host, a.id, "share")
   }
   function destinationOf(host, id) { return (service.destinations[host] || {})[id] === "usb" ? "usb" : "nvme" }
   function loadDestinations(host) { destQuery.ask(host, [service.script, "destination", host, "--json"]) }
@@ -405,6 +413,10 @@ Item {
       waiting[Model.modelKey(host, r.id)] = { seen: 0, stopping: false }
       service.moveAfter = waiting
     }
+    // Sharing is the default: the model is shared on the tailnet once its setup is done.
+    const sharing = Object.assign({}, service.shareAfter)
+    sharing[Model.modelKey(host, r.id)] = true
+    service.shareAfter = sharing
     p.run("use", r.id, null, yes ? { yes: true } : undefined)
   }
   // The action failed: a setup asked for that never began goes from the list again (a start, stop or delete is
@@ -414,6 +426,11 @@ Item {
     if (kind !== "use") return
     const host = Model.keyHost(key)
     if (Model.setupNeeded(error)) service.markSetupNeeded(host, true)
+    if (service.shareAfter[key]) {
+      const sharing = Object.assign({}, service.shareAfter)
+      delete sharing[key]
+      service.shareAfter = sharing
+    }
     if (!service.setups[key]) return
     const next = Object.assign({}, service.setups)
     delete next[key]

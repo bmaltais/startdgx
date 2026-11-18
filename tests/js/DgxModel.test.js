@@ -1873,6 +1873,18 @@ test("recipePages: a Storage page offers where to download to on a machine with 
   assert.strictEqual(M.recipeChange("h", mineRow(), "dest", "elsewhere"), null)
 })
 
+test("shareAfterStep: shared once its setup is done, never while it downloads, nothing for a failed or already shared one", () => {
+  const st = (unit, extra) => ({ models: { m: Object.assign({ unit: unit }, extra) } })
+  const w = { "h/m": true }
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", st("installing", { install: { phase: "downloading" } })), { waiting: w, actions: [] })
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", { models: {} }).waiting, w, "not listed yet: kept")
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", st("inactive")), { waiting: {}, actions: [{ type: "share", host: "h", id: "m" }] })
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", st("active")).actions, [{ type: "share", host: "h", id: "m" }], "also when it already runs")
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", st("inactive", { shared: true })), { waiting: {}, actions: [] })
+  assert.deepStrictEqual(M.shareAfterStep(w, "h", st("installing", { install: { phase: "failed" } })), { waiting: {}, actions: [] })
+  assert.deepStrictEqual(M.shareAfterStep(w, "other", st("inactive")).actions, [], "another machine's status says nothing about it")
+})
+
 test("moveAfterStep: nothing while it downloads, a stop when it runs, the move after two stopped reads, and a failed setup is dropped", () => {
   const st = unit => ({ models: { m: { unit: unit } } })
   let w = { "h/m": { seen: 0 } }
