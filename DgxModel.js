@@ -1043,21 +1043,26 @@ function parseRecipes(text) {
 // The model picker's rows for one machine: every recipe of its catalog, with what the picker offers for it:
 // { recipe, action: "use" | null, text, best }. A recipe the machine can run and doesn't have yet can be set up
 // ("use"); one it has (or is setting up) says so; one it can't run says why. The engine's recommendation
-// (`best`) comes first, then what can be set up, what is set up, and what can't run, each in name order.
+// (`best`) is marked; the rows are in name order, and a build this machine can't run is left out when the same model has a build it can.
 function recipeOffers(list, status) {
   const models = status && isPlainObject(status.models) ? status.models : {}
-  const offers = (Array.isArray(list) ? list : []).map(function (r) {
+  let offers = (Array.isArray(list) ? list : []).map(function (r) {
     const entry = models[r.id]
     const best = r.best === true
     if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best }
     if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best }
-    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best }
+    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best, blocked: r.available !== true }
     // A recipe of yours downloads what it names and runs it: the engine wants --yes, which the panel sends only after the
     // person has seen the download (its dry run, which needs the context). Without one there is nothing to show.
     if (isUserRecipe(r) && !(Number(r.context) > 0)) return { recipe: r, action: null, text: "Its context is unknown, so its download can't be shown yet", best: best }
     return { recipe: r, action: "use", confirm: isUserRecipe(r), text: best ? "Recommended for this machine" : "", best: best }
   })
   const label = function (o) { return String(o.recipe.name || o.recipe.id) }
+  // One model often has a build for each kind of machine (the same name for an AMD runtime and an NVIDIA one): a build this machine
+  // can't run is dropped when another of the same name is usable here (or set up here), so the model is listed once.
+  const usable = {}
+  offers.forEach(function (o) { if (!o.blocked) usable[label(o)] = true })
+  offers = offers.filter(function (o) { return !o.blocked || !usable[label(o)] })
   // By name: each row says where it stands (set up, on this machine, can't run), so the list is not grouped by that.
   offers.sort(function (a, b) { return label(a).localeCompare(label(b), undefined, { sensitivity: "base", numeric: true }) || a.recipe.id.localeCompare(b.recipe.id) })
   return offers.map(function (o) { return { recipe: o.recipe, action: o.action, confirm: o.confirm === true, text: o.text, best: o.best } })

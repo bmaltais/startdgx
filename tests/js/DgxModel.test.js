@@ -663,10 +663,8 @@ test("a real catalog: the picker's offers on that machine, by name", () => {
   assert.deepStrictEqual(offers.map((o) => [o.recipe.id, o.action, o.text]), [
     ["glm-5.3-flash-tensorfold-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
     ["nemotron-3.5-bolt-tensorfold", null, "On this machine"],
-    ["qwen3.8-27b-gufo", null, "runtime gufo can't run on nvidia-gb10"],
     ["qwen3.8-27b-tensorfold", null, "On this machine"],
     ["qwen3.8-27b-abliterated-tensorfold", null, "On this machine"],
-    ["qwen3.8-flash-next-gufo", null, "runtime gufo can't run on nvidia-gb10"],
     ["qwen3.8-flash-next-tensorfold", "use", "Recommended for this machine"],
   ])
 })
@@ -1862,4 +1860,18 @@ test("pickerFilter: every word of the box must be in a row's name, id, maker or 
   assert.deepStrictEqual(M.filterTfRows(rows, "mlx qwen").map((r) => r.id), ["qwen-2b"])
   assert.deepStrictEqual(M.filterTfRows(rows, "tensorfold").map((r) => r.id), ["qwen-2b", "gemma"], "all of them are TensorFold's")
   assert.deepStrictEqual(M.filterTfRows(rows, "").length, 2)
+})
+
+test("recipeOffers: a model's build for other hardware is not listed beside the one this machine can use", () => {
+  const list = [
+    recipe({ id: "z-image-turbo-sdcpp", name: "Z-Image Turbo", available: false, reason: "runtime sdcpp can't run on nvidia-gb10" }),
+    recipe({ id: "z-image-turbo-sdcpp-cuda", name: "Z-Image Turbo" }),
+    recipe({ id: "flash-gufo", name: "Qwen3.8 Flash Next", available: false, reason: "runtime gufo can't run on nvidia-gb10" }),
+    recipe({ id: "flash-tf", name: "Qwen3.8 Flash Next", installed: true }),
+    recipe({ id: "glm-pair", name: "GLM-5.3 Flash", available: false, reason: "needs a pair" }),
+  ]
+  const offers = M.recipeOffers(list, { models: {} })
+  assert.deepStrictEqual(offers.map((o) => o.recipe.id), ["glm-pair", "flash-tf", "z-image-turbo-sdcpp-cuda"],
+    "the AMD builds are gone; a model with no usable build keeps its row, to say why")
+  assert.deepStrictEqual(M.recipeOffers([list[0], list[2]], { models: {} }).map((o) => o.recipe.id), ["flash-gufo", "z-image-turbo-sdcpp"], "two of the same name blocked: neither is usable, both stay")
 })
