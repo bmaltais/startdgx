@@ -312,7 +312,7 @@ test("parseRecipes keeps the engine's catalog listing, and refuses anything else
   assert.strictEqual(M.parseRecipes(JSON.stringify([null])), null)
 })
 
-test("recipeOffers: the picker's rows, best first, then what can be set up, then what can't", () => {
+test("recipeOffers: the picker's rows, by name", () => {
   const list = [
     recipe({ id: "glm-pair", name: "GLM-5.3 Flash", available: false, reason: "runtime tensorfold-glm53-pair can't run on nvidia-gb10", memory_gib: null }),
     recipe({ id: "nemotron", name: "Nemotron 3.5 Bolt", installed: true }),
@@ -324,15 +324,15 @@ test("recipeOffers: the picker's rows, best first, then what can be set up, then
   const status = { models: { nemotron: row({ recipe: "nemotron" }), "being-set-up": row({ recipe: "being-set-up", unit: "installing", install: { phase: "waiting" } }) } }
   const offers = M.recipeOffers(list, status)
   assert.deepStrictEqual(offers.map((o) => [o.recipe.id, o.action, o.text]), [
-    ["flash", "use", "Recommended for this machine"],
-    ["abliterated", "use", ""],
     ["being-set-up", null, "Being set up"],
-    ["nemotron", null, "On this machine"],
     ["glm-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
+    ["nemotron", null, "On this machine"],
     ["gufo", null, "Can't run on this machine"],
+    ["abliterated", "use", ""],
+    ["flash", "use", "Recommended for this machine"],
   ])
-  assert.strictEqual(offers[0].best, true, "the engine's own best mark is kept")
-  assert.strictEqual(offers[1].best, false)
+  assert.strictEqual(offers.find((o) => o.recipe.id === "flash").best, true, "the engine's own best mark is kept")
+  assert.strictEqual(offers.find((o) => o.recipe.id === "abliterated").best, false)
 })
 
 test("recipeOffers: a model the engine reports installed is set up, even before its status row arrives", () => {
@@ -658,16 +658,16 @@ test("a real status: parsed, and each model as the row draws it", () => {
   assert.strictEqual(M.subtitle(M.summarize(Object.keys(h), h)), "1 machine · 1 running")
 })
 
-test("a real catalog: the picker's offers on that machine", () => {
+test("a real catalog: the picker's offers on that machine, by name", () => {
   const offers = M.recipeOffers(M.parseRecipes(realList), M.parseStatus(realStatus))
   assert.deepStrictEqual(offers.map((o) => [o.recipe.id, o.action, o.text]), [
-    ["qwen3.8-flash-next-tensorfold", "use", "Recommended for this machine"],
+    ["glm-5.3-flash-tensorfold-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
     ["nemotron-3.5-bolt-tensorfold", null, "On this machine"],
+    ["qwen3.8-27b-gufo", null, "runtime gufo can't run on nvidia-gb10"],
     ["qwen3.8-27b-tensorfold", null, "On this machine"],
     ["qwen3.8-27b-abliterated-tensorfold", null, "On this machine"],
-    ["glm-5.3-flash-tensorfold-pair", null, "runtime tensorfold-glm53-pair can't run on nvidia-gb10"],
-    ["qwen3.8-27b-gufo", null, "runtime gufo can't run on nvidia-gb10"],
     ["qwen3.8-flash-next-gufo", null, "runtime gufo can't run on nvidia-gb10"],
+    ["qwen3.8-flash-next-tensorfold", "use", "Recommended for this machine"],
   ])
 })
 
@@ -1060,74 +1060,10 @@ test("parseMeasurePlan keeps the engine's up-front note that other commands wait
   assert.strictEqual(plan.length, 4)
 })
 
-// ---- Find on Hugging Face (`hf search --json`) ----
-const hfRow = (over) => Object.assign({ repo: "TensorFold/Qwen3.8-27B-MLX-4bit", params: 27356728560, size_bytes: 16074529674,
-  license: "apache-2.0", base_model: "Qwen/Qwen3.8-27B", label: null }, over)
-const hfRows = [hfRow(), hfRow({ repo: "daguoagi/Huihui-Qwen3.8-27B-abliterated-MLX-4bit", label: "abliterated" }),
-  hfRow({ repo: "someone/Gemma-4-31B-uncensored-MLX-4bit", label: "uncensored", license: null, base_model: null, params: null, size_bytes: null })]
-
-test("parseHfRows keeps the CLI's rows and refuses what isn't a list of them", () => {
-  assert.strictEqual(M.parseHfRows(JSON.stringify(hfRows)).length, 3)
-  assert.deepStrictEqual(M.parseHfRows("[]"), [])
-  assert.strictEqual(M.parseHfRows(""), null)
-  assert.strictEqual(M.parseHfRows("{}"), null)
-  assert.strictEqual(M.parseHfRows(JSON.stringify([{ params: 1 }])), null)
-})
-
-test("hfShown hides the labelled rows with the toggle off and keeps the order", () => {
-  assert.deepStrictEqual(M.hfShown(hfRows, true).map((r) => r.repo), hfRows.map((r) => r.repo))
-  assert.deepStrictEqual(M.hfShown(hfRows, false).map((r) => r.repo), ["TensorFold/Qwen3.8-27B-MLX-4bit"])
-  assert.deepStrictEqual(M.hfShown(null, false), [])
-})
-
-test("hfDerivativeCount counts the labelled rows, for the toggle's words", () => {
-  assert.strictEqual(M.hfDerivativeCount(hfRows), 2)
-  assert.strictEqual(M.hfDerivativeCount([hfRow()]), 0)
-  assert.strictEqual(M.hfDerivativeCount(null), 0)
-})
-
-test("hfToggleText says what the toggle does and how many rows it holds", () => {
-  assert.strictEqual(M.hfToggleText(hfRows, true), "Hide abliterated and uncensored (2)")
-  assert.strictEqual(M.hfToggleText(hfRows, false), "Show abliterated and uncensored (2)")
-  assert.strictEqual(M.hfToggleText([hfRow()], true), "")
-})
-
-test("hfMemoryLine gives plain facts and never a verdict", () => {
-  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 16.5 * 2 ** 30 }), 128), "weights 16.5 GiB; this host has 128 GiB")
-  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: 15.4 * 2 ** 30 }), 121.6), "weights 15.4 GiB; this host has 122 GiB")
-  assert.strictEqual(M.hfMemoryLine(hfRow(), 0), "weights 15.0 GiB")
-  assert.strictEqual(M.hfMemoryLine(hfRow({ size_bytes: null }), 128), "weights size unknown; this host has 128 GiB")
-  // Even a model far bigger than the host only gets the two numbers.
-  const huge = M.hfMemoryLine(hfRow({ size_bytes: 500 * 2 ** 30 }), 128)
-  assert.strictEqual(huge, "weights 500.0 GiB; this host has 128 GiB")
-  assert.ok(!/fit|enough|too|won't|will|can/i.test(huge))
-})
-
-test("hfRowText is the facts under a repo's name, in the order the CLI prints them", () => {
-  assert.strictEqual(M.hfRowText(hfRow()), "27.4B · apache-2.0 · from Qwen/Qwen3.8-27B")
-  assert.strictEqual(M.hfRowText(hfRows[2]), "license unknown")
-  assert.strictEqual(M.hfRowText(hfRow({ params: null, base_model: null })), "apache-2.0")
-})
-
-test("hfLabel is the mark on a derivative and nothing on the rest", () => {
-  assert.strictEqual(M.hfLabel(hfRows[1]), "abliterated")
-  assert.strictEqual(M.hfLabel(hfRow()), "")
-})
-
-test("hfSearchCommand hands the query after --, so a query starting with - is a query", () => {
-  assert.deepStrictEqual(M.hfSearchCommand("  qwen "), ["hf", "search", "--json", "--", "qwen"])
-  assert.deepStrictEqual(M.hfSearchCommand("-x"), ["hf", "search", "--json", "--", "-x"])
-})
-
-// ---- Draft recipe on a search result (`recipe draft --host HOST --json`, then the Add recipe path) ----
+// ---- Draft recipe (`recipe draft --host HOST --json`, then the Add recipe path) ----
 const draftJson = (over) => JSON.stringify(Object.assign({ ok: true, id: "qwen3.8-27b-mlx-4bit-tensorfold", repo: "TensorFold/Qwen3.8-27B-MLX-4bit",
   path: "/home/me/.local/state/startdgx/drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml", revision: "948c129", license: "apache-2.0",
   weights_bytes: 16074529674, placeholder_gib: 15, source: "drafted", warnings: [] }, over))
-
-test("draftCommand asks the host about the id, so a clash is refused before anything is written, and the repo comes after --", () => {
-  assert.deepStrictEqual(M.draftCommand("me@dgx", "TensorFold/Qwen3.8-27B-MLX-4bit"),
-    ["recipe", "draft", "--host", "me@dgx", "--json", "--estimated", "--", "TensorFold/Qwen3.8-27B-MLX-4bit"])
-})
 
 test("parseDraftResult keeps the file to add and the warnings, and refuses what isn't a draft", () => {
   const d = M.parseDraftResult(draftJson({ warnings: ["License 'llama3' may restrict use: read its terms before you use it", ""] }))
@@ -1901,4 +1837,29 @@ test("moveAfterStep: nothing while it downloads, a stop when it runs, the move a
   assert.deepStrictEqual(r.waiting, {})
   assert.deepStrictEqual(M.moveAfterStep(w, "h", { models: { m: { unit: "installing", install: { phase: "failed" } } } }).waiting, {})
   assert.deepStrictEqual(M.moveAfterStep(w, "other", st("inactive")).actions, [], "another machine's status says nothing about it")
+})
+
+test("recipeOrigin: the engine's own, TensorFold's, or yours", () => {
+  const tf = { rows: [{ added: { recipeId: "qwen-tf" } }] }
+  assert.strictEqual(M.recipeOrigin({ id: "flash" }, tf), "omarchy")
+  assert.strictEqual(M.recipeOrigin({ id: "qwen-tf", user: true }, tf), "tensorfold")
+  assert.strictEqual(M.recipeOrigin({ id: "mine", user: true }, tf), "custom")
+  assert.strictEqual(M.recipeOrigin({ id: "mine", user: true }, null), "custom", "no TensorFold list read: a user recipe is custom")
+  assert.deepStrictEqual(["omarchy", "tensorfold", "custom"].map(M.originWords), ["Omarchy local AI", "TensorFold", "Custom"])
+})
+
+test("pickerFilter: every word of the box must be in a row's name, id, maker or origin, in any case", () => {
+  const list = [{ id: "qwen3.8-27b-gufo", name: "Qwen3.8 27B", vendor: "alibaba" }, { id: "gemma-4", name: "Gemma 4", vendor: "google", user: true }]
+  const offers = M.recipeOffers(list.map((r) => Object.assign({ available: true }, r)), { models: {} })
+  const ids = (q) => M.filterOffers(offers, q, null).map((o) => o.recipe.id)
+  assert.deepStrictEqual(ids(""), ["gemma-4", "qwen3.8-27b-gufo"], "nothing typed: all, by name")
+  assert.deepStrictEqual(ids("  QWEN 27b "), ["qwen3.8-27b-gufo"])
+  assert.deepStrictEqual(ids("alibaba"), ["qwen3.8-27b-gufo"])
+  assert.deepStrictEqual(ids("custom"), ["gemma-4"], "the origin is searchable")
+  assert.deepStrictEqual(ids("omarchy"), ["qwen3.8-27b-gufo"])
+  assert.deepStrictEqual(ids("zzz"), [])
+  const rows = [{ name: "Qwen3.5 2B", id: "qwen-2b", format: "MLX 4-bit" }, { name: "Gemma 4", id: "gemma", format: "NVFP4" }]
+  assert.deepStrictEqual(M.filterTfRows(rows, "mlx qwen").map((r) => r.id), ["qwen-2b"])
+  assert.deepStrictEqual(M.filterTfRows(rows, "tensorfold").map((r) => r.id), ["qwen-2b", "gemma"], "all of them are TensorFold's")
+  assert.deepStrictEqual(M.filterTfRows(rows, "").length, 2)
 })

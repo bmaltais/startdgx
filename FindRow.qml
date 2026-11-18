@@ -1,5 +1,4 @@
-// One model that can be added to a machine's list, in the model picker under the machine's own recipes: from TensorFold's list or a Hugging Face
-// search. A name, its facts, one muted line (what stands behind its memory figure) and one button, Add. The caller says what the button does.
+// One model that can be added to a machine's list, in the model picker under the machine's own recipes: from TensorFold's list. A name, its facts, one muted line (what stands behind its memory figure) and one button, Add. The caller says what the button does.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -10,7 +9,8 @@ Rectangle {
   id: row
 
   property string name: ""
-  property string mark: ""          // a derivative's label, or what TensorFold says changed
+  property string mark: ""          // what TensorFold says changed
+  property string origin: ""        // where the model comes from: tensorfold
   property string facts: ""
   property string note: ""
   property bool busy: false
@@ -50,6 +50,11 @@ Rectangle {
           font.family: Style.font.family
           font.pixelSize: Style.font.body
           font.bold: true
+        }
+        OriginIcon {
+          visible: row.origin !== ""
+          origin: row.origin
+          Layout.alignment: Qt.AlignVCenter
         }
         Text {
           visible: row.mark !== ""

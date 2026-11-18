@@ -8,7 +8,7 @@
 //   omarchy-shell io.github.bmaltais.startdgx uninstall <host>   the manager with a machine's uninstall card
 //   omarchy-shell io.github.bmaltais.startdgx addModel <host>    the manager with a machine's model picker
 //   omarchy-shell io.github.bmaltais.startdgx addRecipe <host> [path]   the manager with a machine's Add recipe card
-//   omarchy-shell io.github.bmaltais.startdgx findModel <host> [query]   the model picker with a Hugging Face search for it
+//   omarchy-shell io.github.bmaltais.startdgx findModel <host> [query]   the model picker with its filter set to the query
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 //   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
 //   omarchy-shell io.github.bmaltais.startdgx settings <host> <model|""> <page|"">   a machine's settings window, or a model's, on a page
@@ -37,11 +37,11 @@ Item {
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
   // A card floats over the manager: "add" (Add machine), "uninstall", "forget", "hostSettings" (one machine's), "modelSettings", "addModel" (a
-  // machine's model picker, Add recipe or Find on Hugging Face card), "remove" or "recipeRun" (one model's or recipe's), or "" for none.
+  // machine's model picker, Add recipe or Find card), "remove" or "recipeRun" (one model's or recipe's), or "" for none.
   property string card: ""
   // The path the Add recipe card opens with (IPC addRecipe's second argument).
   property string cardPath: ""
-  // The query the model picker opens with and searches at once (IPC findModel's second argument).
+  // The text the model picker's filter opens with (IPC findModel's second argument).
   property string cardQuery: ""
   // The confirmation card ("recipeRun"): a measure or a setup of a recipe of yours, its recipe and context.
   property string cardMode: "measure"
@@ -75,7 +75,7 @@ Item {
   // Ends what the open card was asking before it goes.
   function dropCard() {
     if (root.card === "add") core.cancelDiscover()
-    if (root.card === "addModel") core.cancelHf()
+    if (root.card === "addModel") core.cancelPicker()
     if (root.card === "findComfy") core.cancelComfyFind()
     if (root.card === "comfySettings") core.cancelComfyWindow()
     if (root.card === "installComfy") core.cancelComfyPlan()
@@ -152,16 +152,13 @@ Item {
     if (p) p.pollStorage()
   }
 
-  // The model picker: the machine's catalog, with TensorFold's list (read now, which also saves this look so the next one marks what is new) and a
-  // Hugging Face search (`query` searches at once) under it. Both come from this computer; the machine is only whose memory the rows are set against.
+  // The model picker: the machine's catalog, with TensorFold's list (read now, which also saves this look so the next one marks what is new) under it,
+  // and `query` in its filter. The list comes from this computer; the machine is only whose memory the rows are set against.
   function showAddModel(host, query) {
     if (!core.hosts[host]) return
     root.ensureManager()
     root.cardHost = host
     root.cardQuery = query || ""
-    core.hfRows = null
-    core.hfError = ""
-    core.hfAsked = ""
     core.tfError = ""
     if (!core.recipeBusy) core.draftRepo = ""
     root.card = "addModel"
