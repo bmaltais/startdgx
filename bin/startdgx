@@ -2969,6 +2969,42 @@ def demo_comfyui_job(item):
   return {"state": "succeeded", "exit_status": 0, "log": [f"== startdgx: {kind} in {item['path']}", "Done: 11 change(s). Start it with ./dgx-comfyui.sh run"]}
 
 
+DEMO_RECIPES = (
+  {"name": "image_krea2_turbo_t2i", "title": "Krea-2 Turbo text-to-image", "nodes": [], "gated": False,
+   "models": [("krea2_turbo.safetensors", "diffusion_models", 12_000_000_000), ("qwen_3_4b.safetensors", "text_encoders", 6_000_000_000),
+              ("krea2_vae.safetensors", "vae", 640_000_000), ("krea2_darkbrush.safetensors", "loras", 469_291_992)]},
+  {"name": "image_minimax_h3_image_t2i", "title": "MiniMax-H3-Image text-to-image (DGX Spark)", "nodes": ["comfyui-minimax"], "gated": True,
+   "models": [("minimax_h3_int8.safetensors", "diffusion_models", 40_000_000_000), ("qwen3_vl_32b_int8.safetensors", "text_encoders", 16_000_000_000)]})
+
+
+def demo_comfyui_recipe(item, name, job):
+  """A demo recipe as the tool's recipe check --json shapes it: the first model is on disk, the rest are missing until the recipe is installed."""
+  found = next((r for r in DEMO_RECIPES if r["name"] == name), None)
+  if found is None:
+    raise Error(f"no such recipe: {name}")
+  done = name in item.get("recipes_done", []) or (job["state"] == "succeeded" and (item.get("job") or {}).get("recipe") == name)
+  models, download, have = [], 0, 0
+  for index, (file, dest, size) in enumerate(found["models"]):
+    state = "have" if done or (index == 0 and name == DEMO_RECIPES[0]["name"]) else "missing"
+    model = {"file": file, "dest": dest, "url": "https://example.test/" + file, "size": size, "sha256": "0" * 64, "state": state, "actual_size": size if state == "have" else 0}
+    if state == "missing":
+      download += size
+      model["source"] = ({"ok": False, "problem": "gated", "detail": ["HF_TOKEN", "401"]} if found["gated"] else {"ok": True, "problem": "", "detail": []})
+    else:
+      have += 1
+    models.append(model)
+  return {"schema": 1, "name": name, "title": found["title"], "description": "", "notes": "", "run_note": "", "workflow": "", "flags": [],
+          "nodes": [{"id": n, "installed": done} for n in found["nodes"]], "models": models, "total_bytes": sum(m[2] for m in found["models"]),
+          "have": have, "want": len(models), "download_bytes": download, "ready": not found["gated"]}
+
+
+def demo_comfyui_remember(item, job):
+  """A finished recipe job is remembered before the next job replaces it."""
+  previous = item.get("job") or {}
+  if previous.get("recipe") and job["state"] == "succeeded":
+    item.setdefault("recipes_done", []).append(previous["recipe"])
+
+
 def demo_comfyui_pick(installs, which):
   """The managed install `which` names (a label or a folder), or the only one; the host script's resolve."""
   managed = [i for i in installs if i["managed"]]
@@ -2987,7 +3023,7 @@ def demo_comfyui_pick(installs, which):
 def demo_comfyui(args):
   """The ComfyUI commands on a demo machine: its installs are in comfyui.json (none on a machine without the file).
   Adopting or forgetting one flips its `managed`; start and stop flip its `state` (up or stopped) at once."""
-  with demo_state(write=args.verb not in ("discover", "list", "status", "plan", "job")) as state:
+  with demo_state(write=args.verb not in ("discover", "list", "status", "plan", "job") and not (args.verb == "recipe" and args.action != "install")) as state:
     installs = demo_host(state, args.host).setdefault("comfyui", {"installs": []})["installs"]
     if args.verb in ("adopt", "forget"):
       path = comfyui_dir(args.dir)
@@ -3026,13 +3062,44 @@ def demo_comfyui(args):
       answer = {"job": "startdgx-comfyui-demo", "path": plan["path"], "log": "demo"}
       print(json.dumps(answer) if args.json else f"Installing ComfyUI in {plan['path']} on {args.host}; it takes about 15 minutes")
       return
-    if args.verb in ("status", "start", "stop", "autostart", "update", "job"):
+    if args.verb in ("status", "start", "stop", "autostart", "update", "job", "recipe"):
       item = demo_comfyui_pick(installs, comfyui_which(args.dir))
       job = demo_comfyui_job(item)
-      if args.verb != "status" and args.verb != "job" and job["state"] == "running":
+      if args.verb not in ("status", "job", "recipe") and job["state"] == "running":
         raise Error(f"an install or update is running in {item['path']}; follow it with: startdgx comfyui job")
       if args.verb == "job":
         print(json.dumps({"path": item["path"], **job}) if args.json else "\n".join([job["state"]] + ["  " + l for l in job["log"]]))
+        return
+      if args.verb == "recipe":
+        if not item.get("installed", True):
+          raise Error(f"{item['path']} has no ComfyUI yet; install it first")
+        if not item["json_capable"]:
+          raise Error(f"{item['path']} is too old for startdgx to read its recipes; update it first")
+        if args.action == "list":
+          answer = {"path": item["path"], "schema": 1, "recipes": [{"name": r["name"], "valid": True, "title": r["title"], "description": "", "models": len(r["models"]),
+                                                                    "total_bytes": sum(m[2] for m in r["models"]), "nodes": len(r["nodes"])} for r in DEMO_RECIPES]}
+        else:
+          if not args.name:
+            raise Error("Name the recipe")
+          recipe_doc = demo_comfyui_recipe(item, args.name, job)
+          if args.action == "install":
+            if job["state"] == "running":
+              raise Error(f"an install or update is running in {item['path']}; follow it with: startdgx comfyui job")
+            for m in recipe_doc["models"]:
+              if m.get("source") and not m["source"]["ok"]:
+                var = m["source"]["detail"][0]
+                raise Error(f"{m['file']} is gated: it needs {var}. startdgx never stores a token; put {var}=... in ~/.config/environment.d/comfyui.conf on the host and log out and in, then try again")
+            if not recipe_doc["download_bytes"] and all(n["installed"] for n in recipe_doc["nodes"]):
+              raise Error(f"{args.name} is already installed")
+            demo_comfyui_remember(item, job)
+            item["job"] = {"since_ms": demo_now_ms(), "kind": "recipe", "recipe": args.name}
+            answer = {"job": "startdgx-comfyui-demo", "path": item["path"], "log": "demo"}
+          else:
+            answer = {"path": item["path"], "recipe": recipe_doc}
+        if args.json:
+          print(json.dumps(answer))
+        else:
+          cmd_comfyui_recipe_text(args, answer)
         return
       if args.verb == "update":
         _, ref = comfyui_source(args)
@@ -3043,6 +3110,7 @@ def demo_comfyui(args):
           raise Error(f"{item['path']} has commits that aren't pushed; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
         if item.get("state") == "up":
           raise Error(f"ComfyUI in {item['path']} is running; stop it first")
+        demo_comfyui_remember(item, job)
         item.update(job={"since_ms": demo_now_ms(), "kind": "update"}, tool={**tool, "tag": ref, "branch": ""})
         answer = {"job": "startdgx-comfyui-demo", "path": item["path"], "log": "demo"}
         print(json.dumps(answer) if args.json else f"Updating ComfyUI in {item['path']} on {args.host} to {ref}")
@@ -3302,6 +3370,11 @@ JOB_UPDATE = "\\n".join([
   'git -c advice.detachedHead=false checkout --quiet "$2"',
   'if [ "$3" = comfyui ]; then exec ./dgx-comfyui.sh update </dev/null; fi',
   'exec ./dgx-comfyui.sh install </dev/null'])
+JOB_RECIPE = "\\n".join([
+  'set -eu',
+  'echo "== startdgx: recipe $2 in $1 ($(date -Is))"',
+  'cd "$1"',
+  'exec ./dgx-comfyui.sh recipe install "$2" --yes </dev/null'])
 def unit_name(path):
   return "startdgx-comfyui-" + hashlib.sha1(path.encode()).hexdigest()[:10]
 def log_path(path):
@@ -3459,6 +3532,51 @@ elif mode == "update":
         r["tool_ref"] = ref
     save(installs)
   print(json.dumps(start_job(path, JOB_UPDATE, path, ref, "comfyui" if comfy else "tool")))
+elif mode == "recipe":
+  path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
+  sub, name, verify = ARGV[2], ARGV[3] if len(ARGV) > 3 else "", len(ARGV) > 4 and ARGV[4] == "verify"
+  item = inspect(path)
+  if item["kind"] != "dgx-comfyui" or not item["installed"]:
+    fail(path + " has no ComfyUI yet; install it first")
+  if not item["json_capable"]:
+    fail(path + " is too old for startdgx to read its recipes; update it first")
+  if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
+    fail("not a recipe name")
+  def recipe_json(*argv):
+    r = tool(path, "recipe", *argv, "--json", timeout=300)
+    try:
+      return json.loads(r.stdout)
+    except ValueError:
+      fail("dgx-comfyui.sh recipe gave no JSON: " + say_line(r.stderr or r.stdout))
+  if sub == "list":
+    print(json.dumps({"path": path, **recipe_json("list")}))
+  elif sub == "show":
+    print(json.dumps({"path": path, "recipe": recipe_json("show", name)}))
+  elif sub == "check":
+    print(json.dumps({"path": path, "recipe": recipe_json("check", name, *(["--verify"] if verify else []))}))
+  elif sub == "install":
+    no_job_running(path)
+    r = recipe_json("check", name)
+    problems = [m for m in r["models"] if m.get("source") and not m["source"]["ok"]]
+    for m in problems:
+      src = m["source"]
+      if src["problem"] == "gated":
+        var = src["detail"][0] if src["detail"] else "the token"
+        fail(m["file"] + " is gated: it needs " + var + ". startdgx never stores a token; put " + var + "=... in ~/.config/environment.d/comfyui.conf on the host and log out and in, then try again")
+      fail(m["file"] + " can't be fetched (" + src["problem"] + "); the recipe is out of date")
+    bad = [m["file"] for m in r["models"] if m["state"] in ("size", "hash")]
+    if bad:
+      fail(", ".join(bad) + " on disk doesn't match the recipe; startdgx leaves it alone. Fix it on the host with: dgx-comfyui.sh recipe install " + name + " --force")
+    models_dir = os.path.join(path, "data", "models")
+    probe = models_dir
+    while not os.path.exists(probe):
+      probe = os.path.dirname(probe)
+    free = os.statvfs(probe).f_bavail * os.statvfs(probe).f_frsize
+    if free < r["download_bytes"] + 2**30:
+      fail(name + " needs " + str(r["download_bytes"]) + " bytes and " + str(free) + " are free on that disk")
+    if not r["download_bytes"] and all(n["installed"] for n in r["nodes"]):
+      fail(name + " is already installed")
+    print(json.dumps(start_job(path, JOB_RECIPE, path, name)))
 elif mode in ("status", "start", "stop", "autostart"):
   path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
   item = inspect(path)
@@ -3683,9 +3801,33 @@ def cmd_comfyui_job(args):
     print("  " + line)
 
 
+def cmd_comfyui_recipe(args):
+  extra = ([args.name] if args.name else [""]) + (["verify"] if getattr(args, "verify", False) else [])
+  answer = comfyui_action(args, "recipe", args.action, *extra)
+  if args.json:
+    print(json.dumps(answer))
+    return
+  cmd_comfyui_recipe_text(args, answer)
+
+
+def cmd_comfyui_recipe_text(args, answer):
+  if args.action == "install":
+    print(f"Installing {args.name} on {args.host}: models, nodes and the workflow; follow it: startdgx comfyui job {args.host} --dir {answer['path']}")
+  elif args.action == "list":
+    for r in answer["recipes"]:
+      print(f"{r['name']}  {size_text(r['total_bytes'])}, {r['models']} model(s)" + ("" if r["valid"] else "  INVALID: " + r.get("error", "")))
+  else:
+    r = answer["recipe"]
+    print(f"{args.name}: {r.get('title', '')}")
+    for m in r["models"]:
+      print(f"  {m.get('state', 'wanted'):8} {m['dest']}/{m['file']}  {size_text(m['size'])}" + (f"  ({m['source']['problem']})" if m.get("source") and not m["source"]["ok"] else ""))
+    for n in r["nodes"]:
+      print(f"  node     {n['id']}" + ("" if n.get("installed", True) else "  (to install)"))
+
+
 def cmd_comfyui(args):
   return {"discover": cmd_comfyui_list, "list": cmd_comfyui_list, "adopt": cmd_comfyui_adopt, "forget": cmd_comfyui_forget,
-          "plan": cmd_comfyui_plan, "install": cmd_comfyui_install, "update": cmd_comfyui_update, "job": cmd_comfyui_job,
+          "plan": cmd_comfyui_plan, "recipe": cmd_comfyui_recipe, "install": cmd_comfyui_install, "update": cmd_comfyui_update, "job": cmd_comfyui_job,
           "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act}[args.verb](args)
 
 
@@ -3807,7 +3949,7 @@ def build_parser():
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
   cp = sub.add_parser("comfyui", description="ComfyUI installs (dgx-comfyui) on a host: find existing ones and adopt them under startdgx, "
                       "list the ones it manages, or forget one. startdgx never changes or deletes an install's folder.")
-  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart|plan|install|update|job")
+  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart|plan|install|update|job|recipe")
   for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart", "plan", "install", "update", "job"):
     c = cv.add_parser(verb, description={"discover": "Read-only: the installs on HOST (the service's, a running one, the ones startdgx manages and a bounded search of the home folder). A ComfyUI that dgx-comfyui didn't install is listed as not managed.",
                                           "list": "The installs startdgx manages on HOST.",
@@ -3843,6 +3985,16 @@ def build_parser():
     c.add_argument("--json", action="store_true")
     c.add_argument("--timeout", type=int, default=60, help="seconds to wait for the host (default: 60)")
     c.set_defaults(fn=cmd_comfyui)
+  cr = cv.add_parser("recipe", description="ComfyUI workflows: a recipe is a workflow with its custom nodes and every model (destination, size, sha256). "
+                     "list and show are read-only; check also asks each missing file's source; install downloads what is missing and installs the nodes, as a job.")
+  cr.add_argument("action", choices=("list", "show", "check", "install"))
+  cr.add_argument("host")
+  cr.add_argument("name", nargs="?", help="the recipe (not for list)")
+  cr.add_argument("--dir", metavar="LABEL|DIR", help="which install: its label, or its folder; optional when HOST has just one managed")
+  cr.add_argument("--verify", action="store_true", help="with check: also hash every file on disk")
+  cr.add_argument("--json", action="store_true")
+  cr.add_argument("--timeout", type=int, default=300, help="seconds to wait for the host (default: 300)")
+  cr.set_defaults(fn=cmd_comfyui, verb="recipe")
   hp = sub.add_parser("hf", description="Hugging Face, read-only, from this computer: search the MLX affine 4-bit repos of known families.")
   hv = hp.add_subparsers(dest="verb", required=True, metavar="search")
   hs = hv.add_parser("search", description="List the top 50 mlx repos for QUERY that are affine 4-bit by their config.json, of a "

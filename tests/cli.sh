@@ -1670,6 +1670,15 @@ ds comfyui adopt $g --dir /media/demo/usb/dgx-comfyui --label usb >/dev/null
 ds comfyui update $g --dir usb >/dev/null; ok $? "demo update moves a clean checkout"
 dj 'd["state"] == "running"' comfyui job $g --dir usb --json
 ds comfyui forget $g --dir /home/demo/new >/dev/null; ds comfyui forget $g --dir /home/demo/code/dgx-comfyui >/dev/null; ds comfyui forget $g --dir /media/demo/usb/dgx-comfyui >/dev/null
+# recipes in demo mode: the first model of the Krea recipe is on disk; the MiniMax recipe needs a token
+ds comfyui adopt $g --dir /home/demo/dgx-comfyui --label main >/dev/null
+dj '[r["name"] for r in d["recipes"]] == ["image_krea2_turbo_t2i", "image_minimax_h3_image_t2i"]' comfyui recipe list $g --dir main --json
+dj '[m["state"] for m in d["recipe"]["models"]] == ["have", "missing", "missing", "missing"] and d["recipe"]["download_bytes"] == 7109291992' comfyui recipe check $g image_krea2_turbo_t2i --dir main --json
+ds comfyui recipe install $g image_minimax_h3_image_t2i --dir main 2>&1 | grep -q "gated: it needs HF_TOKEN"; ok $? "demo recipe install refuses a gated model"
+ds comfyui recipe install $g image_krea2_turbo_t2i --dir main >/dev/null; ok $? "demo recipe install starts a job"
+dj '[m["state"] for m in d["recipe"]["models"]] == ["have", "missing", "missing", "missing"]' comfyui recipe check $g image_krea2_turbo_t2i --dir main --json
+later comfyui recipe check $g image_krea2_turbo_t2i --dir main --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (all(m['state'] == 'have' for m in d['recipe']['models']) and d['recipe']['download_bytes'] == 0))"; ok $? "and the models are there once it has run"
+ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
 #@part comfyui
 # ComfyUI installs: the host script (discover, list, adopt, forget) runs for real against the fake home, through the fake ssh.
@@ -1737,6 +1746,16 @@ case "$*" in
   stop) echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
   install) [ ! -e "$PWD/FAIL-INSTALL" ] || { echo "Error: boom" >&2; exit 1; }; mkdir -p .state lib ComfyUI/.git; : >lib/jsonout.py; echo "installed in $PWD";;
   update) echo "ComfyUI updated in $PWD";;
+  "recipe list --json") echo '{"schema":1,"recipes":[{"name":"r1","valid":true,"title":"R1","description":"","models":1,"total_bytes":10,"nodes":0}]}';;
+  "recipe show r1 --json") echo '{"schema":1,"name":"","title":"R1","models":[{"file":"a.bin","dest":"loras","url":"u","size":10,"sha256":"0"}],"nodes":[],"flags":[],"total_bytes":10}';;
+  "recipe check "*" --json"|"recipe check "*" --verify --json") name=$3; have=0; [ ! -e "$PWD/data/models/loras/a.bin" ] || have=1
+    src='{"ok":true,"problem":"","detail":[]}'; [ ! -e "$PWD/GATED" ] || src='{"ok":false,"problem":"gated","detail":["HF_TOKEN","401"]}'; [ ! -e "$PWD/GONE" ] || src='{"ok":false,"problem":"gone","detail":["404"]}'
+    [ ! -e "$PWD/STALE" ] || echo '{"schema":1,"title":"S","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"size"}],"download_bytes":0}'
+    [ -e "$PWD/STALE" ] && exit 0
+    if [ "$name" = big ]; then echo '{"schema":1,"title":"Big","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":99999999999999,"state":"missing","source":{"ok":true,"problem":"","detail":[]}}],"download_bytes":99999999999999}'
+    elif [ $have = 1 ]; then echo '{"schema":1,"title":"R1","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"have"}],"download_bytes":0}'
+    else printf '{"schema":1,"title":"R1","nodes":[],"models":[{"file":"a.bin","dest":"loras","size":10,"state":"missing","source":%s}],"download_bytes":10}\n' "$src"; fi;;
+  "recipe install r1 --yes") mkdir -p data/models/loras; head -c 10 /dev/zero >data/models/loras/a.bin; echo "recipe r1 installed";;
   *) echo "Error: unknown $*" >&2; exit 2;;
 esac
 F
@@ -1871,6 +1890,30 @@ s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.1.0 --comfyui >/dev/n
 s comfyui job me@dgx --dir fresh --json | py 'any("ComfyUI updated in" in l for l in d["log"])'; ok $? "through the tool's own update"
 git -C "$home/dgx-comfyui" checkout -q -- . 2>/dev/null
 comfy_up; s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 >/dev/null 2>&1; ok $((!$?)) "update refuses while ComfyUI runs"; kill "$(cat "$tmp/comfy.pid")" 2>/dev/null
+
+# recipes (ComfyUI workflows): list, show and check read the install's own --json; install is a job, refused before it starts if it would fail
+s comfyui recipe list me@dgx --dir fresh --json | py 'd["recipes"][0]["name"]=="r1" and d["path"]=="'"$new"'"'; ok $? "recipe list reads the install's recipes"
+s comfyui recipe show me@dgx r1 --dir fresh --json | py 'd["recipe"]["title"]=="R1" and d["recipe"]["models"][0]["file"]=="a.bin"'; ok $? "recipe show reads one"
+s comfyui recipe check me@dgx r1 --dir fresh --json | py 'd["recipe"]["models"][0]["state"]=="missing" and d["recipe"]["download_bytes"]==10'; ok $? "recipe check reports what is missing"
+s comfyui recipe check me@dgx r1 --dir fresh | grep -q "missing .*loras/a.bin"; ok $? "and as text"
+s comfyui recipe install me@dgx r1 --dir fresh >/dev/null; ok $? "recipe install starts a job"
+s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="succeeded" and any("== startdgx: recipe r1" in l for l in d["log"]) and any("recipe r1 installed" in l for l in d["log"])'; ok $? "that runs the tool's recipe install --yes"
+present "$new/data/models/loras/a.bin"; ok $? "and the model is there"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "already installed"; ok $? "installing it again says so"
+touch "$new/GATED"; rm "$new/data/models/loras/a.bin"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "gated: it needs HF_TOKEN. startdgx never stores a token"; ok $? "a gated model is refused, naming the token and where it goes on the host"
+rm -f "$FAKE_HOST"/job-startdgx-comfyui-*; s comfyui recipe install me@dgx r1 --dir fresh >/dev/null 2>&1; ok $((!$?)) "and no job was started for it"
+rm "$new/GATED"; touch "$new/GONE"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "can't be fetched (gone)"; ok $? "a source that is gone is refused"
+rm "$new/GONE"; touch "$new/STALE"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "a.bin on disk doesn't match the recipe; startdgx leaves it alone"; ok $? "a file on disk that doesn't match is left alone, with the command to run"
+rm "$new/STALE"
+s comfyui recipe install me@dgx big --dir fresh 2>&1 | grep -q "needs 99999999999999 bytes"; ok $? "a recipe the disk can't hold is refused"
+s comfyui recipe install me@dgx 'r1;touch /tmp/pwned' --dir fresh >/dev/null 2>&1; ok $((!$?)) "a recipe name with shell characters is refused"
+s comfyui recipe list me@dgx --dir "$tmp/usb/dgx-comfyui" 2>&1 | grep -q "too old"; ok $? "an install too old to speak --json can't list recipes"
+touch "$FAKE_HOST/job-hold"; s comfyui recipe install me@dgx r1 --dir fresh >/dev/null 2>&1; rm "$FAKE_HOST/job-hold"
+s comfyui recipe install me@dgx r1 --dir fresh 2>&1 | grep -q "is running in .*; follow it with"; ok $? "recipe install is refused while a job runs"
+rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
 
 # the release the panel offers a move to
 git -C "$tmp/usb/dgx-comfyui" tag v0.0.5 2>/dev/null; git -C "$home/dgx-comfyui" tag -d v0.1.0 >/dev/null; git -C "$home/dgx-comfyui" tag v0.0.5
