@@ -1589,6 +1589,31 @@ ok $? "the entry's own defaults add nothing"
 ds tensorfold draft lfm2.5-24b-a2b --context 4096 --out "$tmp/tfc" >/dev/null 2>"$tmp/ctx.err"; ok $((!$?)) "a context the entry doesn't offer is refused"
 grep -q "offers context 8192, 16384, 32768" "$tmp/ctx.err"; ok $? "and the refusal lists what it offers"
 ds tensorfold draft odd-link --parallel 2 >/dev/null 2>&1; ok $((!$?)) "a choice on an entry that offers none is refused"
+# the record of what a machine was given, and "outdated" once the list has moved on
+rm -f "$tmp/state/startdgx-demo/tensorfold-added.json"
+ds tensorfold draft lfm2.5-24b-a2b --host $a --context 16384 --parallel 2 --id rec-lfm --out "$tmp/tfc2" >/dev/null
+python3 - "$tmp/state/startdgx-demo/tensorfold-added.json" "$a" <<'F'
+import json, sys
+r = json.load(open(sys.argv[1]))[sys.argv[2]]["rec-lfm"]
+sys.exit(not (r["entry"] == "lfm2.5-24b-a2b" and r["revision"] == "0f74678ad5062e607c5469c35151dc6fcbd966b6" and r["context"] == 16384 and r["parallel"] == 2 and r["input"] == "text"))
+F
+ok $? "tensorfold draft --host records the entry, commit and choices it gave the machine (the defaults for the rest)"
+dtf 'd["recipes"][0]["outdated"] is False' list --host $a --json
+ok $? "an entry still at the commit the machine got isn't outdated"
+python3 - "$tmp/state/startdgx-demo/tensorfold-added.json" "$a" <<'F'
+import json, sys
+d = json.load(open(sys.argv[1])); d[sys.argv[2]]["rec-lfm"]["revision"] = "a" * 40; json.dump(d, open(sys.argv[1], "w"))
+F
+dtf 'd["recipes"][0]["outdated"] is True and d["recipes"][0]["added"]["recipe_id"] == "rec-lfm" and d["recipes"][0]["added"]["context"] == 16384 and d["recipes"][1]["added"] is None' list --host $a --json
+ok $? "one the list has moved on from is outdated, with what the machine was given, and the others have nothing added"
+dtf 'all(r["added"] is None and r["outdated"] is False for r in d["recipes"])' list --json
+ok $? "and without a machine, nothing is marked"
+# an update may replace a recipe of yours that was measured or estimated; without --replace it is refused
+ds recipe add $a "$rdir/my-estimate-14b.toml" >/dev/null
+ds tensorfold draft lfm2.5-24b-a2b --host $a --id my-estimate-14b --out "$tmp/tfc2" >/dev/null 2>&1; ok $((!$?)) "a recipe with estimated numbers isn't replaced by a plain add"
+ds tensorfold draft lfm2.5-24b-a2b --host $a --id my-estimate-14b --replace --out "$tmp/tfc2" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['ok'] and d['replaces_draft'] is True))"; ok $? "but --replace does, for an update"
+ds recipe remove $a my-estimate-14b >/dev/null
+ds tensorfold draft lfm2.5-24b-a2b --host $a --id "$nem" --replace --out "$tmp/tfc2" >/dev/null 2>&1; ok $((!$?)) "--replace never takes a curated recipe"
 ds tensorfold draft qwen3.6-35b-a3b >/dev/null 2>&1; ok $((!$?)) "tensorfold draft refuses a format the runtime isn't pinned for"
 ds tensorfold draft odd-link >/dev/null 2>&1; ok $((!$?)) "and an entry with no pinned checkpoint"
 ds tensorfold draft mac-only >/dev/null 2>&1; ok $((!$?)) "and one the list has no Spark deployment for"

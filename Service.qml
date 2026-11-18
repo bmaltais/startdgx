@@ -163,6 +163,8 @@ Item {
     core.hfRows = null
     core.hfError = ""
     core.hfAsked = ""
+    core.tfList = null
+    core.tfError = ""
     if (!core.recipeBusy) core.draftRepo = ""
     root.card = "find"
   }

@@ -38,7 +38,7 @@ FocusScope {
   function pickSource(name) {
     card.source = name
     // Opening the list saves this look: what is new or changed since the last visit is marked for this one.
-    if (name === "tf" && card.dgx.tfList === null && !card.tfLoading) card.dgx.loadTf(true)
+    if (name === "tf" && card.dgx.tfList === null && !card.tfLoading) card.dgx.loadTf(true, card.host)
   }
 
   readonly property var dgx: card.svc.dgx
@@ -66,6 +66,15 @@ FocusScope {
   }
   // What was picked in each TensorFold row's choices (context, requests at once, input), by entry id, and the row whose choices are open.
   property var picked: ({})
+  // The row whose Update waits for its second click (a measured recipe loses its measurement).
+  property string confirming: ""
+  function update(row, st) {
+    const plan = Model.tfUpdatePlan(row, st)
+    if (plan.kind !== "update" || card.dgx.recipeBusy) return
+    if (plan.confirm && card.confirming !== row.id) { card.confirming = row.id; return }
+    card.confirming = ""
+    card.dgx.draftTensorfold(card.host, row, Model.tfAddedChoices(row), plan.confirm)
+  }
   property string customizing: ""
   function pick(id, key, value) {
     const next = Object.assign({}, card.picked)
@@ -85,7 +94,7 @@ FocusScope {
   }
 
   // A model just added changes what the rows say.
-  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) card.dgx.listRecipes(card.host)
+  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) { card.dgx.listRecipes(card.host); if (card.tf && !card.tfLoading) card.dgx.loadTf(false, card.host) }
 
   Component.onCompleted: {
     card.dgx.listRecipes(card.host)
@@ -513,10 +522,19 @@ FocusScope {
               Text {
                 visible: tfRow.st.state !== ""
                 textFormat: Text.PlainText
-                text: Model.findStateText(tfRow.st)
+                text: Model.tfStateText(tfRow.modelData, tfRow.st)
                 color: Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
+              }
+              Button {
+                visible: Model.tfUpdatePlan(tfRow.modelData, tfRow.st).kind === "update"
+                text: card.confirming === tfRow.modelData.id ? "Discard its measurement and update" : "Update"
+                bordered: true
+                fontSize: Style.font.bodySmall
+                opacity: card.dgx.recipeBusy ? 0.4 : 1
+                tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + " again from TensorFold's current version, with the choices it had" + (Model.tfUpdatePlan(tfRow.modelData, tfRow.st).confirm ? ". It was measured: the measurement is discarded and it has to be measured again" : "")
+                onClicked: card.update(tfRow.modelData, tfRow.st)
               }
               Button {
                 visible: tfRow.st.state === "unmeasured"
