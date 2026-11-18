@@ -237,9 +237,9 @@ test("comfyPages: a running install can be opened; a stopped one says to start i
 test("comfyPages: the facts, and what waits or fails", () => {
   const field = (pages, key) => pages.flatMap((p) => p.fields).find((f) => f.key === key)
   const info = M.comfyRow(install({}), {})
-  const pages = M.comfyPages({ host: "h", info: info, answer: answerOf({ update: { text: "v0.2.0 is out" } }, { comfy: { version: "v0.3.50", newer_release: "v0.3.60" } }), error: "", pending: "" })
+  const pages = M.comfyPages({ host: "h", info: info, answer: answerOf({ update: { from: "v0.1.0", to: "v0.2.0" }, pinned: "v0.2.0" }, { comfy: { version: "v0.3.50", newer_release: "v0.3.60" } }), error: "", pending: "" })
   assert.strictEqual(field(pages, "folder").hint, "/home/u/dgx-comfyui")
-  assert.strictEqual(field(pages, "tool").hint, "v0.1.0 · v0.2.0 is out")
+  assert.strictEqual(field(pages, "tool").hint, "v0.1.0 \u00b7 v0.1.0 \u2192 v0.2.0 is available")
   assert.strictEqual(field(pages, "comfy").hint, "v0.3.50 · v0.3.60 is out")
   assert.strictEqual(field(pages, "models").hint, "30.0 GiB \u00b7 80.0 GiB free")
   assert.strictEqual(field(M.comfyPages({ host: "h", info: info, answer: null, error: "", pending: "" }), "state").hint, "Reading…")
@@ -333,4 +333,63 @@ test("comfyCommand: install, and its row key on a machine", () => {
   assert.deepStrictEqual(M.comfyCommand("h", { kind: "install", path: "/a", label: "x" }), ["comfyui", "install", "h", "--dir", "/a", "--label", "x", "--timeout", "120"])
   assert.deepStrictEqual(M.comfyCommand("h", { kind: "install", path: "/a" }), ["comfyui", "install", "h", "--dir", "/a", "--timeout", "120"])
   assert.deepStrictEqual(M.keyAction("enter", { kind: "comfyinstall", host: "h" }, null, "", false, false, ""), { type: "installComfy", host: "h" })
+})
+
+const oldTool = (over) => install({ tool: Object.assign({ tag: "v0.0.5", commit: "abc", branch: "", dirty: false, unpushed: 0 }, over) })
+const offer = (over) => Object.assign({ update: { from: "v0.0.5", to: "v0.1.0" }, pinned: "v0.1.0", too_old: true, status: null }, over)
+
+test("comfyUpdatePlan: a clean checkout on an older release can update, and says what it does", () => {
+  const info = M.comfyRow(oldTool({}), {})
+  const plan = M.comfyUpdatePlan(info, offer({}), "")
+  assert.deepStrictEqual([plan.action, plan.target], ["update", "v0.1.0"])
+  assert.match(plan.hint, /v0\.0\.5 → v0\.1\.0\. It updates dgx-comfyui/)
+})
+
+test("comfyUpdatePlan: a branch, a changed or unpushed checkout is not moved: the git commands are given", () => {
+  for (const [tool, words] of [[{ tag: "", branch: "main" }, /on the branch main/], [{ dirty: true }, /uncommitted changes/], [{ unpushed: 2 }, /aren't pushed/]]) {
+    const info = M.comfyRow(oldTool(tool), {})
+    const plan = M.comfyUpdatePlan(info, offer({ update: null }), "")
+    assert.strictEqual(plan.action, "")
+    assert.match(plan.hint, words)
+    assert.match(plan.hint, /startdgx won't move it\. To move it yourself: git -C \/home\/u\/dgx-comfyui fetch --tags && git -C \/home\/u\/dgx-comfyui checkout v0\.1\.0$/)
+  }
+})
+
+test("comfyUpdatePlan: nothing to update, a job running, or running", () => {
+  const info = M.comfyRow(install({}), {})
+  assert.deepStrictEqual(M.comfyUpdatePlan(info, { update: null, pinned: "v0.1.0", too_old: false }, ""), { action: "", target: "", hint: "Up to date (v0.1.0)" })
+  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({}), {}), offer({}), "update").action, "", "a click waits")
+  assert.match(M.comfyUpdatePlan(M.comfyRow(oldTool({}), {}, { state: "running", log: [] }), offer({}), "").hint, /job is running/)
+  const running = M.comfyRow(oldTool({}), { comfyui: [{ path: "/home/u/dgx-comfyui", rss_mib: 1 }] })
+  assert.match(M.comfyUpdatePlan(running, offer({}), "").hint, /Stop it first/)
+  assert.strictEqual(M.comfyUpdatePlan(info, null, "").action, "", "not read yet")
+  // Too old and untagged moves to the pin.
+  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({ tag: "" }), {}), offer({ update: null }), "").target, "v0.1.0")
+})
+
+test("comfyUpdatePlan and comfyChange: the ComfyUI update has the same conditions", () => {
+  const info = M.comfyRow(oldTool({}), {})
+  const ans = offer({ status: { comfy: { version: "v1", newer_release: "v2" } } })
+  assert.strictEqual(M.comfyUpdatePlan(info, ans, "", true).action, "update-comfyui")
+  assert.strictEqual(M.comfyUpdatePlan(M.comfyRow(oldTool({ branch: "main", tag: "" }), {}), ans, "", true).action, "")
+  assert.deepStrictEqual(M.comfyChange("h", info, ans, "update", true), { type: "comfyToggle", host: "h", path: "/home/u/dgx-comfyui", kind: "update" })
+  assert.strictEqual(M.comfyChange("h", info, ans, "update-comfyui", true).kind, "update-comfyui")
+  assert.strictEqual(M.comfyChange("h", M.comfyRow(oldTool({ dirty: true }), {}), ans, "update", true), null)
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "update", path: "/a" }), ["comfyui", "update", "h", "--dir", "/a", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyCommand("h", { kind: "update-comfyui", path: "/a" }), ["comfyui", "update", "h", "--dir", "/a", "--comfyui", "--timeout", "120"])
+  assert.deepStrictEqual(M.comfyMarks("h", [{ kind: "update-comfyui", path: "/a" }], [], {}, 0).marks, { [M.comfyKey("h", "/a")]: "update" })
+})
+
+test("comfyPages: the About page offers Update only when there is something to update", () => {
+  const field = (pages, key) => pages.flatMap((p) => p.fields).find((f) => f.key === key)
+  const info = M.comfyRow(oldTool({}), {})
+  const old = M.comfyPages({ host: "h", info: info, answer: offer({}), error: "", pending: "" })
+  assert.strictEqual(field(old, "update").disabled, false)
+  const blocked = M.comfyPages({ host: "h", info: M.comfyRow(oldTool({ branch: "main", tag: "" }), {}), answer: offer({ update: null }), error: "", pending: "" })
+  assert.strictEqual(field(blocked, "update").disabled, true)
+  assert.match(field(blocked, "update").hint, /git -C/)
+  const current = M.comfyPages({ host: "h", info: M.comfyRow(install({}), {}), answer: { update: null, pinned: "v0.1.0", too_old: false, status: { comfy: {} } }, error: "", pending: "" })
+  assert.strictEqual(field(current, "update").disabled, true)
+  assert.strictEqual(field(current, "update").hint, "Up to date (v0.1.0)")
+  assert.strictEqual(field(current, "update-comfyui"), undefined)
 })

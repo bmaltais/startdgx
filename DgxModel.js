@@ -1520,7 +1520,8 @@ function comfyRow(install, status, job) {
   const work = job && job.state === "running" ? (install.installed === false ? "Installing" : "Updating") : ""
   if (work !== "") { state = "working"; note = lastLogLine(job) || work + "\u2026" }
   else if (job && job.state === "failed" && install.installed === false) { state = "failed"; note = "The install failed" + (lastLogLine(job) ? ": " + lastLogLine(job) : "") }
-  return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0 }
+  return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0,
+           tool: { tag: String(tool.tag || ""), branch: String(tool.branch || ""), dirty: !!tool.dirty, unpushed: Number(tool.unpushed) || 0 } }
 }
 
 // A machine's ComfyUI line under its name: "2 ComfyUI installs, one running", or "" for none.
@@ -1556,6 +1557,8 @@ function comfyCommand(host, job) {
   case "start": return ["comfyui", "start", host, "--dir", job.path, "--timeout", "120"]
   case "stop": return ["comfyui", "stop", host, "--dir", job.path, "--timeout", "120"]
   case "install": return ["comfyui", "install", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "120"])
+  case "update": return ["comfyui", "update", host, "--dir", job.path, "--timeout", "120"]
+  case "update-comfyui": return ["comfyui", "update", host, "--dir", job.path, "--comfyui", "--timeout", "120"]
   case "adopt": return ["comfyui", "adopt", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "60"])
   // `autostart on` runs it as a background service and starts it now; `off` removes the service, which stops it.
   case "autostart-on": return ["comfyui", "autostart", host, "on", "--dir", job.path, "--timeout", "120"]
@@ -1566,7 +1569,7 @@ function comfyCommand(host, job) {
 }
 
 // What a ComfyUI action shows on its row: the service switch starts or stops it, as Start and Stop do.
-function comfyMark(kind) { return kind === "autostart-on" ? "start" : kind === "autostart-off" ? "stop" : kind }
+function comfyMark(kind) { return kind === "autostart-on" ? "start" : kind === "autostart-off" ? "stop" : kind === "update-comfyui" ? "update" : kind }
 
 // The marks of a machine's ComfyUI actions, "host#comfy/path" -> start | stop | adopt | forget: the ones running or waiting (`jobs`,
 // [{ kind, path }]), and a start or stop that has finished until the status poll shows it took (the process takes seconds to
@@ -1642,8 +1645,14 @@ function comfyPages(c) {
     hint: "Runs ComfyUI as a service that starts when the machine boots. Turning it on starts it now; turning it off stops it." })
   const facts = []
   facts.push({ key: "folder", type: "info", label: "Folder", hint: info.path })
-  if (info.version) facts.push({ key: "tool", type: "info", label: "dgx-comfyui", hint: info.version + (c.answer && c.answer.update ? " · " + c.answer.update.text : "") })
-  if (st && st.comfy && st.comfy.version) facts.push({ key: "comfy", type: "info", label: "ComfyUI", hint: String(st.comfy.version) + (st.comfy.newer_release ? " · " + st.comfy.newer_release + " is out" : "") })
+  const up = comfyUpdatePlan(info, c.answer, c.pending)
+  if (info.version) facts.push({ key: "tool", type: "info", label: "dgx-comfyui", hint: info.version + (c.answer && c.answer.update ? " \u00b7 " + c.answer.update.from + " \u2192 " + c.answer.update.to + " is available" : "") })
+  if (up.target !== "" || up.hint !== "") facts.push({ key: "update", type: "action", label: "Update dgx-comfyui", button: "Update", disabled: up.action === "", hint: up.hint })
+  if (st && st.comfy && st.comfy.version) facts.push({ key: "comfy", type: "info", label: "ComfyUI", hint: String(st.comfy.version) + (st.comfy.newer_release ? " \u00b7 " + st.comfy.newer_release + " is out" : "") })
+  if (st && st.comfy && st.comfy.newer_release) {
+    const upc = comfyUpdatePlan(info, c.answer, c.pending, true)
+    facts.push({ key: "update-comfyui", type: "action", label: "Update ComfyUI", button: "Update", disabled: upc.action === "", hint: upc.action === "" ? upc.hint : st.comfy.newer_release + " is out. It updates ComfyUI and its nodes, and takes a few minutes." })
+  }
   if (st && Number(st.models_bytes) > 0) facts.push({ key: "models", type: "info", label: "Models", hint: sizeText(Number(st.models_bytes)) + (Number(st.disk_free_bytes) > 0 ? " · " + sizeText(Number(st.disk_free_bytes)) + " free" : "") })
   const manage = [{ key: "forget", type: "action", label: "Forget this install", button: "Forget…", danger: true, disabled: busy,
     hint: "startdgx stops managing it. The folder, its models and workflows stay as they are, and Find existing ComfyUI… can adopt it again." }]
@@ -1655,6 +1664,27 @@ function comfyValues(answer) {
   return { service: !!(st && st.service && st.service.enabled === "enabled") }
 }
 
+// What Update does for an install, and why not: { action: "update" | "", target, hint }. `answer` is `comfyui status` (its `update`
+// is { from, to } for a release older than the pin, `pinned` the release startdgx moves to, `too_old` for an install that can't
+// speak JSON). Only a clean checkout on a release tag moves (the CLI's rule): a branch may be one somebody works in, so startdgx
+// gives the git commands instead. `comfy` is the ComfyUI update, which has the same conditions.
+function comfyUpdatePlan(info, answer, pending, comfy) {
+  const none = function (hint) { return { action: "", target: "", hint: hint } }
+  if (!answer) return none("")
+  const pinned = String(answer.pinned || "")
+  const target = answer.update ? String(answer.update.to) : answer.too_old && pinned !== "" ? pinned : ""
+  if (!comfy && target === "") return none(info.version ? "Up to date (" + info.version + ")" : "")
+  const where = pinned !== "" ? pinned : target
+  const git = "git -C " + info.path + " fetch --tags && git -C " + info.path + " checkout " + where
+  if (info.state === "working" || String(pending || "") !== "") return { action: "", target: target, hint: "A job is running on it." }
+  if (info.state === "unfinished" || info.state === "missing" || info.state === "unsupported") return none("")
+  if (info.state === "running") return { action: "", target: target, hint: "Stop it first: an update changes what it runs." }
+  const t = info.tool || {}
+  const why = t.dirty ? "It has uncommitted changes." : t.unpushed > 0 ? "It has commits that aren't pushed." : t.branch ? "It is on the branch " + t.branch + ", which may be a checkout you work in." : ""
+  if (why !== "") return { action: "", target: target, hint: why + " startdgx won't move it. To move it yourself: " + git }
+  return { action: comfy ? "update-comfyui" : "update", target: target, hint: comfy ? "" : (answer.update ? answer.update.from + " \u2192 " + answer.update.to + ". " : "") + "It updates dgx-comfyui and runs its install again, which takes a few minutes. Your models and workflows stay." }
+}
+
 // What a click in an install's window asks for: an action for the service, or null.
 function comfyChange(host, info, answer, key, value) {
   switch (key) {
@@ -1664,6 +1694,10 @@ function comfyChange(host, info, answer, key, value) {
   }
   case "service": return { type: "comfyToggle", host: host, path: info.path, kind: value ? "autostart-on" : "autostart-off" }
   case "forget": return { type: "comfyForget", host: host, path: info.path }
+  case "update": case "update-comfyui": {
+    const plan = comfyUpdatePlan(info, answer, "", key === "update-comfyui")
+    return plan.action === "" ? null : { type: "comfyToggle", host: host, path: info.path, kind: plan.action }
+  }
   }
   return null
 }

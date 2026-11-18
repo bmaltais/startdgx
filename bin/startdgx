@@ -3119,7 +3119,7 @@ def demo_comfyui(args):
         if item.get("state") == "up":
           raise Error(f"ComfyUI in {item['path']} is running; stop it first")
         demo_comfyui_remember(item, job)
-        item.update(job={"since_ms": demo_now_ms(), "kind": "update"}, tool={**tool, "tag": ref, "branch": ""})
+        item.update(job={"since_ms": demo_now_ms(), "kind": "update"}, tool={**tool, "tag": ref, "branch": ""}, json_capable=True)
         answer = {"job": "startdgx-comfyui-demo", "path": item["path"], "log": "demo"}
         print(json.dumps(answer) if args.json else f"Updating ComfyUI in {item['path']} on {args.host} to {ref}")
         return
@@ -3127,7 +3127,7 @@ def demo_comfyui(args):
       if args.verb == "status":
         up = item.get("state") == "up"
         answer = {"install": {k: v for k, v in item.items() if k not in ("state", "rss_mib", "autostart", "job")}, "too_old": not item["json_capable"], "running_elsewhere": others,
-                  "job": job, "update": comfyui_update_offer(item["tool"]["tag"]),
+                  "job": job, "update": comfyui_update_offer(item["tool"]["tag"]), "pinned": COMFYUI_TAG,
                   "status": None if not item["json_capable"] else {
                     "schema": 1, "root": item["path"], "installed": True, "state": "up" if up else "stopped", "pid": 4242 if up else None,
                     "rss_mib": DEMO_COMFYUI_GIB * 1024 if up else None, "port": 8188, "bind": "0.0.0.0",
@@ -3738,6 +3738,8 @@ def comfyui_which(path):
 def cmd_comfyui_status(args):
   answer = comfyui_action(args, "status")
   answer["update"] = comfyui_update_offer(answer["install"].get("tool", {}).get("tag"))
+  # The release startdgx moves an install to: a checkout it won't move (a branch) gets the git commands for it.
+  answer["pinned"] = COMFYUI_TAG
   if args.json:
     print(json.dumps(answer))
     return

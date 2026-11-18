@@ -1645,6 +1645,7 @@ ds comfyui adopt $g --dir /home/demo/dgx-comfyui --label main >/dev/null; ds com
 dj '"comfyui" not in d' status $g
 dj 'd["status"]["state"] == "stopped" and not d["too_old"]' comfyui status $g --dir main --json
 dj 'd["too_old"] and d["status"] is None' comfyui status $g --dir usb --json
+dj 'd["pinned"] == "v0.1.0" and d["update"]["to"] == "v0.1.0"' comfyui status $g --dir usb --json
 ds comfyui start $g >/dev/null 2>&1; ok $((!$?)) "demo start with two managed installs and no --dir says which"
 ds comfyui start $g --dir main >/dev/null; ok $? "demo start runs an install"
 dj 'd["comfyui"] == [{"path": "/home/demo/dgx-comfyui", "rss_mib": 31744}]' status $g
@@ -1773,6 +1774,7 @@ rm -f "$tmp/usb/dgx-comfyui/lib/jsonout.py"
 s comfyui adopt me@dgx --dir "$home/dgx-comfyui" --label main >/dev/null
 s comfyui status me@dgx --json 2>&1 | grep -q "Several ComfyUI installs"; ok $? "with two managed installs, status without --dir says which are there"
 s comfyui status me@dgx --dir main --json | py 'd["install"]["label"]=="main" and d["status"]["state"]=="stopped" and d["too_old"] is False and d["running_elsewhere"]==[]'; ok $? "status reads the install's own status --json, found by label"
+s comfyui status me@dgx --dir main --json | py 'd["pinned"]=="v0.1.0"'; ok $? "status says the release startdgx moves an install to, for the panel's git commands"
 s comfyui status me@dgx --dir "$tmp/usb/dgx-comfyui" --json | py 'd["too_old"] is True and d["status"] is None'; ok $? "an install without lib/jsonout.py is too old, and its script isn't run for status"
 grep -q "dgx $tmp/usb/dgx-comfyui status" "$FAKE_HOST/calls" 2>/dev/null; ok $((!$?)) "(the script log has no status call for it)"
 s comfyui status me@dgx --dir /nowhere --json >/dev/null 2>&1; ok $((!$?)) "an unmanaged folder is refused"
