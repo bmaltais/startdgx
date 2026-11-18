@@ -1,14 +1,14 @@
 // StartDGX: DGX Spark machines and their models, from the Omarchy shell. This file owns the window, the
 // cards over it, the IPC entry points and the bar icon's status; DgxService.qml owns the machines and every
 // call to bin/startdgx; ManagerView.qml, AddMachineView.qml, UninstallView.qml, ForgetView.qml, AddModelView.qml,
-// AddRecipeView.qml, FindView.qml, RecipeRunView.qml, RemoveView.qml and SettingsCard.qml draw what is in it.
+// AddRecipeView.qml, RecipeRunView.qml, RemoveView.qml and SettingsCard.qml draw what is in it.
 //
 //   omarchy-shell io.github.bmaltais.startdgx open               toggle the manager
 //   omarchy-shell io.github.bmaltais.startdgx addMachine         the manager with its Add machine card
 //   omarchy-shell io.github.bmaltais.startdgx uninstall <host>   the manager with a machine's uninstall card
 //   omarchy-shell io.github.bmaltais.startdgx addModel <host>    the manager with a machine's model picker
 //   omarchy-shell io.github.bmaltais.startdgx addRecipe <host> [path]   the manager with a machine's Add recipe card
-//   omarchy-shell io.github.bmaltais.startdgx findModel <host> [query]   the manager with a machine's Find on Hugging Face card
+//   omarchy-shell io.github.bmaltais.startdgx findModel <host> [query]   the model picker with a Hugging Face search for it
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 //   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
 //   omarchy-shell io.github.bmaltais.startdgx settings <host> <model|""> <page|"">   a machine's settings window, or a model's, on a page
@@ -41,7 +41,7 @@ Item {
   property string card: ""
   // The path the Add recipe card opens with (IPC addRecipe's second argument).
   property string cardPath: ""
-  // The query the Find on Hugging Face card opens with and searches at once (IPC findModel's second argument).
+  // The query the model picker opens with and searches at once (IPC findModel's second argument).
   property string cardQuery: ""
   // The confirmation card ("recipeRun"): a measure or a setup of a recipe of yours, its recipe and context.
   property string cardMode: "measure"
@@ -75,7 +75,7 @@ Item {
   // Ends what the open card was asking before it goes.
   function dropCard() {
     if (root.card === "add") core.cancelDiscover()
-    if (root.card === "find") core.cancelHf()
+    if (root.card === "addModel") core.cancelHf()
     if (root.card === "findComfy") core.cancelComfyFind()
     if (root.card === "comfySettings") core.cancelComfyWindow()
     if (root.card === "installComfy") core.cancelComfyPlan()
@@ -149,17 +149,9 @@ Item {
     core.loadTf(false, host)
   }
 
-  function showAddModel(host) {
-    if (!core.hosts[host]) return
-    root.ensureManager()
-    root.cardHost = host
-    root.card = "addModel"
-    core.listRecipes(host)
-    // Which of the recipes came from TensorFold's list: those aren't offered a measuring run here.
-    core.loadTf(false, host)
-  }
-  // The Find on Hugging Face card: the search runs on this computer; the machine is only whose memory the rows are set against.
-  function showFind(host, query) {
+  // The model picker: the machine's catalog, with TensorFold's list (read now, which also saves this look so the next one marks what is new) and a
+  // Hugging Face search (`query` searches at once) under it. Both come from this computer; the machine is only whose memory the rows are set against.
+  function showAddModel(host, query) {
     if (!core.hosts[host]) return
     root.ensureManager()
     root.cardHost = host
@@ -167,10 +159,11 @@ Item {
     core.hfRows = null
     core.hfError = ""
     core.hfAsked = ""
-    core.tfList = null
     core.tfError = ""
     if (!core.recipeBusy) core.draftRepo = ""
-    root.card = "find"
+    root.card = "addModel"
+    core.listRecipes(host)
+    core.loadTf(true, host)
   }
   // The Install ComfyUI card: the folder to put it in, on a disk of the machine, checked as it is typed.
   function showInstallComfy(host) {
@@ -273,7 +266,6 @@ Item {
     case "uninstallNow": core.launch("uninstall", action.host, "", action.flags || []); root.close(); break
     case "addModel": root.showAddModel(action.host); break
     case "addRecipe": root.showAddRecipe(action.host, ""); break
-    case "findModel": root.showFind(action.host, ""); break
     case "findComfy": root.showFindComfy(action.host); break
     case "installComfy": root.showInstallComfy(action.host); break
     case "comfyInstallNow": core.comfyAct(action.host, "install", action.path, action.label || ""); root.closeCard(); break
@@ -320,7 +312,7 @@ Item {
     function uninstall(host: string): void { root.showUninstall(host) }
     function addModel(host: string): void { root.showAddModel(host) }
     function addRecipe(host: string, path: string): void { root.showAddRecipe(host, path) }
-    function findModel(host: string, query: string): void { root.showFind(host, query) }
+    function findModel(host: string, query: string): void { root.showAddModel(host, query) }
     function removeModel(host: string, model: string): void { root.showRemove(host, model) }
     function forget(host: string): void { root.showForget(host) }
     function settings(host: string, model: string, page: string): void { if (model !== "") root.showModelSettings(host, model, page); else root.showHostSettings(host, page) }
@@ -467,16 +459,15 @@ Item {
         active: root.card !== ""
         sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
-          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "find" ? findCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : root.card === "installComfy" ? installComfyCard : addCard
+          : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : root.card === "installComfy" ? installComfyCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : cardLoader.owner.card === "comfySettings" ? "comfy" : "model"; path: cardLoader.owner.cardModel; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
-      Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
+      Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }
-      Component { id: findCard; FindView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
       Component { id: installComfyCard; InstallComfyView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: comfyForgetCard; ComfyForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardModel } }
       Component { id: findComfyCard; FindComfyView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }

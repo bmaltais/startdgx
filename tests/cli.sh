@@ -1441,6 +1441,14 @@ drafts=$tmp/drafts
 draft() { STARTDGX_HF_BASE=$here/demo/hf s recipe draft --out "$drafts" "$@"; }
 dd() { local cond=$1; shift; draft "$@" --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
 out=$(draft $tf); ok $? "recipe draft writes a recipe"
+de="$tmp/drafts-est"; STARTDGX_HF_BASE=$here/demo/hf s recipe draft $tf --id est-demo --estimated --out "$de" --json >"$tmp/est.json"; ok $? "recipe draft --estimated writes a recipe"
+python3 - "$tmp/est.json" "$de/est-demo.toml" <<'F'
+import json, sys, tomllib
+d = json.load(open(sys.argv[1]))
+t = tomllib.load(open(sys.argv[2], "rb"))
+sys.exit(not (d["source"] == "estimated" and t["variant"][0]["source"] == "estimated" and d["placeholder_gib"] > 0 and "guess" in t["summary"]))
+F
+ok $? "--estimated makes the variant estimated, with a guess from the weights said in the summary"
 present "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml"; ok $? "named for the repo, owner dropped, slugified, with -tensorfold appended"
 python3 - "$drafts/qwen3.8-27b-mlx-4bit-tensorfold.toml" <<'F'
 import sys, tomllib
