@@ -3,10 +3,11 @@
 // A machine's model picker, over the manager: its catalog (`startdgx list HOST`), best first, each recipe with
 // whether it runs there (and why not), whether it is set up, what it takes and what it is. Set up starts the
 // setup on the machine (`use --detach`), closes the card and puts the cursor on the new row, which follows the
-// download. Under the machine's own recipes come the models it could have: TensorFold's published list for one DGX Spark and a search of
-// Hugging Face (both read from this computer, `tensorfold list`, `hf search`), each with an Add that puts the model in the list above at once,
-// without downloading it. From a file… (e) opens the card that adds a recipe of your own. Keyboard: Up/Down (or j/k) move, Enter sets up
-// the recipe under the cursor, / searches Hugging Face, r looks again, Esc closes.
+// download. Under the machine's own recipes come the models it could have: TensorFold's published list for one DGX Spark (read from this
+// computer, `tensorfold list`), each with an Add that puts the model in the list above at once, without downloading it. Each row has a small
+// mark for where it comes from (the engine, TensorFold, a file of yours). The box at the top filters both lists as you type.
+// From a file… (e) opens the card that adds a recipe of your own. Keyboard: Up/Down (or j/k) move, Enter sets up
+// the recipe under the cursor, / goes to the filter, r looks again, Esc closes.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -23,19 +24,19 @@ FocusScope {
   property string query: ""
   // A model just added: its row in the list above gets the cursor when the list has it.
   property string landing: ""
-  property bool showDerivatives: true
 
   readonly property var dgx: card.svc.dgx
   readonly property bool mine: card.dgx.listHost === card.host
   readonly property var hostState: card.dgx.shownState[card.host] || null
-  readonly property var offers: card.mine ? Model.recipeOffers(card.dgx.recipes, card.hostState ? card.hostState.status : null) : []
-  readonly property bool reading: card.dgx.listing && card.offers.length === 0
+  readonly property var allOffers: card.mine ? Model.recipeOffers(card.dgx.recipes, card.hostState ? card.hostState.status : null) : []
+  // What the box at the top keeps: the rows whose name, id, maker or origin hold every word typed.
+  property string filter: ""
+  readonly property var offers: Model.filterOffers(card.allOffers, card.filter, card.dgx.tfList)
+  readonly property bool reading: card.dgx.listing && card.allOffers.length === 0
   readonly property string failure: card.mine && !card.dgx.listing ? card.dgx.recipesError : ""
 
-  readonly property var tfOffers: Model.tfOffers(card.dgx.tfList, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null)
-  readonly property var hfRows: Model.hfShown(card.dgx.hfRows, card.showDerivatives).filter(function (r) { return card.stateOf(String(r.recipe_id || "")).state === "" })
-  function stateOf(recipeId) { return Model.findState(recipeId, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null) }
-  readonly property real ramGib: card.hostState && card.hostState.status ? Number(card.hostState.status.ram_total_gib) || 0 : 0
+  readonly property var tfAll: Model.tfOffers(card.dgx.tfList, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null)
+  readonly property var tfOffers: ({ rows: Model.filterTfRows(card.tfAll.rows, card.filter), blockedText: card.tfAll.blockedText })
   // The last add: its steps, warnings and any clash or validation error, as on the card this replaced.
   readonly property bool drafting: card.dgx.recipeHost === card.host && card.dgx.draftRepo !== ""
   readonly property string draftStep: card.dgx.draftStep !== "" ? card.dgx.draftStep : card.dgx.recipeStep
@@ -51,9 +52,7 @@ FocusScope {
     else card.land()
   }
   function addEntry(row) { if (!card.dgx.recipeBusy) card.dgx.draftTensorfold(card.host, row, null) }
-  function addRepo(repo) { if (!card.dgx.recipeBusy) card.dgx.draftRecipe(card.host, repo) }
-  function search() { if (!card.dgx.hfSearching && searchField.text.trim() !== "") card.dgx.searchHf(searchField.text) }
-  Component.onCompleted: { searchField.text = card.query; if (card.query !== "") card.search() }
+  Component.onCompleted: searchField.text = card.query
 
   function act(offer) {
     // A recipe of yours downloads what it names and runs it: a card shows the download and asks first.
@@ -127,12 +126,13 @@ FocusScope {
     TextField {
       id: searchField
       Layout.fillWidth: true
-      placeholderText: "Search Hugging Face for MLX 4-bit models: qwen, gemma, lfm…   ( / )"
+      placeholderText: "Filter the models: qwen, gemma, tensorfold, custom…   ( / )"
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
-      // Enter searches and goes no further: the card's own Enter sets up the recipe under the cursor.
-      Keys.onReturnPressed: event => { card.search(); event.accepted = true }
-      Keys.onEnterPressed: event => { card.search(); event.accepted = true }
+      onTextChanged: card.filter = searchField.text
+      // Enter goes back to the list (the card's own Enter sets up the recipe under the cursor).
+      Keys.onReturnPressed: event => { card.forceActiveFocus(); event.accepted = true }
+      Keys.onEnterPressed: event => { card.forceActiveFocus(); event.accepted = true }
       // Esc drops what was typed first, then closes the card.
       Keys.onEscapePressed: event => {
         if (searchField.text !== "") { searchField.text = ""; event.accepted = true }
@@ -195,9 +195,18 @@ FocusScope {
 
     Text {
       Layout.fillWidth: true
-      visible: card.mine && !card.dgx.listing && card.failure === "" && card.offers.length === 0
+      visible: card.mine && !card.dgx.listing && card.failure === "" && card.allOffers.length === 0
       wrapMode: Text.Wrap
       text: "The engine on this machine has no models in its catalog."
+      color: Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+    }
+    Text {
+      Layout.fillWidth: true
+      visible: card.filter.trim() !== "" && card.allOffers.length > 0 && card.offers.length === 0 && card.tfOffers.rows.length === 0
+      wrapMode: Text.Wrap
+      text: "No model matches \u201c" + card.filter.trim() + "\u201d."
       color: Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -221,7 +230,7 @@ FocusScope {
         onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
         boundsBehavior: Flickable.StopAtBounds
 
-        // The models this machine could have, under the ones it can run: TensorFold's list, then the Hugging Face search.
+        // The models this machine could have, under the ones it can run: TensorFold's list.
         footer: ColumnLayout {
           width: ListView.view.width
           spacing: Style.spacing.md
@@ -241,6 +250,7 @@ FocusScope {
               required property var modelData
               Layout.fillWidth: true
               name: tfEntry.modelData.name
+              origin: "tensorfold"
               mark: tfEntry.modelData.status
               facts: Model.tfRowText(tfEntry.modelData)
               busy: card.dgx.recipeBusy
@@ -257,59 +267,6 @@ FocusScope {
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
           }
-          RowLayout {
-            Layout.topMargin: Style.spacing.lg
-            Layout.fillWidth: true
-            visible: card.dgx.hfRows !== null || card.dgx.hfSearching || card.dgx.hfError !== ""
-            Text {
-              Layout.fillWidth: true
-              text: card.dgx.hfSearching ? "SEARCHING HUGGING FACE…" : card.dgx.hfError !== "" ? "THE SEARCH DID NOT RUN" : "FROM HUGGING FACE · " + card.hfRows.length + (card.hfRows.length === 1 ? " MODEL" : " MODELS")
-              color: card.dgx.hfError !== "" ? Color.urgent : Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              font.letterSpacing: 1
-            }
-            TextLink {
-              visible: Model.hfToggleText(card.dgx.hfRows, card.showDerivatives) !== ""
-              text: Model.hfToggleText(card.dgx.hfRows, card.showDerivatives)
-              tooltip: "Repos labelled abliterated or uncensored from their name or tags; the others are not touched"
-              onClicked: card.showDerivatives = !card.showDerivatives
-            }
-          }
-          Text {
-            Layout.fillWidth: true
-            visible: card.dgx.hfError !== ""
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            text: card.dgx.hfError
-            color: Color.urgent
-            font.family: Style.font.family
-            font.pixelSize: Style.font.bodySmall
-          }
-          Text {
-            Layout.fillWidth: true
-            visible: card.dgx.hfRows !== null && card.dgx.hfError === "" && !card.dgx.hfSearching && card.hfRows.length === 0
-            wrapMode: Text.Wrap
-            text: "Nothing new: no MLX 4-bit repo of a known family matched, or what matched is in the list already."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.bodySmall
-          }
-          Repeater {
-            model: card.hfRows
-            delegate: FindRow {
-              id: hfEntry
-              required property var modelData
-              Layout.fillWidth: true
-              name: hfEntry.modelData.repo
-              mark: Model.hfLabel(hfEntry.modelData)
-              facts: Model.hfRowText(hfEntry.modelData)
-              note: Model.hfMemoryLine(hfEntry.modelData, card.ramGib)
-              busy: card.dgx.recipeBusy
-              tooltip: "Add " + hfEntry.modelData.repo + " to " + Model.hostName(card.host) + "'s list. Its memory is a guess from the size of its files; nothing is downloaded until you set it up"
-              onAddRequested: card.addRepo(hfEntry.modelData.repo)
-            }
-          }
         }
 
         delegate: Rectangle {
@@ -322,6 +279,7 @@ FocusScope {
           readonly property bool removable: Model.isUserRecipe(recipeRow.r) && recipeRow.r.installed !== true
           // A recipe added from TensorFold's list is set up and run as it is: measuring is in its settings, not on its row.
           readonly property bool fromList: Model.tfAddedRow(card.dgx.tfList, recipeRow.r.id) !== null
+          readonly property string origin: Model.recipeOrigin(recipeRow.r, card.dgx.tfList)
           readonly property var measureCtx: recipeRow.fromList ? null : Model.pickerMeasureCtx(recipeRow.r)
           readonly property string facts: Model.recipeFacts(recipeRow.r)
           readonly property string marks: Model.recipeMarks(recipeRow.r).join(" · ")
@@ -367,6 +325,10 @@ FocusScope {
                   font.pixelSize: Style.font.body
                   font.bold: true
                   elide: Text.ElideRight
+                }
+                OriginIcon {
+                  Layout.alignment: Qt.AlignVCenter
+                  origin: recipeRow.origin
                 }
                 // Yours, and where a user recipe's numbers come from when they aren't measured.
                 Text {

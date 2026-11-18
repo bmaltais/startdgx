@@ -100,13 +100,7 @@ Item {
   property string draftError: ""
   property var draftWarnings: []
 
-  // The Find on Hugging Face card (`hf search --json`, run on this computer): the rows of the last search, why it failed, and the query
-  // it was asked ("" before the first). A search touches no machine.
-  property var hfRows: null
-  property string hfError: ""
-  property string hfAsked: ""
-  readonly property bool hfSearching: hfQuery.busy
-  // TensorFold's list on the same card (`tensorfold list --json`, also from this computer): Model.parseTfList's answer, why it failed.
+  // TensorFold's list in the model picker (`tensorfold list --json`, also from this computer): Model.parseTfList's answer, why it failed.
   property var tfList: null
   property string tfError: ""
   property int tfCount: 0
@@ -482,8 +476,6 @@ Item {
   }
   property string recipePathAsked: ""
 
-  // Whether the last draft was from TensorFold's list (else Hugging Face's).
-  property bool draftFromList: false
   function finishRecipe(code, out, err, verb) {
     const r = code === 0 ? Model.parseRecipeResult(out) : null
     if (!r) {
@@ -501,7 +493,7 @@ Item {
       // The add is the person's say-so for an estimate from TensorFold's list: confirm it, so the machine counts the model as fitting.
       if (service.draftSource === "estimated" && r.id === service.draftId) Qt.callLater(function () { service.confirmRecipe(service.recipeHost, r.id) })
       // TensorFold's list says what each machine was given: read it again, for the rows and for the recipe's window.
-      if (service.draftFromList) service.loadTf(false, service.recipeHost)
+      service.loadTf(false, service.recipeHost)
     }
   }
 
@@ -553,11 +545,9 @@ Item {
     recipeConfirmProc.running = true
   }
 
-  // Drafts `repo` for `host` and adds it through the Add recipe path (check, then add): one action. A write: closing the card
-  // doesn't end it.
-  function draftRecipe(host, repo) { service.draftFromList = false; service.draftWith(host, repo, Model.draftCommand(host, repo)) }
-  // The same for an entry of TensorFold's list: its CLI step names the entry, the rest is the Add recipe path.
-  function draftTensorfold(host, row, picked, replace) { service.draftFromList = true; service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings, replace)) }
+  // Drafts an entry of TensorFold's list for `host` and adds it through the Add recipe path (check, then add): one action. A write: closing
+  // the card doesn't end it. Its CLI step names the entry, the rest is the Add recipe path.
+  function draftTensorfold(host, row, picked, replace) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings, replace)) }
   function draftWith(host, label, command) {
     if (service.recipeBusy) return
     service.draftRepo = label
@@ -573,12 +563,7 @@ Item {
     draftProc.running = true
   }
 
-  function searchHf(query) {
-    service.hfAsked = query.trim()
-    service.hfError = ""
-    hfQuery.ask(service.hfAsked, [service.script].concat(Model.hfSearchCommand(query)))
-  }
-  function cancelHf() { hfQuery.cancel(); tfQuery.cancel() }
+  function cancelPicker() { tfQuery.cancel() }
   // Reads TensorFold's list; `update` also saves this look, so the next visit says what is new or changed since (the marks in this answer
   // are against the look saved before).
   function loadTf(update, host) {
@@ -1010,16 +995,6 @@ Item {
       const list = code === 0 ? Model.parseTfList(out) : null
       if (list) service.tfList = list
       else service.tfError = code === 0 ? "TensorFold's answer could not be read" : Model.errorLine(err, "The list did not load")
-    }
-  }
-
-  Query {
-    id: hfQuery
-    onAnswered: function (key, code, out, err) {
-      if (key !== service.hfAsked) return
-      const rows = code === 0 ? Model.parseHfRows(out) : null
-      if (rows) service.hfRows = rows
-      else service.hfError = code === 0 ? "Hugging Face's answer could not be read" : Model.errorLine(err, "The search did not run")
     }
   }
 

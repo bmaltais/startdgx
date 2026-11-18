@@ -1049,16 +1049,17 @@ function recipeOffers(list, status) {
   const offers = (Array.isArray(list) ? list : []).map(function (r) {
     const entry = models[r.id]
     const best = r.best === true
-    if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best, rank: entry.unit === "installing" ? 2 : 3 }
-    if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best, rank: 3 }
-    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best, rank: 4 }
+    if (entry) return { recipe: r, action: null, text: entry.unit === "installing" ? "Being set up" : "On this machine", best: best }
+    if (r.installed === true) return { recipe: r, action: null, text: "On this machine", best: best }
+    if (r.available !== true || recipeSource(r) === "drafted") return { recipe: r, action: null, text: String(r.reason || "") || (recipeSource(r) === "drafted" ? DRAFTED_TEXT : "Can't run on this machine"), best: best }
     // A recipe of yours downloads what it names and runs it: the engine wants --yes, which the panel sends only after the
     // person has seen the download (its dry run, which needs the context). Without one there is nothing to show.
-    if (isUserRecipe(r) && !(Number(r.context) > 0)) return { recipe: r, action: null, text: "Its context is unknown, so its download can't be shown yet", best: best, rank: 4 }
-    return { recipe: r, action: "use", confirm: isUserRecipe(r), text: best ? "Recommended for this machine" : "", best: best, rank: best ? 0 : 1 }
+    if (isUserRecipe(r) && !(Number(r.context) > 0)) return { recipe: r, action: null, text: "Its context is unknown, so its download can't be shown yet", best: best }
+    return { recipe: r, action: "use", confirm: isUserRecipe(r), text: best ? "Recommended for this machine" : "", best: best }
   })
   const label = function (o) { return String(o.recipe.name || o.recipe.id) }
-  offers.sort(function (a, b) { return a.rank - b.rank || label(a).localeCompare(label(b)) || a.recipe.id.localeCompare(b.recipe.id) })
+  // By name: each row says where it stands (set up, on this machine, can't run), so the list is not grouped by that.
+  offers.sort(function (a, b) { return label(a).localeCompare(label(b), undefined, { sensitivity: "base", numeric: true }) || a.recipe.id.localeCompare(b.recipe.id) })
   return offers.map(function (o) { return { recipe: o.recipe, action: o.action, confirm: o.confirm === true, text: o.text, best: o.best } })
 }
 
@@ -1087,6 +1088,35 @@ function recipeMarks(r) {
   if (s === "estimated") marks.push("estimated")
   else if (s === "drafted") marks.push("drafted, not yet fitting")
   return marks
+}
+
+// Where a recipe in the picker comes from: the engine's own ("omarchy"), TensorFold's list ("tensorfold": added from it, which
+// the saved record of this machine says), or yours ("custom": a file you added). `tf` is the parsed TensorFold list or null.
+function recipeOrigin(r, tf) {
+  if (!isUserRecipe(r)) return "omarchy"
+  return tfAddedRow(tf, r.id) ? "tensorfold" : "custom"
+}
+var ORIGIN_WORDS = { omarchy: "Omarchy local AI", tensorfold: "TensorFold", custom: "Custom" }
+function originWords(origin) { return ORIGIN_WORDS[origin] || "" }
+
+// The picker's search box filters its rows: every word typed must be somewhere in a row's text, whatever the case.
+function pickerWords(text) { return String(text || "").toLowerCase().split(/\s+/).filter(function (w) { return w !== "" }) }
+function pickerMatches(haystack, words) {
+  const h = String(haystack).toLowerCase()
+  return words.every(function (w) { return h.indexOf(w) >= 0 })
+}
+function filterOffers(offers, text, tf) {
+  const words = pickerWords(text)
+  if (words.length === 0) return offers
+  return offers.filter(function (o) {
+    const r = o.recipe
+    return pickerMatches([r.name, r.id, r.vendor, originWords(recipeOrigin(r, tf))].join(" "), words)
+  })
+}
+function filterTfRows(rows, text) {
+  const words = pickerWords(text)
+  if (words.length === 0) return rows
+  return rows.filter(function (r) { return pickerMatches([r.name, r.id, r.format, ORIGIN_WORDS.tensorfold].join(" "), words) })
 }
 
 function userRecipes(list) { return (Array.isArray(list) ? list : []).filter(isUserRecipe) }
@@ -1422,69 +1452,10 @@ function notifyCommand(alert) {
   return ["notify-send", "--app-name=StartDGX", "--urgency=critical", "--", String(alert.title), body]
 }
 
-// ---- Find on Hugging Face ----------------------------------------------------------------------------------
-// `startdgx hf search --json` rows: { repo, params, size_bytes, license, base_model, label }. The card states facts and
-// never says a model fits: no number in a recipe comes from a guess (docs/adr/0001).
-
-function parseHfRows(text) {
-  const parsed = parseJson(text)
-  if (!Array.isArray(parsed)) return null
-  for (let i = 0; i < parsed.length; i++) {
-    if (!isPlainObject(parsed[i]) || typeof parsed[i].repo !== "string" || parsed[i].repo === "") return null
-  }
-  return parsed
-}
-
-// The CLI's arguments for a query, after `--` so a query that starts with - is a query.
-function hfSearchCommand(query) {
-  return ["hf", "search", "--json", "--", String(query).trim()]
-}
-
-// "abliterated" or "uncensored" on a derivative, "" on the rest.
-function hfLabel(row) { return row && typeof row.label === "string" ? row.label : "" }
-
-// The rows to show: all of them, or without the labelled ones.
-function hfShown(rows, showDerivatives) {
-  return (Array.isArray(rows) ? rows : []).filter(function (r) { return showDerivatives || hfLabel(r) === "" })
-}
-
-function hfDerivativeCount(rows) {
-  return (Array.isArray(rows) ? rows : []).reduce(function (n, r) { return n + (hfLabel(r) !== "" ? 1 : 0) }, 0)
-}
-
-// The toggle's words; "" when no row is labelled, so there is nothing to toggle.
-function hfToggleText(rows, showDerivatives) {
-  const n = hfDerivativeCount(rows)
-  return n === 0 ? "" : (showDerivatives ? "Hide" : "Show") + " abliterated and uncensored (" + n + ")"
-}
-
-// Parameters, license and base model, as facts; nothing about memory.
-function hfRowText(row) {
-  const parts = []
-  const params = Number(row.params) || 0
-  if (params > 0) parts.push((params / 1e9).toFixed(1) + "B")
-  parts.push(row.license ? String(row.license) : "license unknown")
-  if (row.base_model) parts.push("from " + row.base_model)
-  return parts.join(" · ")
-}
-
-// "weights 15.4 GiB; this host has 128 GiB": the two numbers, no verdict. `ramGib` is 0 when no host is known.
-function hfMemoryLine(row, ramGib) {
-  const bytes = Number(row.size_bytes) || 0
-  const weights = bytes > 0 ? "weights " + sizeText(bytes) : "weights size unknown"
-  return (Number(ramGib) || 0) > 0 ? weights + "; this host has " + Math.round(ramGib) + " GiB" : weights
-}
-
 // ---- Draft recipe on a result -------------------------------------------------------------------------------
-// One action puts a repo on a machine: `recipe draft` writes the file (asked with --host, so an id the machine already has is
+// One action puts a model on a machine: `recipe draft` writes the file (asked with --host, so an id the machine already has is
 // refused before anything is written), then the Add recipe path (`recipe add`) validates and adds it. Never a fit verdict:
 // the variant is drafted until a measuring run (docs/adr/0001).
-
-// The CLI's arguments to draft `repo` for `host`, the repo after `--`.
-function draftCommand(host, repo) {
-  // --estimated: the add is the person's say-so for a guess from the size of the files, so the model can be set up without a measuring run.
-  return ["recipe", "draft", "--host", host, "--json", "--estimated", "--", String(repo)]
-}
 
 // `recipe draft --json`: { id, path, warnings }, or null when it isn't a successful draft. Failures are `Error:` on stderr.
 function parseDraftResult(text) {
