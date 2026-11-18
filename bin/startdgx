@@ -402,12 +402,16 @@ ENGINE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-dgx\.(\d+)$")
 MANIFEST_MARK = "#manifest"
 MEMORY_MARK = "#memory"
 COMFYUI_MARK = "#comfyui"
-# The managed ComfyUI installs that are running, and what each holds: one "KiB<TAB>path" line apiece. It reads the records
+# The managed ComfyUI installs that are running, and what each holds and where it listens (read off its command line's
+# --port and --listen): one "KiB<TAB>port<TAB>bind<TAB>path" line apiece. It reads the records
 # and each install's pid file, nothing else, so a poll costs a few file reads (the real status call is comfyui status).
 COMFYUI_RSS = (f"f=$HOME/{COMFYUI_RECORDS}; if [ -f \"$f\" ]; then sed -n 's/^ *\"path\": *\"\\(.*\\)\",*$/\\1/p' \"$f\" | "
                "while IFS= read -r p; do pid=$(cat \"$p/.state/comfyui.pid\" 2>/dev/null); "
-               "if [ -n \"$pid\" ] && tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null | grep -q main.py; then "
-               "printf '%s\\t%s\\n' \"$(sed -n 's/^VmRSS:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$pid/status)\" \"$p\"; fi; done; fi;")
+               "c=$([ -n \"$pid\" ] && tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null); "
+               "case \"$c\" in *main.py*) "
+               "printf '%s\\t%s\\t%s\\t%s\\n' \"$(sed -n 's/^VmRSS:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$pid/status)\" "
+               "\"$(printf '%s' \"$c\" | sed -n 's/.*--port \\([0-9][0-9]*\\).*/\\1/p')\" "
+               "\"$(printf '%s' \"$c\" | sed -n 's/.*--listen \\([^ ]*\\).*/\\1/p')\" \"$p\";; esac; done; fi;")
 
 
 def engine_update(host_tag, pinned=None):
@@ -443,9 +447,10 @@ def cmd_status(args):
     extra["engine_update"] = update
   if kib:
     extra["ram_available_gib"] = round(int(kib[0]) / 1048576, 1)
-  running = [line.split("\t", 1) for line in comfy.splitlines() if "\t" in line]
+  running = [line.split("\t", 3) for line in comfy.splitlines() if line.count("\t") >= 3]
   if running:
-    extra["comfyui"] = [{"path": path, "rss_mib": round(int(rss) / 1024)} for rss, path in running if rss.isdigit()]
+    extra["comfyui"] = [{"path": path, "rss_mib": round(int(rss) / 1024), "port": int(port) if port.isdigit() else None, "bind": bind}
+                        for rss, port, bind, path in running if rss.isdigit()]
   if extra and isinstance(document, dict):
     sys.stdout.write(json.dumps({**document, **extra}) + "\n")
   else:
@@ -2485,7 +2490,7 @@ def demo_status(args):
              for row in status["models"].values() if row["unit"] in ("active", "activating"))
   held += sum(DEMO_COMFYUI_GIB for i in comfyui if i["managed"] and i.get("state") == "up")
   available = round(max(0.0, status["ram_total_gib"] - held - 14), 1)
-  running = [{"path": i["path"], "rss_mib": DEMO_COMFYUI_GIB * 1024} for i in comfyui if i["managed"] and i.get("state") == "up"]
+  running = [{"path": i["path"], "rss_mib": DEMO_COMFYUI_GIB * 1024, "port": 8188, "bind": "0.0.0.0"} for i in comfyui if i["managed"] and i.get("state") == "up"]
   print(json.dumps({**status, "ram_available_gib": available, **({"comfyui": running} if running else {}),
                     "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
 

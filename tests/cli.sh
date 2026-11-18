@@ -1648,7 +1648,7 @@ dj 'd["too_old"] and d["status"] is None' comfyui status $g --dir usb --json
 dj 'd["pinned"] == "v0.1.0" and d["update"]["to"] == "v0.1.0"' comfyui status $g --dir usb --json
 ds comfyui start $g >/dev/null 2>&1; ok $((!$?)) "demo start with two managed installs and no --dir says which"
 ds comfyui start $g --dir main >/dev/null; ok $? "demo start runs an install"
-dj 'd["comfyui"] == [{"path": "/home/demo/dgx-comfyui", "rss_mib": 31744}]' status $g
+dj 'd["comfyui"] == [{"path": "/home/demo/dgx-comfyui", "rss_mib": 31744, "port": 8188, "bind": "0.0.0.0"}]' status $g
 dj 'd["ram_available_gib"] < 60' status $g
 ds comfyui start $g --dir usb 2>&1 | grep -q "is running; stop it first"; ok $? "demo start of a second install is refused while the first runs"
 ds comfyui autostart $g --dir usb off >/dev/null 2>&1; ok $((!$?)) "demo autostart off for an install that isn't set to start at boot is refused"
@@ -1979,7 +1979,7 @@ fi
 mkdir -p "$home/.local/share/omarchy-local-ai"; printf '#!/bin/sh\necho "{\\"models\\":{}}"\n' >"$home/.local/share/omarchy-local-ai/omarchy-local-ai"; chmod +x "$home/.local/share/omarchy-local-ai/omarchy-local-ai"
 s status me@dgx | py '"comfyui" not in d'; ok $? "status has no comfyui key while none runs"
 comfy_up; cp "$tmp/comfy.pid" "$home/dgx-comfyui/.state/comfyui.pid"
-s status me@dgx | py 'len(d["comfyui"])==1 and d["comfyui"][0]["path"]=="'"$home"'/dgx-comfyui" and d["comfyui"][0]["rss_mib"]>0'; ok $? "status carries a running ComfyUI's path and memory"
+s status me@dgx | py 'len(d["comfyui"])==1 and d["comfyui"][0]["path"]=="'"$home"'/dgx-comfyui" and d["comfyui"][0]["rss_mib"]>0 and d["comfyui"][0]["port"]>0 and d["comfyui"][0]["bind"]'; ok $? "status carries a running ComfyUI's path, memory and where it listens"
 kill "$(cat "$tmp/comfy.pid")" 2>/dev/null
 #@part end
 echo "1..$n"; exit $bad

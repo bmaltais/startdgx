@@ -44,7 +44,7 @@ ColumnLayout {
     return status && status.models && status.models[id] ? status.models[id] : ({ recipe: id, unit: "inactive" })
   }
   // One row per install: what `list` knows of it (its folder, version) and what the status poll saw (running, memory).
-  readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null, section.comfyJobs[Model.comfyKey(section.host, i.path)]) })
+  readonly property var comfyRows: section.comfy.map(function (i) { return Model.comfyRow(i, section.hostState ? section.hostState.status : null, section.comfyJobs[Model.comfyKey(section.host, i.path)], section.host) })
   // The ComfyUI rows are made per folder and kept across polls, like the models' (a new list would rebuild them every poll, and
   // the list would jump), so the folders are only replaced when they change.
   property var comfyPaths: []
@@ -293,6 +293,10 @@ ColumnLayout {
       onSettingsRequested: {
         section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
         section.actionRequested({ type: "comfySettings", host: section.host, path: comfyRow.modelData })
+      }
+      onOpenRequested: {
+        section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))
+        section.actionRequested({ type: "comfyOpen", url: comfyRow.info.url })
       }
       onToggleRequested: {
         section.selectRequested(Model.comfyKey(section.host, comfyRow.modelData))

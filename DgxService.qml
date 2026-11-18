@@ -272,6 +272,12 @@ Item {
     service.comfyStatusError = ""
     comfyStatusQuery.ask(key, [service.script, "comfyui", "status", host, "--dir", path, "--json", "--timeout", "90"])
   }
+  // The row's Open button: ask the install where it listens, then open it as a web app.
+  function comfyOpenFor(host, path) {
+    service.error = ""
+    service.notice = "Opening ComfyUI\u2026"
+    comfyOpenQuery.ask(host + "\n" + path, [service.script, "comfyui", "status", host, "--dir", path, "--json", "--timeout", "30"])
+  }
   function cancelComfyStatus() { comfyStatusQuery.cancel() }
   function comfyRead(host, installs) {
     if (!installs) return
@@ -743,6 +749,16 @@ Item {
     }
   }
 
+  Query {
+    id: comfyOpenQuery
+    onAnswered: function (key, code, out, err) {
+      const host = key.split("\n")[0]
+      const answer = code === 0 ? Model.parseComfyStatus(out) : null
+      const url = Model.comfyUrl(host, answer && answer.status ? answer.status : null)
+      if (url !== "") { service.notice = ""; Quickshell.execDetached(Model.webappCommand(url)) }
+      else service.error = code !== 0 ? Model.errorLine(err, "The machine didn't say") : Model.comfyOpenProblem(answer)
+    }
+  }
   Query {
     id: comfyStatusQuery
     onAnswered: function (key, code, out, err) {

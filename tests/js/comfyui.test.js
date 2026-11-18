@@ -210,8 +210,8 @@ test("parseComfyStatus: the install's answer, or null", () => {
 })
 
 test("comfyUrl: only where another machine can reach it", () => {
-  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "0.0.0.0" }), "http://gx10:8188")
-  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "100.64.0.2" }), "http://gx10:8188")
+  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "0.0.0.0" }), "http://gx10:8188/")
+  assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "100.64.0.2" }), "http://gx10:8188/")
   assert.strictEqual(M.comfyUrl("me@gx10", { port: 8188, bind: "127.0.0.1" }), "")
   assert.strictEqual(M.comfyUrl("me@gx10", { bind: "0.0.0.0" }), "")
   assert.strictEqual(M.comfyUrl("me@gx10", null), "")
@@ -224,7 +224,7 @@ test("comfyPages: a running install can be opened; a stopped one says to start i
   assert.deepStrictEqual(up.map((p) => p.title), ["General", "About", "Manage"])
   assert.strictEqual(field(up, "state").hint, "Running · 6 GiB · port 8188")
   assert.strictEqual(field(up, "open").disabled, false)
-  assert.strictEqual(field(up, "open").hint, "http://gx10:8188")
+  assert.strictEqual(field(up, "open").hint, "http://gx10:8188/")
   const down = M.comfyPages({ host: "me@gx10", info: M.comfyRow(install({}), {}), answer: answerOf({}), error: "", pending: "" })
   assert.strictEqual(field(down, "open").disabled, true)
   assert.strictEqual(field(down, "open").hint, "Start it first.")
@@ -261,7 +261,7 @@ test("comfyValues and comfyChange: the switch follows the service; a click asks 
   const info = M.comfyRow(install({}), {})
   assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "service", true), { type: "comfyToggle", host: "me@gx10", path: "/home/u/dgx-comfyui", kind: "autostart-on" })
   assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "service", false).kind, "autostart-off")
-  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "open", true), { type: "comfyOpen", url: "http://gx10:8188" })
+  assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "open", true), { type: "comfyOpen", url: "http://gx10:8188/" })
   assert.strictEqual(M.comfyChange("me@gx10", info, answerOf({}, { bind: "127.0.0.1" }), "open", true), null)
   assert.deepStrictEqual(M.comfyChange("me@gx10", info, answerOf({}), "forget", true), { type: "comfyForget", host: "me@gx10", path: "/home/u/dgx-comfyui" })
   assert.strictEqual(M.comfyChange("me@gx10", info, answerOf({}), "nope", true), null)
@@ -492,4 +492,28 @@ test("comfyPages: the Update buttons are on Manage with Forget; About only says 
   const keys = (title) => pages.find((p) => p.title === title).fields.map((f) => f.key)
   assert.deepStrictEqual(keys("Manage"), ["update", "update-comfyui", "forget"])
   assert.ok(M.comfyPages({ host: "h", info: info, answer: ans, error: "", pending: "" }).find((p) => p.title === "About").fields.every((f) => f.type === "info"), "About has nothing to click")
+})
+
+test("comfyRow: a running install that listens on the network carries its URL; one on 127.0.0.1, or unknown, none", () => {
+  const at = (bind, port) => ({ comfyui: [{ path: "/home/u/dgx-comfyui", rss_mib: 1, port: port, bind: bind }] })
+  assert.strictEqual(M.comfyRow(install({}), at("0.0.0.0", 8188), null, "me@gx10").url, "http://gx10:8188/")
+  assert.strictEqual(M.comfyRow(install({}), at("127.0.0.1", 8188), null, "me@gx10").url, "")
+  assert.strictEqual(M.comfyRow(install({}), at("", null), null, "me@gx10").url, "")
+  assert.strictEqual(M.comfyRow(install({}), {}, null, "me@gx10").url, "")
+})
+
+test("comfyKeyAction: o opens a running install, and only that", () => {
+  const row = { kind: "comfy", host: "me@gx10", id: "/home/u/dgx-comfyui" }
+  assert.deepStrictEqual(M.comfyKeyAction("o", row, { action: "stop", reason: "" }, false), { type: "comfyOpenAt", host: "me@gx10", path: "/home/u/dgx-comfyui" })
+  assert.strictEqual(M.comfyKeyAction("o", row, { action: "start", reason: "" }, false), null)
+  assert.strictEqual(M.comfyKeyAction("o", row, { action: "stop", reason: "" }, true), null)
+})
+
+test("webappCommand: the URL is an argument, not script text; comfyOpenProblem says why not", () => {
+  const c = M.webappCommand("http://gx10:8188/")
+  assert.strictEqual(c[c.length - 1], "http://gx10:8188/")
+  assert.ok(!c[2].includes("gx10"))
+  assert.strictEqual(M.comfyOpenProblem({ status: { port: 8188, bind: "0.0.0.0" } }), "")
+  assert.match(M.comfyOpenProblem({ status: { port: 8188, bind: "127.0.0.1" } }), /on the machine itself/)
+  assert.match(M.comfyOpenProblem(null), /didn't say/)
 })

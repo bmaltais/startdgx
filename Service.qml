@@ -275,7 +275,8 @@ Item {
     case "comfySettings": root.showComfySettings(action.host, action.path, action.page); break
     case "comfyForget": root.showComfyForget(action.host, action.path); break
     case "comfyForgetNow": core.comfyAct(action.host, "forget", action.path, "", !!action.stopService); root.closeCard(); break
-    case "comfyOpen": Qt.openUrlExternally(action.url); break
+    case "comfyOpen": Quickshell.execDetached(Model.webappCommand(action.url)); break
+    case "comfyOpenAt": core.comfyOpenFor(action.host, action.path); break
     case "comfyRecipeCheck": core.comfyRecipeCheck(action.host, action.path, action.name); break
     case "comfyRecipeInstall": core.comfyAct(action.host, "recipe-install", action.path, action.name); break
     case "comfyDoctor": core.comfyDoctorFor(action.host, action.path); break
