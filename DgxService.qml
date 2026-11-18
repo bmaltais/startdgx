@@ -34,6 +34,7 @@ Item {
   property string comfyFindHost: ""
   property var comfyFound: null
   property string comfyFindError: ""
+  property bool comfyFoundPartial: false   // the look through the machine was cut short (it takes too long on a slow or synced tree)
   readonly property bool comfyFinding: comfyFindQuery.busy
   // "target/model" -> its click's mark (DgxModel.pendingOf): a start, stop or delete running there or waiting its
   // turn, or done and not answered yet. Each machine's poller publishes its own (`marks`: target -> its map).
@@ -187,6 +188,46 @@ Item {
     next[Model.comfyKey(host, path)] = job
     service.comfyJob = next
   }
+  // An install's workflows (`comfyui recipe list`), what each check said, and its health report (`comfyui doctor`), for the install in
+  // comfyStatusKey's window (read when it opens, and on a click).
+  property string comfyRecipesKey: ""
+  property var comfyRecipes: null
+  property string comfyRecipesError: ""
+  readonly property bool comfyRecipesLoading: comfyRecipesQuery.busy
+  property var comfyChecks: ({})
+  property string comfyChecking: ""
+  property string comfyCheckError: ""
+  property string comfyDoctorKey: ""
+  property var comfyDoctor: null
+  property string comfyDoctorError: ""
+  readonly property bool comfyDoctoring: comfyDoctorQuery.busy
+  function comfyRecipesFor(host, path) {
+    const key = host + "\n" + path
+    if (service.comfyRecipesKey !== key) { service.comfyRecipes = null; service.comfyChecks = ({}); service.comfyChecking = "" }
+    service.comfyRecipesKey = key
+    service.comfyRecipesError = ""
+    comfyRecipesQuery.ask(key, [service.script, "comfyui", "recipe", "list", host, "--dir", path, "--json", "--timeout", "120"])
+  }
+  function comfyRecipeCheck(host, path, name) {
+    service.comfyChecking = name
+    service.comfyCheckError = ""
+    comfyCheckQuery.ask(host + "\n" + path + "\n" + name, [service.script, "comfyui", "recipe", "check", host, name, "--dir", path, "--json", "--timeout", "300"])
+  }
+  function comfyDoctorFor(host, path) {
+    const key = host + "\n" + path
+    if (service.comfyDoctorKey !== key) service.comfyDoctor = null
+    service.comfyDoctorKey = key
+    service.comfyDoctorError = ""
+    comfyDoctorQuery.ask(key, [service.script, "comfyui", "doctor", host, "--dir", path, "--json", "--timeout", "300"])
+  }
+  function cancelComfyWindow() {
+    comfyStatusQuery.cancel()
+    comfyRecipesQuery.cancel()
+    comfyCheckQuery.cancel()
+    comfyDoctorQuery.cancel()
+    service.comfyChecking = ""
+  }
+
   // The Install ComfyUI card: `comfyui plan --json` for the folder typed ("" for just the disks), the answer for comfyPlanKey.
   property string comfyPlanKey: ""
   property var comfyPlan: null
@@ -218,6 +259,8 @@ Item {
   function comfyActed(host, kind, path) {
     if (service.comfyFindHost === host && service.comfyFound !== null) service.findComfy(host)
     if (service.comfyStatusKey === host + "\n" + path) service.comfyStatusFor(host, path)
+    // A workflow's job ended (or any): what the checks said is out of date.
+    if (kind === "job" || kind === "recipe-install") service.comfyChecks = ({})
   }
   // An install's window: `comfyui status --json` for it (the answer is for comfyStatusKey, until another is asked).
   property string comfyStatusKey: ""
@@ -655,6 +698,42 @@ Item {
   }
 
   Query {
+    id: comfyRecipesQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.comfyRecipesKey) return
+      const list = code === 0 ? Model.parseComfyRecipes(out) : null
+      if (list) service.comfyRecipes = list
+      else service.comfyRecipesError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+
+  Query {
+    id: comfyCheckQuery
+    onAnswered: function (key, code, out, err) {
+      const at = key.lastIndexOf("\n")
+      const name = key.substring(at + 1)
+      if (key.substring(0, at) !== service.comfyRecipesKey) return
+      service.comfyChecking = ""
+      const doc = code === 0 ? Model.parseComfyRecipeCheck(out) : null
+      if (doc) {
+        const next = Object.assign({}, service.comfyChecks)
+        next[name] = doc
+        service.comfyChecks = next
+      } else service.error = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The check didn't run")
+    }
+  }
+
+  Query {
+    id: comfyDoctorQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.comfyDoctorKey) return
+      const doc = code === 0 ? Model.parseComfyDoctor(out) : null
+      if (doc) service.comfyDoctor = doc
+      else service.comfyDoctorError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The checks didn't run")
+    }
+  }
+
+  Query {
     id: comfyPlanQuery
     onAnswered: function (key, code, out, err) {
       if (key !== service.comfyPlanKey) return
@@ -679,7 +758,7 @@ Item {
     onAnswered: function (key, code, out, err) {
       if (key !== service.comfyFindHost) return
       const found = code === 0 ? Model.parseComfyList(out) : null
-      if (found) service.comfyFound = found
+      if (found) { service.comfyFound = found; service.comfyFoundPartial = Model.comfyListPartial(out) }
       else service.comfyFindError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
     }
   }

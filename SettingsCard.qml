@@ -35,6 +35,18 @@ FocusScope {
   readonly property string comfyPending: card.kind === "comfy" ? card.dgx.pending[Model.comfyKey(card.host, card.path)] || "" : ""
   readonly property bool comfyMine: card.dgx.comfyStatusKey === card.host + "\n" + card.path
   readonly property var comfyAnswer: card.kind === "comfy" && card.comfyMine ? card.dgx.comfyStatus : null
+  // Workflows and the health report are for an install that is installed and speaks --json.
+  readonly property bool comfyUsable: !!card.comfyInfo && card.comfyInstall && card.comfyInstall.kind === "dgx-comfyui" && card.comfyInstall.installed !== false && card.comfyInstall.json_capable !== false
+  readonly property string comfyWhyNot: !card.comfyInfo ? "" : card.comfyInstall && card.comfyInstall.json_capable === false ? "Too old for startdgx to read: update it (About)." : "ComfyUI isn't installed in it yet."
+  readonly property bool comfyRecipesMine: card.dgx.comfyRecipesKey === card.host + "\n" + card.path
+  readonly property var comfyWorkflows: card.kind !== "comfy" ? null : {
+    installable: card.comfyUsable, reason: card.comfyWhyNot, list: card.comfyRecipesMine ? card.dgx.comfyRecipes : null,
+    error: card.comfyRecipesMine ? card.dgx.comfyRecipesError : "", loading: card.comfyRecipesMine && card.dgx.comfyRecipesLoading,
+    checks: card.comfyRecipesMine ? card.dgx.comfyChecks : ({}), checking: card.dgx.comfyChecking }
+  readonly property bool comfyDoctorMine: card.dgx.comfyDoctorKey === card.host + "\n" + card.path
+  readonly property var comfyHealth: card.kind !== "comfy" ? null : {
+    available: card.comfyUsable, reason: card.comfyWhyNot, running: card.comfyDoctorMine && card.dgx.comfyDoctoring,
+    error: card.comfyDoctorMine ? card.dgx.comfyDoctorError : "", doc: card.comfyDoctorMine ? card.dgx.comfyDoctor : null }
   onComfyPendingChanged: if (card.kind === "comfy" && card.comfyPending === "") card.dgx.comfyStatusFor(card.host, card.path)
   // What was typed that won't do, until the next change.
   property string problem: ""
@@ -46,7 +58,8 @@ FocusScope {
   }
 
   readonly property var pages: card.kind === "comfy"
-    ? (card.comfyInfo ? Model.comfyPages({ host: card.host, info: card.comfyInfo, answer: card.comfyAnswer, error: card.comfyMine ? card.dgx.comfyStatusError : "", pending: card.comfyPending }) : [])
+    ? (card.comfyInfo ? Model.comfyPages({ host: card.host, info: card.comfyInfo, answer: card.comfyAnswer, error: card.comfyMine ? card.dgx.comfyStatusError : "", pending: card.comfyPending,
+        workflows: card.comfyWorkflows, health: card.comfyHealth }) : [])
     : card.kind === "recipe"
     ? Model.recipePages({ recipe: card.recipeNow, variants: card.mine ? card.dgx.variants : null, loading: card.mine && card.dgx.variantsLoading,
         error: card.mine ? card.dgx.variantsError : "", busy: card.dgx.recipeBusy || card.dgx.recipeRemoving !== "" })

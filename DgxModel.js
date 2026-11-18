@@ -1517,7 +1517,7 @@ function comfyRow(install, status, job) {
   if (state !== "missing" && state !== "unsupported" && install.json_capable === false) note = "Too old for startdgx to read: update it"
   // A job on it (`comfyui job`): running, it is installing or updating, and says the last thing its log said; a failed install
   // says so and can be run again, where it stopped.
-  const work = job && job.state === "running" ? (install.installed === false ? "Installing" : "Updating") : ""
+  const work = job && job.state === "running" ? (install.installed === false ? "Installing" : job.kind === "recipe" ? "Installing workflow" : "Updating") : ""
   if (work !== "") { state = "working"; note = lastLogLine(job) || work + "\u2026" }
   else if (job && job.state === "failed" && install.installed === false) { state = "failed"; note = "The install failed" + (lastLogLine(job) ? ": " + lastLogLine(job) : "") }
   return { path: path, name: name, state: state, work: work, version: version, note: note, gib: rss !== undefined ? rss / 1024 : 0,
@@ -1557,6 +1557,8 @@ function comfyCommand(host, job) {
   case "start": return ["comfyui", "start", host, "--dir", job.path, "--timeout", "120"]
   case "stop": return ["comfyui", "stop", host, "--dir", job.path, "--timeout", "120"]
   case "install": return ["comfyui", "install", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "120"])
+  // The label is the workflow's name here.
+  case "recipe-install": return ["comfyui", "recipe", "install", host, job.label, "--dir", job.path, "--timeout", "120"]
   case "update": return ["comfyui", "update", host, "--dir", job.path, "--timeout", "120"]
   case "update-comfyui": return ["comfyui", "update", host, "--dir", job.path, "--comfyui", "--timeout", "120"]
   case "adopt": return ["comfyui", "adopt", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "60"])
@@ -1569,7 +1571,7 @@ function comfyCommand(host, job) {
 }
 
 // What a ComfyUI action shows on its row: the service switch starts or stops it, as Start and Stop do.
-function comfyMark(kind) { return kind === "autostart-on" ? "start" : kind === "autostart-off" ? "stop" : kind === "update-comfyui" ? "update" : kind }
+function comfyMark(kind) { return kind === "autostart-on" ? "start" : kind === "autostart-off" ? "stop" : kind === "update-comfyui" ? "update" : kind === "recipe-install" ? "recipe" : kind }
 
 // The marks of a machine's ComfyUI actions, "host#comfy/path" -> start | stop | adopt | forget: the ones running or waiting (`jobs`,
 // [{ kind, path }]), and a start or stop that has finished until the status poll shows it took (the process takes seconds to
@@ -1656,7 +1658,11 @@ function comfyPages(c) {
   if (st && Number(st.models_bytes) > 0) facts.push({ key: "models", type: "info", label: "Models", hint: sizeText(Number(st.models_bytes)) + (Number(st.disk_free_bytes) > 0 ? " · " + sizeText(Number(st.disk_free_bytes)) + " free" : "") })
   const manage = [{ key: "forget", type: "action", label: "Forget this install", button: "Forget…", danger: true, disabled: busy,
     hint: "startdgx stops managing it. The folder, its models and workflows stay as they are, and Find existing ComfyUI… can adopt it again." }]
-  return [{ title: "General", fields: general }, { title: "About", fields: facts }, { title: "Manage", fields: manage }]
+  const pages = [{ title: "General", fields: general }]
+  if (c.workflows) pages.push({ title: "Workflows", fields: comfyWorkflowFields(c) })
+  if (c.health) pages.push({ title: "Health", fields: comfyHealthFields(c) })
+  pages.push({ title: "About", fields: facts }, { title: "Manage", fields: manage })
+  return pages
 }
 
 function comfyValues(answer) {
@@ -1694,11 +1700,13 @@ function comfyChange(host, info, answer, key, value) {
   }
   case "service": return { type: "comfyToggle", host: host, path: info.path, kind: value ? "autostart-on" : "autostart-off" }
   case "forget": return { type: "comfyForget", host: host, path: info.path }
+  case "doctor": return { type: "comfyDoctor", host: host, path: info.path }
   case "update": case "update-comfyui": {
     const plan = comfyUpdatePlan(info, answer, "", key === "update-comfyui")
     return plan.action === "" ? null : { type: "comfyToggle", host: host, path: info.path, kind: plan.action }
   }
   }
+  if (key.indexOf("wf-") === 0) return comfyWorkflowChange(host, info, key)
   return null
 }
 
@@ -1758,4 +1766,115 @@ function comfyWatchPaths(installs, started) {
 function parseComfyJob(text) {
   const parsed = parseJson(text)
   return isPlainObject(parsed) && typeof parsed.state === "string" ? parsed : null
+}
+
+// ---- ComfyUI workflows (recipes) and the health report ---------------------------------------------------------
+
+// `comfyui recipe list --json`: the workflows ({ name, valid, title, description, models, total_bytes, nodes }) or null.
+function parseComfyRecipes(text) {
+  const parsed = parseJson(text)
+  if (!isPlainObject(parsed) || !Array.isArray(parsed.recipes)) return null
+  for (let i = 0; i < parsed.recipes.length; i++) if (!isPlainObject(parsed.recipes[i]) || typeof parsed.recipes[i].name !== "string") return null
+  return parsed.recipes
+}
+
+// `comfyui recipe check --json`: the check of one workflow (its models with their state, its nodes, what is left to download), or null.
+function parseComfyRecipeCheck(text) {
+  const parsed = parseJson(text)
+  const r = isPlainObject(parsed) ? parsed.recipe : null
+  return isPlainObject(r) && Array.isArray(r.models) ? r : null
+}
+
+// What a checked workflow needs, in words, and whether it can be installed: { text, action: "install" | "", problem }.
+function comfyRecipePlan(doc) {
+  const models = Array.isArray(doc.models) ? doc.models : []
+  const nodes = Array.isArray(doc.nodes) ? doc.nodes : []
+  const gated = models.filter(function (m) { return m.state === "missing" && m.source && !m.source.ok && m.source.problem === "gated" })
+  if (gated.length > 0) {
+    const need = gated[0].source.detail && gated[0].source.detail[0] ? String(gated[0].source.detail[0]) : "a token"
+    return { text: gated[0].file + " is gated: it needs " + need + ". startdgx never stores a token: put " + need + "=\u2026 in ~/.config/startdgx/comfyui.env on the machine (chmod 600) and check again.", action: "", problem: true }
+  }
+  const gone = models.filter(function (m) { return m.state === "missing" && m.source && !m.source.ok })
+  if (gone.length > 0) return { text: gone[0].file + " can't be fetched (" + String(gone[0].source.problem || "gone") + "): the workflow is out of date.", action: "", problem: true }
+  const bad = models.filter(function (m) { return m.state === "size" || m.state === "hash" }).map(function (m) { return m.file })
+  if (bad.length > 0) return { text: bad.join(", ") + " on disk doesn't match the workflow; startdgx leaves it alone.", action: "", problem: true }
+  const missing = models.filter(function (m) { return m.state === "missing" }).length
+  const nodesMissing = nodes.filter(function (n) { return n.installed === false }).length
+  if (missing === 0 && nodesMissing === 0) return { text: "Installed: all " + models.length + " models and " + nodes.length + " nodes are there.", action: "", problem: false }
+  const parts = []
+  if (missing > 0) parts.push(missing + " of " + models.length + " models to download (" + sizeText(Number(doc.download_bytes) || 0) + ")")
+  if (nodesMissing > 0) parts.push(nodesMissing + (nodesMissing === 1 ? " node" : " nodes") + " to install")
+  return { text: "Needs " + parts.join(" and ") + ".", action: "install", problem: false }
+}
+
+// One workflow's line before it is checked: "3 models \u00b7 18.2 GiB \u00b7 2 nodes".
+function comfyRecipeSummary(r) {
+  const parts = [r.models + (r.models === 1 ? " model" : " models"), sizeText(Number(r.total_bytes) || 0)]
+  if (Number(r.nodes) > 0) parts.push(r.nodes + (r.nodes === 1 ? " node" : " nodes"))
+  return parts.join(" \u00b7 ")
+}
+
+// The Workflows page's fields: one action per workflow. `c.workflows`: { list, error, loading, checks: { name: check }, checking: name, installable, reason }.
+function comfyWorkflowFields(c) {
+  const w = c.workflows
+  if (w.installable === false) return [{ key: "wf-no", type: "info", label: "Workflows", hint: w.reason || "Not available for this install." }]
+  if (w.error) return [{ key: "wf-error", type: "info", label: "Workflows", hint: w.error }]
+  if (w.loading || !w.list) return [{ key: "wf-wait", type: "info", label: "Workflows", hint: "Reading\u2026" }]
+  if (w.list.length === 0) return [{ key: "wf-none", type: "info", label: "Workflows", hint: "This install has no workflow recipes." }]
+  const busy = String(c.pending || "") !== "" || c.info.state === "working"
+  return w.list.map(function (r) {
+    const check = w.checks ? w.checks[r.name] : null
+    const title = String(r.title || r.name)
+    if (r.valid === false) return { key: "wf-check:" + r.name, type: "info", label: title, hint: "This recipe isn't valid." }
+    if (!check) return { key: "wf-check:" + r.name, type: "action", label: title, button: w.checking === r.name ? "Checking\u2026" : "Check", disabled: w.checking !== "" || busy,
+      hint: comfyRecipeSummary(r) + (r.description ? " \u00b7 " + r.description : "") }
+    const plan = comfyRecipePlan(check)
+    if (plan.action === "install") return { key: "wf-install:" + r.name, type: "action", label: title, button: "Install", disabled: busy, hint: plan.text }
+    return { key: "wf-check:" + r.name, type: "info", label: title, hint: plan.text }
+  })
+}
+
+// What a click on a Workflows field asks for: a check of one, or its install.
+function comfyWorkflowChange(host, info, key) {
+  const at = key.indexOf(":")
+  const kind = key.substring(0, at)
+  const name = key.substring(at + 1)
+  if (kind === "wf-check") return { type: "comfyRecipeCheck", host: host, path: info.path, name: name }
+  if (kind === "wf-install") return { type: "comfyRecipeInstall", host: host, path: info.path, name: name }
+  return null
+}
+
+// `comfyui doctor --json`: the report ({ healthy, problems, changes, items }) or null.
+function parseComfyDoctor(text) {
+  const parsed = parseJson(text)
+  const d = isPlainObject(parsed) ? parsed.doctor : null
+  return isPlainObject(d) && Array.isArray(d.items) ? d : null
+}
+
+// The Health page's fields: run the checks, then what they said. `c.health`: { available, reason, running, error, doc }.
+function comfyHealthFields(c) {
+  const h = c.health
+  const fields = [{ key: "doctor", type: "action", label: "Check this install", button: h.running ? "Checking\u2026" : "Run checks", disabled: h.running || !h.available,
+    hint: h.available ? "dgx-comfyui's own checks of every part: the host, the stack, the models. They change nothing." : h.reason }]
+  if (h.error) fields.push({ key: "doctor-error", type: "info", label: "Not read", hint: h.error })
+  if (h.doc) {
+    fields.push({ key: "doctor-summary", type: "info", label: h.doc.healthy ? "Healthy" : String(h.doc.problems) + (h.doc.problems === 1 ? " problem" : " problems"), hint: "" })
+    const words = { ok: "OK", warn: "Warning", bad: "Problem", info: "Note", did: "Changed" }
+    h.doc.items.forEach(function (item, i) {
+      if (item.level === "log") fields.push({ key: "doctor-" + i, type: "info", label: String(item.text), hint: "" })
+      else fields.push({ key: "doctor-" + i, type: "info", label: words[item.level] || String(item.level), hint: String(item.text) })
+    })
+  }
+  return fields
+}
+
+// The look through the machine that found these installs was cut short (`partial`).
+function comfyListPartial(text) {
+  const parsed = parseJson(text)
+  return isPlainObject(parsed) && parsed.partial === true
+}
+
+// What a started ComfyUI action runs as a job, for the row's wording: install, update or recipe (a workflow), "" for the rest.
+function comfyJobKind(kind) {
+  return kind === "install" ? "install" : kind === "update" || kind === "update-comfyui" ? "update" : kind === "recipe-install" ? "recipe" : ""
 }

@@ -25,7 +25,7 @@ Rectangle {
   // A job runs on it (installing, updating), or a click waits: the dot pulses.
   readonly property bool working: row.info.state === "working"
   readonly property bool busy: row.pending !== "" || row.working
-  readonly property string stateWord: row.pending === "start" ? "Starting" : row.pending === "stop" ? "Stopping" : row.pending === "adopt" ? "Adding" : row.pending === "install" ? "Installing" : row.pending === "update" ? "Updating"
+  readonly property string stateWord: row.pending === "start" ? "Starting" : row.pending === "stop" ? "Stopping" : row.pending === "adopt" ? "Adding" : row.pending === "install" ? "Installing" : row.pending === "update" ? "Updating" : row.pending === "recipe" ? "Installing workflow"
     : row.working ? String(row.info.work) : row.info.state === "failed" ? "Install failed" : row.running ? "Running" : row.info.state === "unfinished" ? "Not installed" : row.info.state === "missing" ? "Folder gone"
     : row.info.state === "unsupported" ? "Not managed" : "Stopped"
 
