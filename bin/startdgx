@@ -2202,13 +2202,16 @@ def draft_variant_sources(host, rid):
   return [v["source"] for v in (parse_variants(out) if out.strip() else None) or []]
 
 
-def draft_check_host(host, rid):
+def draft_check_host(host, rid, force=False):
   """Nothing when the machine has no recipe `rid`; True when it has one of yours that is only a draft (placeholders, nothing worth keeping:
-  adding replaces it); else an Error, for a recipe that holds more (curated, set up, measured, or numbers you confirmed)."""
+  adding replaces it), or any one of yours no model is set up from when `force` (an update, which discards what was measured); else an
+  Error, for a recipe that holds more (curated, set up, measured, or numbers you confirmed)."""
   row = draft_host_rows(host).get(rid)
   if row is None:
     return None
   if row.get("user") is True and row.get("installed") is not True:
+    if force:
+      return True
     sources = draft_variant_sources(host, rid)
     if sources and all(source == "drafted" for source in sources):
       return True
@@ -2234,7 +2237,7 @@ def draft_recipe(args, replace=False):
   if not RID_RE.match(rid):
     raise Error(f"'{rid}' can't be a recipe id (lower-case letters, digits, dots and dashes): pick one with --id")
   sha, license_id, size, config = hf_draft_source(hf_base(), repo, getattr(args, "revision", None))
-  replaces = bool(args.host) and draft_check_host(args.host, rid) is True
+  replaces = bool(args.host) and draft_check_host(args.host, rid, getattr(args, "replace", False)) is True
   out = args.out or os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
                                                                        "startdgx"), "drafts")
   path = os.path.join(out, f"{rid}.toml")
@@ -2370,6 +2373,38 @@ def tf_rows(document):
   return rows
 
 
+def tf_added_path():
+  return os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "startdgx"),
+                      "tensorfold-added.json")
+
+
+def tf_added_load():
+  """What was added to each machine from the list, {host: {recipe id: {entry, revision, context, parallel, input}}}: the commit and the
+  choices, so a later look can tell that the list has moved on."""
+  try:
+    with open(tf_added_path()) as handle:
+      added = json.load(handle)
+  except (OSError, ValueError):
+    return {}
+  return added if isinstance(added, dict) else {}
+
+
+def tf_added_save(host, rid, record):
+  path = tf_added_path()
+  added = tf_added_load()
+  added.setdefault(host, {})
+  if not isinstance(added[host], dict):
+    added[host] = {}
+  added[host][rid] = record
+  try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as handle:
+      json.dump(added, handle, indent=2)
+    os.replace(path + ".tmp", path)
+  except OSError as error:
+    raise Error(f"{path} can't be written: {error.strerror}") from error
+
+
 def tf_seen_path():
   return os.path.join(demo_dir() if DEMO else os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "startdgx"),
                       "tensorfold-seen.json")
@@ -2408,8 +2443,13 @@ def tf_status(row, seen):
 def cmd_tensorfold_list(args):
   rows = tf_rows(tf_catalog())
   seen = tf_seen()
+  mine = tf_added_load().get(args.host, {}) if args.host else {}
   for row in rows:
     row["status"] = tf_status(row, seen)
+    # What this machine was last given from the entry, and whether the list has moved on since (another commit).
+    added = next((dict(rec, recipe_id=rid) for rid, rec in mine.items() if isinstance(rec, dict) and rec.get("entry") == row["id"]), None)
+    row["added"] = added
+    row["outdated"] = bool(added and row["revision"] and added.get("revision") != row["revision"])
   if args.update:
     tf_save_seen(rows)
   if args.json:
@@ -2418,7 +2458,7 @@ def cmd_tensorfold_list(args):
   print(f"tensorfold.dev, one DGX Spark (128 GB): {len(rows)} recipes" + ("" if seen is not None else " (no earlier look saved: --update saves this one, and later runs say what is new or changed)"))
   for row in rows:
     memory = f"{row['estimate_gb']:g} GB estimated" if row["estimate_gb"] else "memory not estimated"
-    mark = {"new": " [new]", "changed": " [changed]"}.get(row["status"], "")
+    mark = {"new": " [new]", "changed": " [changed]"}.get(row["status"], "") + (" [update available for " + args.host + "]" if row["outdated"] else "")
     print(f"  {row['id']}{mark}: {row['name']}, {row['format']}, {memory}" + (f"; draft it with: startdgx tensorfold draft {row['id']}" if row["draftable"] else f"; not draftable: {row['reason']}"))
   if args.update:
     print("Saved this look.")
@@ -2441,6 +2481,8 @@ def cmd_tensorfold_draft(args):
     if value not in choices:
       raise Error(f"{row['name']} offers {key} {', '.join(map(str, choices))}, not {value}")
     chosen[key] = value
+  # What the recipe will carry, for the record of this add: the choices, or the entry's defaults for the ones not made.
+  applied = {key: chosen.get(key, settings["defaults"][key] if settings else None) for key in ("context", "parallel", "input")}
   args.vision = None if "input" not in chosen else chosen["input"] != "text"
   args.context = chosen.get("context") or (settings["defaults"]["context"] if settings else None)
   args.parallel = chosen.get("parallel") if chosen.get("parallel") not in (None, settings and settings["defaults"]["parallel"]) else None
@@ -2451,6 +2493,9 @@ def cmd_tensorfold_draft(args):
   how = (" with " + ", ".join(f"{k} {v}" for k, v in customized.items())) if customized else ""
   args.summary = f"Drafted from tensorfold.dev's list ({row['name']}, {row['format']}{how}). The memory numbers are placeholders from {basis}, never a fit until it is measured."
   result = draft_recipe(args, replace=True)
+  if args.host:
+    tf_added_save(args.host, result["id"], {"entry": row["id"], "revision": row["revision"], **applied,
+                                            "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")})
   if args.json:
     print(json.dumps(result))
     return
@@ -4319,8 +4364,9 @@ def build_parser():
                       "and a drafted recipe from an entry. Its memory figures are estimates, so a draft never counts as fitting until measured.")
   tv = tp.add_subparsers(dest="verb", required=True, metavar="list|draft")
   tl = tv.add_parser("list", description="The recipes tensorfold.dev lists for one DGX Spark (128 GB), with what is new or changed since the look saved last.")
+  tl.add_argument("--host", help="mark entries this machine was given from the list that the list has since moved on from")
   tl.add_argument("--update", action="store_true", help="save this look, so the next run says what changed since")
-  tl.add_argument("--json", action="store_true", help='as {device, first_look, recipes: [{id, name, format, estimate_gb, weight_gb, repo, revision, recipe_id, settings, url, draftable, reason, status}]}')
+  tl.add_argument("--json", action="store_true", help='as {device, first_look, recipes: [{id, name, format, estimate_gb, weight_gb, repo, revision, recipe_id, settings, url, draftable, reason, status, added, outdated}]}')
   tl.set_defaults(fn=cmd_tensorfold_list)
   td = tv.add_parser("draft", description="Write a user recipe from an entry of the list: its pinned checkpoint, license and one drafted variant "
                      "whose memory is the list's estimate (never a fit until measured). Only MLX 4-bit entries can be drafted.")
@@ -4328,6 +4374,7 @@ def build_parser():
   td.add_argument("--context", type=int, help="the context in tokens, one the entry offers (default: 8192)")
   td.add_argument("--parallel", type=int, help="requests at once, one the entry offers (default: the entry's)")
   td.add_argument("--input", choices=TF_INPUTS, help="text, or images (video too) with the vision tower, as the entry offers")
+  td.add_argument("--replace", action="store_true", help="with --host: replace a recipe of yours even if it was measured (an update; the measurement is discarded)")
   td.add_argument("--id", help="the recipe id (default: the repo's)")
   td.add_argument("--host", help="have this machine's engine validate it and refuse an id it already has")
   td.add_argument("--out", help="the folder to write it to")

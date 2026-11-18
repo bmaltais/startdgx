@@ -1759,3 +1759,29 @@ test("tfChoiceLabel, tfValues and tfCustomized: what a choice reads as, the valu
   assert.strictEqual(M.tfCustomized(tfSet, { parallel: 1 }), false)
   assert.strictEqual(M.tfCustomized(tfSet, { input: "images" }), true)
 })
+
+test("tfUpdatePlan and tfStateText: a draft is replaced at once, a measured recipe asks first, a set-up model is blocked", () => {
+  const row = (over) => Object.assign({ id: "a", outdated: true }, over)
+  assert.deepStrictEqual(M.tfUpdatePlan(row({}), { state: "unmeasured" }), { kind: "update", confirm: false, text: "Update available" })
+  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "ready" }).confirm, true)
+  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "on" }).kind, "blocked")
+  assert.strictEqual(M.tfUpdatePlan(row({ outdated: false }), { state: "ready" }).kind, "")
+  assert.strictEqual(M.tfUpdatePlan(row({}), { state: "" }).kind, "")
+  assert.strictEqual(M.tfStateText(row({}), { state: "ready" }), "Added \u00b7 update available")
+  assert.strictEqual(M.tfStateText(row({ outdated: false }), { state: "unmeasured" }), "Added, not measured yet")
+  assert.strictEqual(M.tfStateText(row({}), { state: "on" }), "On this machine \u00b7 update available")
+})
+
+test("the update gives the machine what it was given before, and --replace only for a measured recipe", () => {
+  const settings = { defaults: { context: 8192, parallel: 1, input: "text" }, contexts: [8192, 16384], requests: [1, 2], inputs: ["text", "images"] }
+  const row = M.parseTfList(JSON.stringify({ recipes: [{ id: "a", name: "A", settings, outdated: true,
+    added: { recipe_id: "a-tensorfold", revision: "x", context: 16384, parallel: 2, input: "text" } }] })).rows[0]
+  assert.strictEqual(row.outdated, true)
+  assert.strictEqual(row.added.recipeId, "a-tensorfold")
+  assert.deepStrictEqual(M.tfAddedChoices(row), { context: 16384, parallel: 2, input: "text" })
+  assert.deepStrictEqual(M.tfDraftCommand("me@gx10", "a", M.tfAddedChoices(row), row.settings, true),
+    ["tensorfold", "draft", "--host", "me@gx10", "--json", "--context", "16384", "--parallel", "2", "--replace", "--", "a"])
+  assert.deepStrictEqual(M.tfListCommand(true, "me@gx10"), ["tensorfold", "list", "--json", "--update", "--host", "me@gx10"])
+  assert.deepStrictEqual(M.tfListCommand(false), ["tensorfold", "list", "--json"])
+  assert.strictEqual(M.tfAddedChoices({ added: null }), null)
+})

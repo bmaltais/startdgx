@@ -1416,6 +1416,9 @@ function parseTfList(text) {
     if (!isPlainObject(r) || typeof r.id !== "string" || r.id === "" || typeof r.name !== "string") return null
     rows.push({ id: r.id, name: r.name, format: String(r.format || ""), estimate: Number(r.estimate_gb) > 0 ? Number(r.estimate_gb) : 0,
                 settings: tfSettings(r.settings),
+                added: isPlainObject(r.added) && typeof r.added.recipe_id === "string" ? { recipeId: r.added.recipe_id, revision: String(r.added.revision || ""),
+                  context: Number(r.added.context) || 0, parallel: Number(r.added.parallel) || 0, input: String(r.added.input || "") } : null,
+                outdated: r.outdated === true,
                 repo: typeof r.repo === "string" ? r.repo : "", recipeId: typeof r.recipe_id === "string" ? r.recipe_id : "", draftable: r.draftable === true, reason: String(r.reason || ""),
                 status: r.status === "new" || r.status === "changed" ? r.status : "" })
   }
@@ -1423,13 +1426,13 @@ function parseTfList(text) {
 }
 
 // The CLI's arguments: the list, or the list and the look saved ("Mark as seen").
-function tfListCommand(update) {
-  return ["tensorfold", "list", "--json"].concat(update ? ["--update"] : [])
+function tfListCommand(update, host) {
+  return ["tensorfold", "list", "--json"].concat(update ? ["--update"] : [], host ? ["--host", host] : [])
 }
 
 // The CLI's arguments to draft an entry for `host`, the entry after `--`. `choices` ({ context, parallel, input }, any of them) are
 // sent only where they differ from what the entry defaults to, so an untouched entry is drafted exactly as before.
-function tfDraftCommand(host, entry, choices, settings) {
+function tfDraftCommand(host, entry, choices, settings, replace) {
   const args = []
   const d = settings ? settings.defaults : null
   if (choices && d) {
@@ -1437,7 +1440,7 @@ function tfDraftCommand(host, entry, choices, settings) {
     if (choices.parallel !== undefined && Number(choices.parallel) !== d.parallel) args.push("--parallel", String(choices.parallel))
     if (choices.input !== undefined && String(choices.input) !== d.input) args.push("--input", String(choices.input))
   }
-  return ["tensorfold", "draft", "--host", host, "--json"].concat(args, ["--", String(entry)])
+  return ["tensorfold", "draft", "--host", host, "--json"].concat(args, replace ? ["--replace"] : [], ["--", String(entry)])
 }
 
 // What a choice reads as on the card: "16K", "2", "Text + images".
@@ -1488,6 +1491,27 @@ function findState(recipeId, recipes, status) {
 
 function findStateText(s) {
   return s.state === "on" ? "Already on this machine" : s.state === "ready" ? "Added. Set it up from the model list" : s.state === "unmeasured" ? "Added, not measured yet" : ""
+}
+
+// What Update does for a row the machine already has: { kind: "" | "update" | "blocked", confirm, text }. The list has moved on from what the
+// machine was given (`outdated`, from the record `tensorfold draft --host` keeps). A draft is replaced at once; a measured recipe's
+// measurement is lost, so it asks first (`confirm`); a model set up from the recipe can't be replaced, so it says to remove that first.
+function tfUpdatePlan(row, st) {
+  if (!row || !row.outdated || !st || st.state === "") return { kind: "", confirm: false, text: "" }
+  if (st.state === "on") return { kind: "blocked", confirm: false, text: "Update available: remove the model first" }
+  return { kind: "update", confirm: st.state === "ready", text: "Update available" }
+}
+
+// The choices an update gives the machine again: what it was given before, as the picks the draft command compares with the defaults.
+function tfAddedChoices(row) {
+  return row && row.added ? { context: row.added.context, parallel: row.added.parallel, input: row.added.input } : null
+}
+
+// A row's one-line state, with "update available" where the list has moved on.
+function tfStateText(row, st) {
+  const base = findStateText(st)
+  const plan = tfUpdatePlan(row, st)
+  return plan.kind === "update" ? (st.state === "ready" ? "Added \u00b7 update available" : "Added, not measured \u00b7 update available") : plan.kind === "blocked" ? "On this machine \u00b7 update available" : base
 }
 
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).

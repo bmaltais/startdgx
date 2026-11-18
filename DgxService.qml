@@ -502,7 +502,7 @@ Item {
   // doesn't end it.
   function draftRecipe(host, repo) { service.draftWith(host, repo, Model.draftCommand(host, repo)) }
   // The same for an entry of TensorFold's list: its CLI step names the entry, the rest is the Add recipe path.
-  function draftTensorfold(host, row, picked) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings)) }
+  function draftTensorfold(host, row, picked, replace) { service.draftWith(host, row.repo || row.id, Model.tfDraftCommand(host, row.id, picked, row.settings, replace)) }
   function draftWith(host, label, command) {
     if (service.recipeBusy) return
     service.draftRepo = label
@@ -525,10 +525,10 @@ Item {
   function cancelHf() { hfQuery.cancel(); tfQuery.cancel() }
   // Reads TensorFold's list; `update` also saves this look, so the next visit says what is new or changed since (the marks in this answer
   // are against the look saved before).
-  function loadTf(update) {
+  function loadTf(update, host) {
     service.tfError = ""
     service.tfCount += 1
-    tfQuery.ask("tf" + service.tfCount, [service.script].concat(Model.tfListCommand(update)))
+    tfQuery.ask("tf" + service.tfCount, [service.script].concat(Model.tfListCommand(update, host)))
   }
 
   function removeRecipe(host, id) {
