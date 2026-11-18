@@ -448,7 +448,7 @@ function actionNotice(kind, stdout) {
 
 // The manager's rows, top to bottom, for the keyboard cursor: each machine, then its models, then its Add model…
 // row (only on a machine that answers: a picker needs its catalog), then its ComfyUI installs (`comfy`: host -> the
-// installs `comfyui list` last said).
+// installs `comfyui list` last said) and the row that finds more (only on a machine that answers).
 function rows(hostList, hostStates, comfy) {
   const out = []
   for (let i = 0; i < hostList.length; i++) {
@@ -460,6 +460,7 @@ function rows(hostList, hostStates, comfy) {
     if (hs && hs.loaded && hs.online) out.push({ kind: "add", host: host })
     const installs = comfy && comfy[host] ? comfy[host] : []
     for (let j = 0; j < installs.length; j++) out.push({ kind: "comfy", host: host, id: String(installs[j].path) })
+    if (hs && hs.loaded && hs.online) out.push({ kind: "comfyfind", host: host })
   }
   return out
 }
@@ -482,6 +483,7 @@ function keyAction(key, row, entry, pending, away, repeat, sharing) {
   if (away) return null
   if (k === "g") return row.kind === "model" ? { type: "modelSettings", host: row.host, id: row.id } : { type: "hostSettings", host: row.host }
   if (k === "l") return { type: "logs", host: row.host, id: row.kind === "model" ? row.id : "" }
+  if (k === "enter" && row.kind === "comfyfind") return { type: "findComfy", host: row.host }
   if (k === "a" || (k === "enter" && row.kind === "add")) return { type: "addModel", host: row.host }
   if (k === "e") return { type: "addRecipe", host: row.host }
   if (k === "c" && row.kind === "model" && contextAction(entry, pending)) return { type: "modelSettings", host: row.host, id: row.id, page: "Context" }
@@ -1513,4 +1515,71 @@ function comfySummary(rows) {
   if (rows.length === 0) return ""
   const running = rows.filter(function (r) { return r.state === "running" }).length
   return rows.length + (rows.length === 1 ? " install" : " installs") + (running > 0 ? ", " + running + " running" : "")
+}
+
+// A ComfyUI install's Start or Stop: { action: "start" | "stop" | "", reason }. `info` is its comfyRow, `pending` its mark
+// (a click already waits), `rows` the machine's comfyRows. One ComfyUI runs at a time on a machine (they share its memory), so
+// a stopped install can't start while another runs: no button, and `reason` says which to stop.
+function comfyToggle(info, pending, rows) {
+  if (!info || String(pending || "") !== "") return { action: "", reason: "" }
+  if (info.state === "running") return { action: "stop", reason: "" }
+  if (info.state !== "stopped") return { action: "", reason: "" }
+  const other = (rows || []).filter(function (r) { return r.state === "running" && r.path !== info.path })[0]
+  return other ? { action: "", reason: "ComfyUI in " + other.name + " is running: stop it first" } : { action: "start", reason: "" }
+}
+
+// The key that starts or stops the install under the cursor (Enter or s), or null.
+function comfyKeyAction(key, row, toggle, repeat) {
+  const k = String(key).toLowerCase()
+  if (!row || row.kind !== "comfy" || repeat || !toggle || !toggle.action) return null
+  if (k !== "s" && k !== "enter") return null
+  return { type: "comfyToggle", host: row.host, path: row.id, kind: toggle.action }
+}
+
+// The command for a ComfyUI action ({ kind, path, label }): start, stop, adopt.
+function comfyCommand(host, job) {
+  switch (job.kind) {
+  case "start": return ["comfyui", "start", host, "--dir", job.path, "--timeout", "120"]
+  case "stop": return ["comfyui", "stop", host, "--dir", job.path, "--timeout", "120"]
+  case "adopt": return ["comfyui", "adopt", host, "--dir", job.path].concat(job.label ? ["--label", job.label] : [], ["--timeout", "60"])
+  }
+  return null
+}
+
+// The marks of a machine's ComfyUI actions, "host#comfy/path" -> start | stop | adopt: the ones running or waiting (`jobs`,
+// [{ kind, path }]), and a start or stop that has finished until the status poll shows it took (the process takes seconds to
+// show or go), at most 30 s (`settling`, [{ kind, path, until }]). { marks, settling }, the settling ones still to wait for.
+function comfyMarks(host, jobs, settling, status, now) {
+  const marks = {}
+  for (let i = 0; i < jobs.length; i++) if (!(comfyKey(host, jobs[i].path) in marks)) marks[comfyKey(host, jobs[i].path)] = jobs[i].kind
+  const running = comfyRunning(status)
+  const keep = []
+  for (let i = 0; i < settling.length; i++) {
+    const s = settling[i]
+    const up = s.path in running
+    if (now > s.until || (s.kind === "start" && up) || (s.kind === "stop" && !up)) continue
+    keep.push(s)
+    if (!(comfyKey(host, s.path) in marks)) marks[comfyKey(host, s.path)] = s.kind
+  }
+  return { marks: marks, settling: keep }
+}
+
+// What the Find existing card lists, from `comfyui discover`: { path, name, text, offer, managed }. `offer` is "adopt" for a
+// dgx-comfyui folder startdgx doesn't manage yet, "" for one it does and for a ComfyUI it can't manage.
+function comfyFindRows(installs) {
+  return installs.map(function (i) {
+    const row = comfyRow(i, null)
+    const sources = Array.isArray(i.sources) ? i.sources : []
+    const bits = []
+    if (i.kind !== "dgx-comfyui") bits.push(String(i.reason || "Not a dgx-comfyui folder"))
+    else {
+      if (row.version) bits.push(row.version)
+      if (i.installed === false) bits.push("ComfyUI isn't installed in it yet")
+      if (i.json_capable === false) bits.push("older than startdgx reads")
+      if (sources.indexOf("process") >= 0) bits.push("running now")
+      else if (sources.indexOf("service") >= 0) bits.push("starts at boot")
+    }
+    return { path: String(i.path), name: row.name, text: bits.join(" \u00b7 "), managed: !!i.managed,
+             offer: i.kind === "dgx-comfyui" && !i.managed && i.present !== false ? "adopt" : "" }
+  })
 }

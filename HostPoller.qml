@@ -47,7 +47,30 @@ Item {
     if (poller.answering && !comfyProc.running) comfyProc.running = true
   }
 
-  function publish() { poller.owner.setMarks(poller.host, Model.marks(poller.queue, poller.done)) }
+  // The ComfyUI actions of this machine, one at a time and apart from the models' slots (an install is named by its folder,
+  // and a start or stop takes seconds, not a model's minutes): [{ kind, path, label }], the first one running; and the starts
+  // and stops that have finished but not yet shown in the status ([{ kind, path, until }], DgxModel.comfyMarks).
+  property var comfyJobs: []
+  property var comfySettling: []
+
+  function publish() {
+    const status = poller.hostState ? poller.hostState.status : null
+    const c = Model.comfyMarks(poller.host, poller.comfyJobs, poller.comfySettling, status, Date.now())
+    poller.comfySettling = c.settling
+    poller.owner.setMarks(poller.host, Object.assign({}, Model.marks(poller.queue, poller.done), c.marks))
+  }
+
+  // A click on an install: kind is start, stop or adopt (the label names an adopted one in the panel).
+  function runComfy(kind, path, label) {
+    poller.comfyJobs = poller.comfyJobs.concat([{ kind: kind, path: path, label: label || "" }])
+    poller.publish()
+    poller.launchComfy()
+  }
+  function launchComfy() {
+    if (comfyActProc.running || poller.comfyJobs.length === 0) return
+    comfyActProc.command = [poller.owner.script].concat(Model.comfyCommand(poller.host, poller.comfyJobs[0]))
+    comfyActProc.running = true
+  }
 
   // A click: kind is start, stop, use, delete, share, unshare, move, storageSet or storageUnset; entry the model's row as drawn.
   // `extra` is what the command needs besides (a context's size). A context change shows as a setup does: no mark of its own.
@@ -170,6 +193,28 @@ Item {
     stderr: StdioCollector { id: comfyErr; waitForEnd: true }
     // A failed read is not shown: the installs keep their last good list, and the machine's own status says if it is away.
     onExited: function (code) { poller.owner.comfyRead(poller.host, Model.comfyAnswer(code, comfyOut.text, comfyErr.text, poller.host).installs) }
+  }
+
+  Process {
+    id: comfyActProc
+    stdout: StdioCollector { id: comfyActOut; waitForEnd: true }
+    stderr: StdioCollector { id: comfyActErr; waitForEnd: true }
+    onExited: function (code) {
+      const job = poller.comfyJobs[0]
+      poller.comfyJobs = poller.comfyJobs.slice(1)
+      if (code !== 0) poller.owner.error = Model.actionError(comfyActErr.text, poller.host)
+      else {
+        poller.owner.notice = Model.actionNotice("comfyui", comfyActOut.text)
+        // A started or stopped ComfyUI shows in the status seconds later: its mark stays until it does.
+        if (job.kind === "start" || job.kind === "stop") poller.comfySettling = poller.comfySettling.concat([{ kind: job.kind, path: job.path, until: Date.now() + 30000 }])
+        if (job.kind === "adopt") poller.owner.comfyAdopted(poller.host)
+      }
+      poller.publish()
+      // What the action changed: the status (running), and the list (adopted).
+      poller.poll()
+      poller.pollComfy()
+      Qt.callLater(poller.launchComfy)
+    }
   }
 
   Process {

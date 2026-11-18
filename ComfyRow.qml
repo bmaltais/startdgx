@@ -1,6 +1,6 @@
 // One ComfyUI install on one machine: a dot (accent while it runs), its name with its folder under it, what it is doing, its
-// version and the memory it holds. Read-only for now; the manager owns the cursor and every decision, this file only paints
-// and says what was asked for. Names and paths come from the host and are drawn as plain text.
+// version and the memory it holds, and a Start or Stop button. The manager owns the cursor and every decision, this file only
+// paints and says what was asked for. Names and paths come from the host and are drawn as plain text.
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
@@ -13,12 +13,17 @@ Rectangle {
   property var info: ({})           // DgxModel.comfyRow(): { path, name, state, version, note, gib }
   property bool current: false      // under the keyboard cursor
   property bool away: false         // the machine isn't answering: its last known state, dimmed
+  property string pending: ""       // "start" or "stop" while a click waits for the host (DgxModel.comfyMarks)
+  property var toggle: ({ action: "", reason: "" })   // DgxModel.comfyToggle(): what the button does, or why it can't
 
   signal selectRequested()
+  signal toggleRequested()
 
   readonly property bool running: row.info.state === "running"
   readonly property bool hot: hover.hovered || row.current
-  readonly property string stateWord: row.running ? "Running" : row.info.state === "unfinished" ? "Not installed" : row.info.state === "missing" ? "Folder gone"
+  readonly property bool busy: row.pending !== ""
+  readonly property string stateWord: row.pending === "start" ? "Starting" : row.pending === "stop" ? "Stopping" : row.pending === "adopt" ? "Adding"
+    : row.running ? "Running" : row.info.state === "unfinished" ? "Not installed" : row.info.state === "missing" ? "Folder gone"
     : row.info.state === "unsupported" ? "Not managed" : "Stopped"
 
   implicitHeight: body.implicitHeight + Style.spacing.md * 2
@@ -54,11 +59,19 @@ Rectangle {
     spacing: Style.space(10)
 
     Rectangle {
+      id: dot
       Layout.alignment: Qt.AlignVCenter
       Layout.preferredWidth: Style.space(7)
       Layout.preferredHeight: Style.space(7)
       radius: width / 2
-      color: row.running ? Color.accent : Util.alpha(Color.foreground, 0.35)
+      color: row.running || row.busy ? Color.accent : Util.alpha(Color.foreground, 0.35)
+      SequentialAnimation on opacity {
+        running: !Style.reduceMotion && row.busy && !row.away
+        loops: Animation.Infinite
+        onRunningChanged: if (!running) dot.opacity = 1
+        NumberAnimation { to: 0.25; duration: 500 }
+        NumberAnimation { to: 1; duration: 500 }
+      }
     }
 
     ColumnLayout {
@@ -94,7 +107,7 @@ Rectangle {
     Text {
       textFormat: Text.PlainText
       text: row.stateWord
-      color: row.running ? Color.foreground : Color.muted
+      color: row.running || row.busy ? Color.foreground : Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -115,6 +128,18 @@ Rectangle {
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       font.features: { "tnum": 1 }
+    }
+    // Start or Stop; greyed out, with the reason, while another install runs (they share the machine's memory).
+    Button {
+      Layout.alignment: Qt.AlignVCenter
+      Layout.preferredWidth: implicitHeight
+      visible: !row.away
+      enabled: row.toggle.action !== "" || row.toggle.reason !== ""
+      iconText: row.toggle.action === "stop" ? "\udb80\udfe4" : "\udb81\udc0a"
+      tooltipText: row.toggle.reason !== "" ? row.toggle.reason : row.toggle.action === "stop" ? "Stop  (s)" : row.toggle.action === "start" ? "Start  (s)" : ""
+      foreground: row.toggle.reason !== "" ? Color.muted : Color.foreground
+      opacity: !enabled ? 0 : row.toggle.reason !== "" ? 0.5 : 1
+      onClicked: if (row.toggle.reason === "") row.toggleRequested()
     }
   }
 }
