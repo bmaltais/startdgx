@@ -63,6 +63,12 @@ ENGINE_DIR = ".local/share/omarchy-local-ai"
 STARTDGX_DIR = ".local/share/startdgx"
 MANIFEST = f"~/{STARTDGX_DIR}/manifest.json"
 COMFYUI_RECORDS = f"{STARTDGX_DIR}/comfyui.json"
+# The dgx-comfyui release a new install is cloned at, and the one the panel offers to move an older install to.
+COMFYUI_REPO = "https://github.com/bmaltais/dgx-comfyui"
+COMFYUI_TAG = "v0.1.0"
+COMFYUI_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+COMFYUI_SOURCE_RE = re.compile(r"^(https://[A-Za-z0-9._~/-]+|/[A-Za-z0-9._/-]+)$")
+COMFYUI_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BACKUP_DIR = f"{STARTDGX_DIR}/backup"
 
 
@@ -1866,7 +1872,7 @@ def open_terminal(argv):
 
 def cmd_engine(args):
   if args.json:
-    print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG}))
+    print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG, "comfyui_repo": COMFYUI_REPO, "comfyui_tag": COMFYUI_TAG}))
   else:
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
 
@@ -2932,6 +2938,37 @@ def demo_logs(args):
 DEMO_COMFYUI_GIB = 31  # what a demo ComfyUI holds while it runs
 
 
+def demo_comfyui_plan(installs, path):
+  """The host script's plan: two disks, and what is wrong with a folder."""
+  info = {"places": [{"mount": "/", "fstype": "ext4", "free_bytes": 1_200_000_000_000},
+                     {"mount": DEMO_USB, "fstype": "ext4", "free_bytes": 1_500_000_000_000}], "home": "/home/demo", "min_free_bytes": 40 * 2**30, "problems": []}
+  if path:
+    info["path"] = path
+    info["free_bytes"] = 20 * 2**30 if path.startswith("/tiny") else 1_200_000_000_000
+    if any(i["path"] == path for i in installs):
+      info["problems"].append("exists_not_empty")
+    if any(i["managed"] and (path == i["path"] or path.startswith(i["path"] + "/")) for i in installs):
+      info["problems"].append("inside_managed")
+    if info["free_bytes"] < info["min_free_bytes"]:
+      info["problems"].append("too_small")
+  return info
+
+
+DEMO_JOB_MS = 8000  # how long a demo install or update runs
+
+
+def demo_comfyui_job(item):
+  """The demo install's job as the host script reports it: running for DEMO_JOB_MS from its start, then succeeded (and installed)."""
+  job = item.get("job")
+  if not job:
+    return {"state": "none", "exit_status": 0, "log": []}
+  kind = job.get("kind", "install")
+  if demo_now_ms() - job["since_ms"] < DEMO_JOB_MS:
+    return {"state": "running", "exit_status": 0, "log": [f"== startdgx: {kind} in {item['path']}", "Toolchain", "PyTorch"]}
+  item["installed"] = True
+  return {"state": "succeeded", "exit_status": 0, "log": [f"== startdgx: {kind} in {item['path']}", "Done: 11 change(s). Start it with ./dgx-comfyui.sh run"]}
+
+
 def demo_comfyui_pick(installs, which):
   """The managed install `which` names (a label or a folder), or the only one; the host script's resolve."""
   managed = [i for i in installs if i["managed"]]
@@ -2950,7 +2987,7 @@ def demo_comfyui_pick(installs, which):
 def demo_comfyui(args):
   """The ComfyUI commands on a demo machine: its installs are in comfyui.json (none on a machine without the file).
   Adopting or forgetting one flips its `managed`; start and stop flip its `state` (up or stopped) at once."""
-  with demo_state(write=args.verb != "discover" and args.verb != "list" and args.verb != "status") as state:
+  with demo_state(write=args.verb not in ("discover", "list", "status", "plan", "job")) as state:
     installs = demo_host(state, args.host).setdefault("comfyui", {"installs": []})["installs"]
     if args.verb in ("adopt", "forget"):
       path = comfyui_dir(args.dir)
@@ -2971,12 +3008,50 @@ def demo_comfyui(args):
         answer = {"forgot": path}
       print(json.dumps(answer) if args.json else comfyui_done(args.verb, answer, args.host))
       return
-    if args.verb in ("status", "start", "stop", "autostart"):
+    if args.verb == "plan":
+      answer = demo_comfyui_plan(installs, comfyui_dir(args.dir) if args.dir else "")
+      print(json.dumps(answer) if args.json else "\n".join(f"{x['mount']}  {size_text(x['free_bytes'])} free" for x in answer["places"]))
+      return
+    if args.verb == "install":
+      comfyui_source(args)
+      label = args.label or ""
+      if label and not COMFYUI_LABEL_RE.match(label):
+        raise Error("A label is up to 32 letters, digits, spaces, dots, dashes and underscores")
+      plan = demo_comfyui_plan(installs, comfyui_dir(args.dir))
+      if plan["problems"]:
+        raise Error(f"{plan['path']} can't take an install: " + ", ".join(plan["problems"]))
+      installs.append({"path": plan["path"], "kind": "dgx-comfyui", "present": True, "installed": False, "json_capable": True, "sources": ["record"],
+                       "managed": True, "label": label, "tool": {"tag": COMFYUI_TAG, "commit": "d913a9f", "branch": "", "dirty": False, "unpushed": 0},
+                       "job": {"since_ms": demo_now_ms()}})
+      answer = {"job": "startdgx-comfyui-demo", "path": plan["path"], "log": "demo"}
+      print(json.dumps(answer) if args.json else f"Installing ComfyUI in {plan['path']} on {args.host}; it takes about 15 minutes")
+      return
+    if args.verb in ("status", "start", "stop", "autostart", "update", "job"):
       item = demo_comfyui_pick(installs, comfyui_which(args.dir))
+      job = demo_comfyui_job(item)
+      if args.verb != "status" and args.verb != "job" and job["state"] == "running":
+        raise Error(f"an install or update is running in {item['path']}; follow it with: startdgx comfyui job")
+      if args.verb == "job":
+        print(json.dumps({"path": item["path"], **job}) if args.json else "\n".join([job["state"]] + ["  " + l for l in job["log"]]))
+        return
+      if args.verb == "update":
+        _, ref = comfyui_source(args)
+        tool = item["tool"]
+        if tool["dirty"]:
+          raise Error(f"{item['path']} has uncommitted changes; commit or stash them, or move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
+        if tool["unpushed"]:
+          raise Error(f"{item['path']} has commits that aren't pushed; move it yourself: git -C {item['path']} fetch --tags && git -C {item['path']} checkout {ref}")
+        if item.get("state") == "up":
+          raise Error(f"ComfyUI in {item['path']} is running; stop it first")
+        item.update(job={"since_ms": demo_now_ms(), "kind": "update"}, tool={**tool, "tag": ref, "branch": ""})
+        answer = {"job": "startdgx-comfyui-demo", "path": item["path"], "log": "demo"}
+        print(json.dumps(answer) if args.json else f"Updating ComfyUI in {item['path']} on {args.host} to {ref}")
+        return
       others = [i["path"] for i in installs if i["managed"] and i["path"] != item["path"] and i.get("state") == "up"]
       if args.verb == "status":
         up = item.get("state") == "up"
-        answer = {"install": {k: v for k, v in item.items() if k not in ("state", "rss_mib", "autostart")}, "too_old": not item["json_capable"], "running_elsewhere": others,
+        answer = {"install": {k: v for k, v in item.items() if k not in ("state", "rss_mib", "autostart", "job")}, "too_old": not item["json_capable"], "running_elsewhere": others,
+                  "job": job, "update": comfyui_update_offer(item["tool"]["tag"]),
                   "status": None if not item["json_capable"] else {
                     "schema": 1, "root": item["path"], "installed": True, "state": "up" if up else "stopped", "pid": 4242 if up else None,
                     "rss_mib": DEMO_COMFYUI_GIB * 1024 if up else None, "port": 8188, "bind": "0.0.0.0",
@@ -2988,6 +3063,8 @@ def demo_comfyui(args):
           cmd_comfyui_status_text(answer)
         return
       if args.verb in ("start", "autostart") and not (args.verb == "autostart" and args.state == "off"):
+        if not item.get("installed", True):
+          raise Error(f"{item['path']} has no ComfyUI yet; install it first")
         if others:
           raise Error(f"ComfyUI in {others[0]} is running; stop it first (one at a time on a machine)")
         item.update(state="up", autostart=True)
@@ -3007,7 +3084,7 @@ def demo_comfyui(args):
         cmd_comfyui_action_text(args, answer)
       return
     shown = installs if args.verb == "discover" else [i for i in installs if i["managed"]]
-  shown = [{k: v for k, v in i.items() if k not in ("state", "rss_mib", "autostart")} for i in shown]
+  shown = [{k: v for k, v in i.items() if k not in ("state", "rss_mib", "autostart", "job")} for i in shown]
   answer = {"installs": shown}
   if args.json:
     print(json.dumps(answer))
@@ -3208,6 +3285,101 @@ def tool(path, *argv, timeout=120):
   except subprocess.TimeoutExpired:
     fail("dgx-comfyui.sh " + argv[0] + " didn't finish in time")
   return r
+import hashlib
+LOGDIR = os.path.join(HOME, ".local/state/startdgx/comfyui")
+MIN_FREE = int(os.environ.get("STARTDGX_COMFYUI_MIN_FREE") or 40 * 2**30)  # the variable is for tests: ssh never forwards it
+JOB_INSTALL = "\\n".join([
+  'set -eu',
+  'echo "== startdgx: install in $1 ($(date -Is))"',
+  'if [ ! -f "$1/dgx-comfyui.sh" ]; then git -c advice.detachedHead=false clone --quiet --branch "$3" -- "$2" "$1"; fi',
+  'cd "$1"',
+  'exec ./dgx-comfyui.sh install </dev/null'])
+JOB_UPDATE = "\\n".join([
+  'set -eu',
+  'echo "== startdgx: update in $1 to $2 ($(date -Is))"',
+  'cd "$1"',
+  'git fetch --tags --quiet origin',
+  'git -c advice.detachedHead=false checkout --quiet "$2"',
+  'if [ "$3" = comfyui ]; then exec ./dgx-comfyui.sh update </dev/null; fi',
+  'exec ./dgx-comfyui.sh install </dev/null'])
+def unit_name(path):
+  return "startdgx-comfyui-" + hashlib.sha1(path.encode()).hexdigest()[:10]
+def log_path(path):
+  return os.path.join(LOGDIR, unit_name(path) + ".log")
+def job_state(path):
+  unit = unit_name(path)
+  r = subprocess.run(["systemctl", "--user", "show", unit, "-p", "LoadState,ActiveState,SubState,Result,ExecMainStatus"], capture_output=True, text=True, env=user_env())
+  props = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+  if props.get("LoadState", "not-found") == "not-found":
+    state = "none"
+  elif props.get("ActiveState") == "failed":
+    state = "failed"
+  elif props.get("ActiveState") == "active" and props.get("SubState") == "exited":
+    state = "succeeded"
+  elif props.get("ActiveState") in ("active", "activating"):
+    state = "running"
+  else:
+    state = "none"
+  tail = []
+  try:
+    tail = [ANSI.sub("", l.rstrip("\\n")) for l in open(log_path(path), errors="replace").readlines()[-20:]]
+  except OSError:
+    pass
+  return {"state": state, "exit_status": int(props.get("ExecMainStatus") or 0), "log": tail}
+def no_job_running(path):
+  if job_state(path)["state"] == "running":
+    fail("an install or update is running in " + path + "; follow it with: startdgx comfyui job")
+def start_job(path, script, *args):
+  user = os.environ.get("USER") or os.path.basename(HOME)
+  linger = subprocess.run(["loginctl", "show-user", user, "-p", "Linger", "--value"], capture_output=True, text=True).stdout.strip()
+  if linger != "yes":
+    fail("A 15-minute install needs this account to keep running after the ssh session ends. Run on the host: sudo loginctl enable-linger " + user)
+  os.makedirs(LOGDIR, exist_ok=True)
+  unit, log = unit_name(path), log_path(path)
+  open(log, "w").close()
+  subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, env=user_env())
+  subprocess.run(["systemctl", "--user", "reset-failed", unit], capture_output=True, env=user_env())
+  r = subprocess.run(["systemd-run", "--user", "--unit", unit, "--description=startdgx ComfyUI job", "-p", "RemainAfterExit=yes",
+                      "-p", "StandardOutput=append:" + log, "-p", "StandardError=append:" + log, "--", "bash", "-c", script, "startdgx-comfyui", *args],
+                     capture_output=True, text=True, env=user_env())
+  if r.returncode != 0:
+    fail("Couldn't start the job: " + say_line(r.stderr or r.stdout))
+  return {"job": unit, "path": path, "log": log}
+def places():
+  out, seen = [], set()
+  for line in open("/proc/mounts"):
+    dev, mount, fstype = line.split()[:3]
+    mount = mount.replace("\\\\040", " ")
+    if fstype not in ("ext4", "xfs", "btrfs", "f2fs", "exfat", "ntfs3", "fuseblk") or mount in seen or mount.startswith(("/boot", "/snap", "/var/lib", "/etc", "/usr")):
+      continue
+    seen.add(mount)
+    try:
+      st = os.statvfs(mount)
+    except OSError:
+      continue
+    if os.access(mount, os.W_OK):
+      out.append({"mount": mount, "fstype": fstype, "free_bytes": st.f_bavail * st.f_frsize})
+  return out
+def plan(raw):
+  info = {"places": places(), "home": HOME, "min_free_bytes": MIN_FREE, "problems": []}
+  if not raw:
+    return info
+  path = clean_path(raw)
+  info["path"] = path
+  if os.path.exists(path) and (not os.path.isdir(path) or os.listdir(path)):
+    info["problems"].append("exists_not_empty")
+  inside = [r["path"] for r in load() if path == os.path.realpath(r["path"]) or path.startswith(os.path.realpath(r["path"]) + "/")]
+  if inside:
+    info["problems"].append("inside_managed")
+  probe = path
+  while not os.path.exists(probe):
+    probe = os.path.dirname(probe)
+  info["free_bytes"] = os.statvfs(probe).f_bavail * os.statvfs(probe).f_frsize
+  if not os.access(probe, os.W_OK):
+    info["problems"].append("not_writable")
+  if info["free_bytes"] < MIN_FREE:
+    info["problems"].append("too_small")
+  return info
 ARGV = sys.argv[2:]
 mode = ARGV[0]
 if mode == "discover":
@@ -3240,6 +3412,53 @@ elif mode == "forget":
       fail(path + " isn't managed")
     save(rest)
   print(json.dumps({"forgot": path}))
+elif mode == "plan":
+  print(json.dumps(plan(ARGV[1] if len(ARGV) > 1 else "")))
+elif mode == "install":
+  info = plan(ARGV[1])
+  label, repo, ref = ARGV[2], ARGV[3], ARGV[4]
+  path = info["path"]
+  with locked():
+    installs = load()
+    mine = [r for r in installs if os.path.realpath(r["path"]) == path]
+    # An install of ours whose job failed is run again where it stopped; anything else must be a fresh folder.
+    if mine and mine[0].get("origin") == "created" and job_state(path)["state"] == "failed":
+      out = start_job(path, JOB_INSTALL, path, repo, ref)
+    else:
+      if info["problems"]:
+        fail(path + " can't take an install: " + ", ".join(info["problems"]))
+      out = start_job(path, JOB_INSTALL, path, repo, ref)
+      installs.append({"path": path, "label": label, "origin": "created", "recorded_at": int(time.time()), "tool_ref": ref})
+      save(installs)
+  print(json.dumps(out))
+elif mode == "job":
+  path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
+  print(json.dumps({"path": path, **job_state(path)}))
+elif mode == "update":
+  path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
+  ref, comfy = ARGV[2], ARGV[3] == "comfyui"
+  item = inspect(path)
+  if item["kind"] != "dgx-comfyui" or not item.get("tool", {}).get("commit"):
+    fail(path + " isn't a git checkout of dgx-comfyui")
+  no_job_running(path)
+  t = item["tool"]
+  tracking = bool(git(path, "rev-parse", "--abbrev-ref", "@{u}"))
+  if t["dirty"]:
+    fail(path + " has uncommitted changes; commit or stash them, or move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
+  if t["unpushed"]:
+    fail(path + " has commits that aren't pushed; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
+  if t["branch"] and not tracking:
+    fail(path + " is on the branch " + t["branch"] + " with no upstream; move it yourself: git -C " + path + " fetch --tags && git -C " + path + " checkout " + ref)
+  if path in running_roots():
+    fail("ComfyUI in " + path + " is running; stop it first")
+  with locked():
+    installs = load()
+    for r in installs:
+      if os.path.realpath(r["path"]) == path:
+        r["previous_ref"] = t["tag"] or t["commit"]
+        r["tool_ref"] = ref
+    save(installs)
+  print(json.dumps(start_job(path, JOB_UPDATE, path, ref, "comfyui" if comfy else "tool")))
 elif mode in ("status", "start", "stop", "autostart"):
   path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
   item = inspect(path)
@@ -3247,6 +3466,8 @@ elif mode in ("status", "start", "stop", "autostart"):
   if not item["present"] or item["kind"] != "dgx-comfyui":
     fail(path + " is no longer a dgx-comfyui install; forget it")
   others = sorted(running_roots() - {path})
+  if mode != "status":
+    no_job_running(path)
   if mode == "status":
     status = None
     if item["json_capable"]:
@@ -3255,7 +3476,7 @@ elif mode in ("status", "start", "stop", "autostart"):
         status = json.loads(r.stdout)
       except ValueError:
         fail("dgx-comfyui.sh status --json gave no JSON: " + say_line(r.stderr or r.stdout))
-    print(json.dumps({"install": item, "status": status, "too_old": not item["json_capable"], "running_elsewhere": others}))
+    print(json.dumps({"install": item, "status": status, "too_old": not item["json_capable"], "running_elsewhere": others, "job": job_state(path)}))
   elif mode == "start":
     if not item["installed"]:
       fail(path + " has no ComfyUI yet; install it first")
@@ -3367,6 +3588,7 @@ def comfyui_which(path):
 
 def cmd_comfyui_status(args):
   answer = comfyui_action(args, "status")
+  answer["update"] = comfyui_update_offer(answer["install"].get("tool", {}).get("tag"))
   if args.json:
     print(json.dumps(answer))
     return
@@ -3385,6 +3607,10 @@ def cmd_comfyui_status_text(answer):
           (f" (newer: {status['comfy']['newer_release']})" if status["comfy"]["newer_release"] else ""))
   if answer["running_elsewhere"]:
     print(f"  ComfyUI in {answer['running_elsewhere'][0]} is running (one at a time on a machine)")
+  if answer.get("update"):
+    print(f"  dgx-comfyui {answer['update']['from']} -> {answer['update']['to']} is available: startdgx comfyui update")
+  if answer.get("job") and answer["job"]["state"] != "none":
+    print(f"  install/update job: {answer['job']['state']}")
 
 
 def cmd_comfyui_action_text(args, answer):
@@ -3406,8 +3632,60 @@ def cmd_comfyui_act(args):
     cmd_comfyui_action_text(args, answer)
 
 
+def comfyui_update_offer(tag):
+  """{"from", "to"} when an install's tool tag is an older release than the pin, else None (an untagged or newer checkout is left alone)."""
+  old, new = COMFYUI_TAG_RE.match(tag or ""), COMFYUI_TAG_RE.match(COMFYUI_TAG)
+  if old and new and tuple(map(int, old.groups())) < tuple(map(int, new.groups())):
+    return {"from": tag, "to": COMFYUI_TAG}
+  return None
+
+
+def comfyui_source(args):
+  repo, ref = getattr(args, "repo", None) or COMFYUI_REPO, getattr(args, "ref", None) or COMFYUI_TAG
+  if not COMFYUI_SOURCE_RE.match(repo) or not COMFYUI_REF_RE.match(ref):
+    raise Error("--repo is an https URL or an absolute folder, --ref a tag name")
+  return repo, ref
+
+
+def cmd_comfyui_plan(args):
+  answer = comfyui_run(target(args.host), args, "plan", comfyui_dir(args.dir) if args.dir else "")
+  if args.json:
+    print(json.dumps(answer))
+    return
+  for place in answer["places"]:
+    print(f"{place['mount']}  {size_text(place['free_bytes'])} free")
+  if "path" in answer:
+    print(f"{answer['path']}: " + ("ok" if not answer["problems"] else ", ".join(answer["problems"])) + f"  ({size_text(answer['free_bytes'])} free)")
+
+
+def cmd_comfyui_install(args):
+  label = args.label or ""
+  if label and not COMFYUI_LABEL_RE.match(label):
+    raise Error("A label is up to 32 letters, digits, spaces, dots, dashes and underscores")
+  repo, ref = comfyui_source(args)
+  answer = comfyui_run(target(args.host), args, "install", comfyui_dir(args.dir), label, repo, ref)
+  print(json.dumps(answer) if args.json else f"Installing ComfyUI in {answer['path']} on {args.host} ({ref}); it takes about 15 minutes. Follow it: startdgx comfyui job {args.host} --dir {answer['path']}")
+
+
+def cmd_comfyui_update(args):
+  _, ref = comfyui_source(args)
+  answer = comfyui_action(args, "update", ref, "comfyui" if args.comfyui else "tool")
+  print(json.dumps(answer) if args.json else f"Updating ComfyUI in {answer['path']} on {args.host} to {ref}; follow it: startdgx comfyui job {args.host} --dir {answer['path']}")
+
+
+def cmd_comfyui_job(args):
+  answer = comfyui_action(args, "job")
+  if args.json:
+    print(json.dumps(answer))
+    return
+  print(f"{answer['state']}" + (f" (exit {answer['exit_status']})" if answer["state"] == "failed" else ""))
+  for line in answer["log"]:
+    print("  " + line)
+
+
 def cmd_comfyui(args):
   return {"discover": cmd_comfyui_list, "list": cmd_comfyui_list, "adopt": cmd_comfyui_adopt, "forget": cmd_comfyui_forget,
+          "plan": cmd_comfyui_plan, "install": cmd_comfyui_install, "update": cmd_comfyui_update, "job": cmd_comfyui_job,
           "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act}[args.verb](args)
 
 
@@ -3529,8 +3807,8 @@ def build_parser():
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
   cp = sub.add_parser("comfyui", description="ComfyUI installs (dgx-comfyui) on a host: find existing ones and adopt them under startdgx, "
                       "list the ones it manages, or forget one. startdgx never changes or deletes an install's folder.")
-  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart")
-  for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart"):
+  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart|plan|install|update|job")
+  for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart", "plan", "install", "update", "job"):
     c = cv.add_parser(verb, description={"discover": "Read-only: the installs on HOST (the service's, a running one, the ones startdgx manages and a bounded search of the home folder). A ComfyUI that dgx-comfyui didn't install is listed as not managed.",
                                           "list": "The installs startdgx manages on HOST.",
                                           "adopt": "Manage an existing dgx-comfyui install in DIR: only startdgx's own record is written.",
@@ -3538,12 +3816,26 @@ def build_parser():
                                           "status": "One managed install's state, from its own dgx-comfyui.sh status --json.",
                                           "start": "Run the install as a background service (dgx-comfyui.sh service); it restarts after a crash and starts at boot. Refused while another install on HOST runs.",
                                           "stop": "Stop the install's service. A ComfyUI started in a terminal is refused: stop it there.",
-                                          "autostart": "on: run it as a background service and start it now (as start). off: remove the service, which stops it and ends starting at boot."}[verb])
+                                          "autostart": "on: run it as a background service and start it now (as start). off: remove the service, which stops it and ends starting at boot.",
+                                          "plan": "Read-only: the host's disks with their free space and, with --dir, whether DIR can take an install (absent or empty, writable, 40 GiB free).",
+                                          "install": "Install ComfyUI in DIR (which must be absent or empty): clone dgx-comfyui at the pinned release and run its install, as a background job that outlives this ssh session (about 15 minutes). Follow it with job.",
+                                          "update": "Move the install's dgx-comfyui to the pinned release and run its install, as a job. Refused for a checkout with uncommitted or unpushed work. --comfyui also moves ComfyUI to its newest release.",
+                                          "job": "The install or update job of an install: running, succeeded or failed, and the end of its log."}[verb])
     c.add_argument("host")
     if verb in ("adopt", "forget"):
       c.add_argument("--dir", required=True, metavar="DIR", help="the install's folder on the host (absolute, or starting with ~/)")
-    if verb in ("status", "start", "stop", "autostart"):
+    if verb in ("status", "start", "stop", "autostart", "update", "job"):
       c.add_argument("--dir", metavar="LABEL|DIR", help="which install: its label, or its folder; optional when HOST has just one managed")
+    if verb in ("plan",):
+      c.add_argument("--dir", metavar="DIR", help="a folder to check for an install")
+    if verb == "install":
+      c.add_argument("--dir", required=True, metavar="DIR", help="the folder to install in (absolute, or starting with ~/); it is created")
+      c.add_argument("--label", help="a short name for it in the panel")
+    if verb in ("install", "update"):
+      c.add_argument("--repo", help=f"clone from this https URL or folder instead of {COMFYUI_REPO}")
+      c.add_argument("--ref", help=f"this tag instead of {COMFYUI_TAG}")
+    if verb == "update":
+      c.add_argument("--comfyui", action="store_true", help="also move ComfyUI itself to its newest release (dgx-comfyui.sh update)")
     if verb == "autostart":
       c.add_argument("state", choices=("on", "off"))
     if verb == "adopt":

@@ -634,6 +634,7 @@ for i in $(seq 1 12); do s forget "me@par$i" >/dev/null & done; wait
 same "$(s hosts | grep -c '^me@par')" 0; ok $? "and so do forgets"
 s engine | grep -Eq '^https://github.com/bmaltais/omarchy-local-ai v[0-9]+\.[0-9]+\.[0-9]+-dgx\.[0-9]+$'; ok $? "engine prints the pinned repo and tag"
 s engine --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["repo"].startswith("https://") and "-dgx." in d["tag"]))'; ok $? "engine --json gives repo and tag"
+s engine --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["comfyui_repo"].startswith("https://") and d["comfyui_tag"].startswith("v")))'; ok $? "and the dgx-comfyui release it pins"
 
 # install, against the fake host
 fresh_host "gpu=AMD Radeon" dgx_name=
@@ -1651,6 +1652,24 @@ dj '"comfyui" not in d' status $g
 ds comfyui autostart $g --dir main on >/dev/null; ds comfyui autostart $g --dir main off >/dev/null; ok $? "demo autostart on then off"
 dj 'd["status"]["state"] == "stopped"' comfyui status $g --dir main --json
 ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null; ds comfyui forget $g --dir /media/demo/usb/dgx-comfyui >/dev/null
+# plan, install and update in demo mode: an install is a job that runs 8 s
+dj 'len(d["places"]) == 2 and d["problems"] == [] and "path" not in d' comfyui plan $g --json
+dj 'd["problems"] == []' comfyui plan $g --dir /home/demo/new --json
+dj 'd["problems"] == ["too_small"]' comfyui plan $g --dir /tiny/new --json
+dj 'd["problems"] == ["exists_not_empty"]' comfyui plan $g --dir /home/demo/dgx-comfyui --json
+ds comfyui install $g --dir /tiny/new >/dev/null 2>&1; ok $((!$?)) "demo install refuses a disk without the room"
+ds comfyui install $g --dir /home/demo/new --label fresh >/dev/null; ok $? "demo install starts a job"
+dj 'd["state"] == "running" and d["log"]' comfyui job $g --dir fresh --json
+ds comfyui start $g --dir fresh 2>&1 | grep -q "is running in"; ok $? "demo start is refused while its job runs"
+later() { STARTDGX_DEMO=1 XDG_STATE_HOME=$tmp/state STARTDGX_DEMO_NOW=$((now + 10)) PATH=$tmp/demo-bin:$PATH "$here/bin/startdgx" "$@"; }
+later comfyui job $g --dir fresh --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['state'] == 'succeeded'))"; ok $? "demo job succeeds after its time"
+later comfyui status $g --dir fresh --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (d['install']['installed'] and d['job']['state'] == 'succeeded'))"; ok $? "and the install is installed"
+ds comfyui adopt $g --dir /home/demo/code/dgx-comfyui --label dev >/dev/null
+ds comfyui update $g --dir dev 2>&1 | grep -q "uncommitted changes; commit or stash them, or move it yourself: git -C /home/demo/code/dgx-comfyui"; ok $? "demo update refuses an edited checkout, with the git commands"
+ds comfyui adopt $g --dir /media/demo/usb/dgx-comfyui --label usb >/dev/null
+ds comfyui update $g --dir usb >/dev/null; ok $? "demo update moves a clean checkout"
+dj 'd["state"] == "running"' comfyui job $g --dir usb --json
+ds comfyui forget $g --dir /home/demo/new >/dev/null; ds comfyui forget $g --dir /home/demo/code/dgx-comfyui >/dev/null; ds comfyui forget $g --dir /media/demo/usb/dgx-comfyui >/dev/null
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
 #@part comfyui
 # ComfyUI installs: the host script (discover, list, adopt, forget) runs for real against the fake home, through the fake ssh.
@@ -1716,6 +1735,8 @@ case "$*" in
   service) mkdir -p "${unit%/*}"; echo "WorkingDirectory=$PWD" >"$unit"; echo active >"$FAKE_HOST/running-dgx-comfyui.service"; echo up >"$PWD/.fake-state"; printf '\033[32m✓\033[0m unit written\n';;
   "service --disable") rm -f "$unit"; echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
   stop) echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
+  install) [ ! -e "$PWD/FAIL-INSTALL" ] || { echo "Error: boom" >&2; exit 1; }; mkdir -p .state lib ComfyUI/.git; : >lib/jsonout.py; echo "installed in $PWD";;
+  update) echo "ComfyUI updated in $PWD";;
   *) echo "Error: unknown $*" >&2; exit 2;;
 esac
 F
@@ -1757,6 +1778,117 @@ s comfyui autostart me@dgx --dir main off >/dev/null; ok $? "autostart off remov
 none_of "$home/.config/systemd/user/dgx-comfyui.service"; ok $? "and the unit is gone"
 s comfyui start me@dgx --dir main --json | py 'd["started"]=="'"$home"'/dgx-comfyui"'; ok $? "start --json says what it started"
 grep -q $'\033' <<<"$(s comfyui start me@dgx --dir main 2>&1)"; ok $((!$?)) "terminal controls from the script never reach the output"
+
+# install and update run as a detached job (systemd-run --user); the fake systemd-run runs it at once, or holds it as running
+cat >"$FAKE_HOSTBIN/systemd-run" <<'F'
+#!/usr/bin/env bash
+echo "systemd-run $*" >>"$FAKE_HOST/calls"
+unit="" log=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --unit) unit=$2; shift 2;;
+    -p) case $2 in StandardOutput=append:*) log=${2#StandardOutput=append:};; esac; shift 2;;
+    --) shift; break;;
+    *) shift;;
+  esac
+done
+if [ -e "$FAKE_HOST/job-hold" ]; then echo running >"$FAKE_HOST/job-$unit"; exit 0; fi
+"$@" >>"$log" 2>&1; echo $? >"$FAKE_HOST/job-$unit"
+F
+cat >"$FAKE_HOSTBIN/loginctl" <<'F'
+#!/usr/bin/env bash
+if [ "$1" = show-user ]; then [ -e "$FAKE_HOST/no-linger" ] && echo no || echo yes; fi
+F
+cat >"$FAKE_HOSTBIN/systemctl" <<'F'
+#!/usr/bin/env bash
+if [ "$*" != "${*/is-active/}" ]; then st=$(cat "$FAKE_HOST/running-${*: -1}" 2>/dev/null || echo inactive); echo "$st"; [ "$st" = active ]; exit; fi
+if [ "$2" = show ]; then
+  f=$FAKE_HOST/job-$3
+  if [ ! -e "$f" ]; then echo LoadState=not-found; exit; fi
+  rc=$(cat "$f"); echo LoadState=loaded
+  case $rc in running) printf '%s\n' ActiveState=active SubState=running;; 0) printf '%s\n' ActiveState=active SubState=exited ExecMainStatus=0;; *) printf '%s\n' ActiveState=failed SubState=failed ExecMainStatus=$rc;; esac
+  exit
+fi
+if [ "$2" = stop ]; then rm -f "$FAKE_HOST/job-$3"; fi
+printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
+F
+chmod +x "$FAKE_HOSTBIN"/*
+# the release a new install clones: a local repo whose tool is the fake, tagged v0.1.0 and v0.2.0
+src=$tmp/src; mkdir -p "$src"; git -C "$src" init -q -b main; mkdir -p "$src/lib"; : >"$src/lib/.keep"; fake_tool "$src"
+git -C "$src" add -A; git -C "$src" -c user.name=t -c user.email=t@t commit -q -m one; git -C "$src" tag v0.1.0
+echo two >"$src/two"; git -C "$src" add -A; git -C "$src" -c user.name=t -c user.email=t@t commit -q -m two; git -C "$src" tag v0.2.0
+new=$home/new/dgx-comfyui
+
+# plan: the disks, and whether a folder can take an install (the free-space floor is 1 byte here: the test disk's size isn't the subject)
+export STARTDGX_COMFYUI_MIN_FREE=1
+s comfyui plan me@dgx --json | py 'len(d["places"]) >= 1 and d["problems"] == [] and "path" not in d'; ok $? "plan lists the host's disks with free space"
+s comfyui plan me@dgx --dir "$new" --json | py 'd["problems"] == [] and d["path"] == "'"$new"'" and d["free_bytes"] > 0'; ok $? "plan accepts a new folder"
+s comfyui plan me@dgx --dir "$home/dgx-comfyui" --json | py 'd["problems"] == ["exists_not_empty", "inside_managed"]'; ok $? "plan refuses a folder with something in it, and one that is a managed install"
+s comfyui plan me@dgx --dir "$home/dgx-comfyui/sub" --json | py '"inside_managed" in d["problems"]'; ok $? "and a folder inside one"
+STARTDGX_COMFYUI_MIN_FREE=999999999999999999 s comfyui plan me@dgx --dir "$new" --json | py 'd["problems"] == ["too_small"]'; ok $? "plan refuses a disk without the free space"
+
+# install
+: >"$FAKE_HOST/no-linger"; s comfyui install me@dgx --dir "$new" --label fresh --repo "$src" --ref v0.1.0 2>&1 | grep -q "enable-linger"; ok $? "install refuses without lingering, and says the command (a 15-minute job would die with the ssh session)"
+none_of "$new" "$home/.local/share/startdgx/comfyui.json.tmp"; ok $? "and creates nothing"
+rm -f "$FAKE_HOST/no-linger"
+s comfyui install me@dgx --dir "$new" --label fresh --repo "$src" --ref v0.1.0 >/dev/null; ok $? "install starts the job"
+grep -q "systemd-run --user --unit startdgx-comfyui-" "$FAKE_HOST/calls"; ok $? "as a detached systemd-run --user unit"
+py '[r["label"] for r in d["installs"]][-1]=="fresh" and d["installs"][-1]["origin"]=="created" and d["installs"][-1]["tool_ref"]=="v0.1.0"' <"$rec"; ok $? "the install is recorded as created"
+present "$new/dgx-comfyui.sh" "$new/lib/jsonout.py" "$new/.state"; ok $? "the job cloned the tool and ran its install"
+s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="succeeded" and any("== startdgx: install in" in l for l in d["log"]) and any("installed in" in l for l in d["log"])'; ok $? "job says succeeded and shows the log"
+s comfyui status me@dgx --dir fresh --json | py 'd["job"]["state"]=="succeeded" and d["install"]["installed"] is True and d["too_old"] is False'; ok $? "status carries the job and the finished install"
+s comfyui install me@dgx --dir "$new" --repo "$src" >/dev/null 2>&1; ok $((!$?)) "installing into that folder again is refused"
+s comfyui install me@dgx --dir "$home/dgx-comfyui" --repo "$src" >/dev/null 2>&1; ok $((!$?)) "so is installing over an existing install"
+s comfyui install me@dgx --dir "$home/other" --repo 'x; touch /tmp/x' >/dev/null 2>&1; ok $((!$?)) "a --repo with shell characters is refused"
+s comfyui install me@dgx --dir "$home/other" --ref '--upload-pack=x' >/dev/null 2>&1; ok $((!$?)) "and a --ref that looks like an option"
+
+# a failed install can be run again where it stopped
+broke=$home/bad/dgx-comfyui
+git -C "$src" checkout -q v0.1.0; : >"$src/FAIL-INSTALL"; git -C "$src" add -A; git -C "$src" -c user.name=t -c user.email=t@t commit -q -m fail; git -C "$src" tag v0.3.0-fail; git -C "$src" checkout -q main
+s comfyui install me@dgx --dir "$broke" --label broken --repo "$src" --ref v0.3.0-fail >/dev/null; ok $? "an install whose job fails still starts"
+s comfyui job me@dgx --dir broken --json | py 'd["state"]=="failed" and d["exit_status"]==1 and any("boom" in l for l in d["log"])'; ok $? "job says failed, with the exit status and the log's boom"
+rm "$broke/FAIL-INSTALL"; s comfyui install me@dgx --dir "$broke" --label broken --repo "$src" --ref v0.3.0-fail >/dev/null; ok $? "running it again resumes the failed install"
+s comfyui job me@dgx --dir broken --json | py 'd["state"]=="succeeded"'; ok $? "and it succeeds this time"
+py 'len([r for r in d["installs"] if r["label"]=="broken"])==1' <"$rec"; ok $? "without a second record"
+
+# while a job runs, nothing else touches that install
+touch "$FAKE_HOST/job-hold"; s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.2.0 >/dev/null 2>&1; rm "$FAKE_HOST/job-hold"
+s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="running"'; ok $? "a held job reads as running"
+for verb in start stop update; do s comfyui $verb me@dgx --dir fresh 2>&1 | grep -q "is running in .*; follow it with"; ok $? "$verb is refused while its job runs"; done
+s comfyui autostart me@dgx --dir fresh off 2>&1 | grep -q "is running in .*; follow it with"; ok $? "autostart is refused while its job runs"
+rm -f "$FAKE_HOST"/job-startdgx-comfyui-*
+
+# update: only a clean checkout moves (the fake tool written above is committed first, so the checkout starts clean)
+git -C "$home/dgx-comfyui" add -A; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qm faketool
+s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "no upstream; move it yourself: git -C $home/dgx-comfyui fetch --tags"; ok $? "update refuses a checkout on a branch with no upstream, and gives the git commands"
+echo x >>"$home/dgx-comfyui/lib/jsonout.py"; git -C "$home/dgx-comfyui" -c user.name=t -c user.email=t@t commit -qam wip 2>/dev/null; echo y >>"$home/dgx-comfyui/lib/jsonout.py"
+s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 2>&1 | grep -q "uncommitted changes"; ok $? "update refuses uncommitted changes"
+s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.2.0 >/dev/null; ok $? "update moves a clean checkout"
+git -C "$new" describe --tags --exact-match | grep -qx v0.2.0; ok $? "to the release"
+s comfyui job me@dgx --dir fresh --json | py 'd["state"]=="succeeded" and any("installed in" in l for l in d["log"])'; ok $? "and runs its install"
+py '[r for r in d["installs"] if r["label"]=="fresh"][0]["previous_ref"]=="v0.1.0"' <"$rec"; ok $? "the record keeps where it came from"
+s comfyui update me@dgx --dir fresh --repo "$src" --ref v0.1.0 --comfyui >/dev/null; ok $? "update --comfyui also updates ComfyUI"
+s comfyui job me@dgx --dir fresh --json | py 'any("ComfyUI updated in" in l for l in d["log"])'; ok $? "through the tool's own update"
+git -C "$home/dgx-comfyui" checkout -q -- . 2>/dev/null
+comfy_up; s comfyui update me@dgx --dir main --repo "$src" --ref v0.2.0 >/dev/null 2>&1; ok $((!$?)) "update refuses while ComfyUI runs"; kill "$(cat "$tmp/comfy.pid")" 2>/dev/null
+
+# the release the panel offers a move to
+git -C "$tmp/usb/dgx-comfyui" tag v0.0.5 2>/dev/null; git -C "$home/dgx-comfyui" tag -d v0.1.0 >/dev/null; git -C "$home/dgx-comfyui" tag v0.0.5
+s comfyui status me@dgx --dir main --json | py 'd["install"]["tool"]["tag"]=="v0.0.5"'; ok $? "status reads an older tag"
+s comfyui status me@dgx --dir main | grep -q "v0.0.5 -> v0.1.0 is available"; ok $? "and says the pinned release is available"
+s comfyui status me@dgx --dir fresh | grep -q "is available"; ok $((!$?)) "an install on a newer release is offered nothing"
+
+# The contract with dgx-comfyui itself: its own status --json, from the release startdgx pins (or the checkout's HEAD until that tag exists),
+# has what startdgx reads, and ships lib/jsonout.py, which startdgx takes as "this install speaks --json".
+cf=$HOME/StartFS/github/dgx-comfyui
+pin=$("$here/bin/startdgx" engine --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("comfyui_tag", ""))' 2>/dev/null)
+ref=${pin:-HEAD}; git -C "$cf" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1 || ref=HEAD
+if git -C "$cf" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1; then
+  mkdir -p "$tmp/cf-pin" && git -C "$cf" archive "$ref" | tar -x -C "$tmp/cf-pin"
+  if [ -f "$tmp/cf-pin/lib/jsonout.py" ]; then
+    "$tmp/cf-pin/dgx-comfyui.sh" status --json 2>/dev/null | py 'd["schema"]==1 and {"installed","state","pid","rss_mib","port","bind","comfy","service","tool"} <= set(d) and {"version","newer_release"} <= set(d["comfy"]) and {"tag","commit","branch","dirty","unpushed"} <= set(d["tool"]) and {"installed","active","enabled"} <= set(d["service"])'; ok $? "dgx-comfyui's own status --json has every field startdgx reads ($ref)"
+  fi
+fi
 
 # the memory a running ComfyUI holds rides on the status poll
 mkdir -p "$home/.local/share/omarchy-local-ai"; printf '#!/bin/sh\necho "{\\"models\\":{}}"\n' >"$home/.local/share/omarchy-local-ai/omarchy-local-ai"; chmod +x "$home/.local/share/omarchy-local-ai/omarchy-local-ai"
