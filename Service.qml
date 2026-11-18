@@ -145,6 +145,8 @@ Item {
     root.cardPage = page || ""
     root.card = "recipeSettings"
     core.planContext(host, r.id)
+    // What TensorFold's list gave this machine for it, if it came from there: the window's Run page.
+    core.loadTf(false, host)
   }
 
   function showAddModel(host) {
@@ -153,6 +155,8 @@ Item {
     root.cardHost = host
     root.card = "addModel"
     core.listRecipes(host)
+    // Which of the recipes came from TensorFold's list: those aren't offered a measuring run here.
+    core.loadTf(false, host)
   }
   // The Find on Hugging Face card: the search runs on this computer; the machine is only whose memory the rows are set against.
   function showFind(host, query) {
@@ -250,6 +254,7 @@ Item {
     case "hostSettings": root.showHostSettings(action.host, action.page); break
     case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
     case "recipeSettings": root.showRecipeSettings(action.host, action.recipe, action.page); break
+    case "tfChange": core.draftTensorfold(action.host, action.row, action.choices, true); break
     case "addContext": core.addContext(action.host, action.id, action.ctx); break
     case "removeContext": core.addContext(action.host, action.id, action.ctx, true); break
     case "fixRecipe": core.launch("fix", action.host, action.id); root.close(); break

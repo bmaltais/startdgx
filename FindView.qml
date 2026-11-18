@@ -25,10 +25,6 @@ FocusScope {
   // The machine's own recipe list, so a row says where its model stands there (not added, added and not measured, already on it).
   readonly property var recipes: card.dgx.listHost === card.host ? card.dgx.recipes : null
   function stateOf(recipeId) { return Model.findState(recipeId, card.recipes, card.hostState ? card.hostState.status : null) }
-  // Set up… on a row that is ready: the card that shows the download first, as for any recipe of yours.
-  function setUpAdded(state) {
-    if (state.recipe && Number(state.recipe.context) > 0) card.svc.dispatch({ type: "setupYours", host: card.host, recipe: state.recipe })
-  }
   function measureAdded(state) {
     if (!state.recipe) return
     if (state.measureCtx > 0) card.svc.dispatch({ type: "measureRecipe", host: card.host, recipe: state.recipe, ctx: state.measureCtx })
@@ -66,10 +62,8 @@ FocusScope {
     if (!card.dgx.recipeBusy) card.dgx.draftRecipe(card.host, repo)
   }
   function draftEntry(row) {
-    if (!card.dgx.recipeBusy) card.dgx.draftTensorfold(card.host, row, card.picked[row.id] || null)
+    if (!card.dgx.recipeBusy) card.dgx.draftTensorfold(card.host, row, null)
   }
-  // What was picked in each TensorFold row's choices (context, requests at once, input), by entry id, and the row whose choices are open.
-  property var picked: ({})
   // The row whose Update waits for its second click (a measured recipe loses its measurement).
   property string confirming: ""
   function update(row, st) {
@@ -78,13 +72,6 @@ FocusScope {
     if (plan.confirm && card.confirming !== row.id) { card.confirming = row.id; return }
     card.confirming = ""
     card.dgx.draftTensorfold(card.host, row, Model.tfAddedChoices(row), plan.confirm)
-  }
-  property string customizing: ""
-  function pick(id, key, value) {
-    const next = Object.assign({}, card.picked)
-    next[id] = Object.assign({}, next[id] || {})
-    next[id][key] = value
-    card.picked = next
   }
 
   // With an agent…: a terminal that drafts and lets an agent finish the recipe; nothing comes back to the card.
@@ -98,7 +85,7 @@ FocusScope {
   }
 
   // A model just added changes what the rows say.
-  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) { card.dgx.listRecipes(card.host); if (card.tf && !card.tfLoading) card.dgx.loadTf(false, card.host) }
+  onDraftResultChanged: if (card.draftResult && card.draftResult.ok) { card.dgx.listRecipes(card.host) }
 
   Component.onCompleted: {
     card.dgx.listRecipes(card.host)
@@ -159,7 +146,7 @@ FocusScope {
       visible: card.tf
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
-      text: "Models TensorFold publishes for one DGX Spark, read from this computer. Add puts one on " + Model.hostName(card.host) + " with TensorFold's memory estimate; Set up… then downloads and starts it there. Measure… is optional: it replaces the estimate with real numbers."
+      text: "Models TensorFold publishes for one DGX Spark, read from this computer. Add puts one in " + Model.hostName(card.host) + "'s model list; nothing is downloaded until you set it up there. Its gear changes context, requests at once and input."
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -540,93 +527,14 @@ FocusScope {
                 tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + " again from TensorFold's current version, with the choices it had" + (Model.tfUpdatePlan(tfRow.modelData, tfRow.st).confirm ? ". It was measured: the measurement is discarded and it has to be measured again" : "")
                 onClicked: card.update(tfRow.modelData, tfRow.st)
               }
-              TextLink {
-                visible: tfRow.st.state === "ready" && !tfRow.st.measured && tfRow.st.measureCtx > 0
-                text: "Measure…"
-                tooltip: "Optional: download it, load it and bench it on " + Model.hostName(card.host) + ", to replace TensorFold's estimate with real numbers"
-                onClicked: card.measureAdded(tfRow.st)
-              }
-              Button {
-                visible: tfRow.st.state === "ready"
-                text: "Set up…"
-                bordered: true
-                fontSize: Style.font.bodySmall
-                tooltipText: "Download " + tfRow.modelData.name + " to " + Model.hostName(card.host) + " and start it. Shows the download and asks first"
-                onClicked: card.setUpAdded(tfRow.st)
-              }
-              Button {
-                visible: tfRow.st.state === "unmeasured"
-                text: "Measure…"
-                bordered: true
-                fontSize: Style.font.bodySmall
-                tooltipText: "Download " + tfRow.modelData.name + ", load it and bench it on " + Model.hostName(card.host) + ". Its numbers don't count until then. Shows the download and asks first"
-                onClicked: card.measureAdded(tfRow.st)
-              }
-              TextLink {
-                visible: tfRow.modelData.settings !== null && tfRow.st.state === ""
-                text: Model.tfCustomized(tfRow.modelData.settings, card.picked[tfRow.modelData.id]) ? "Customized" : "Customize"
-                tooltip: "Context, requests at once and input, as on tensorfold.dev"
-                picked: card.customizing === tfRow.modelData.id
-                onClicked: card.customizing = card.customizing === tfRow.modelData.id ? "" : tfRow.modelData.id
-              }
               Button {
                 visible: tfRow.modelData.draftable && tfRow.st.state === ""
                 text: "Add"
                 bordered: true
                 fontSize: Style.font.bodySmall
                 opacity: card.dgx.recipeBusy ? 0.4 : 1
-                tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + ". It isn't measured yet, so it can't run until you press Measure…"
+                tooltipText: "Add " + tfRow.modelData.name + " to " + Model.hostName(card.host) + "'s model list, with TensorFold's default settings. Nothing is downloaded yet"
                 onClicked: card.draftEntry(tfRow.modelData)
-              }
-            }
-
-            // The same three choices tensorfold.dev offers for this model, as pills; each becomes a launch flag of the recipe.
-            ColumnLayout {
-              id: tfChoices
-              Layout.fillWidth: true
-              visible: card.customizing === tfRow.modelData.id && tfRow.modelData.settings !== null && tfRow.st.state === ""
-              spacing: Style.spacing.md
-              readonly property var values: Model.tfValues(tfRow.modelData.settings, card.picked[tfRow.modelData.id])
-
-              Repeater {
-                model: [{ key: "context", title: "Context", name: "contexts" }, { key: "parallel", title: "Requests at once", name: "requests" }, { key: "input", title: "Input", name: "inputs" }]
-                delegate: RowLayout {
-                  id: choiceRow
-                  required property var modelData
-                  readonly property var options: tfRow.modelData.settings ? tfRow.modelData.settings[choiceRow.modelData.name] : []
-                  Layout.fillWidth: true
-                  spacing: Style.spacing.md
-                  Text {
-                    Layout.preferredWidth: Style.space(120)
-                    text: choiceRow.modelData.title
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                  }
-                  Flow {
-                    Layout.fillWidth: true
-                    spacing: Style.spacing.md
-                    Repeater {
-                      model: choiceRow.options
-                      delegate: SettingsPill {
-                        id: choice
-                        required property var modelData
-                        text: Model.tfChoiceLabel(choiceRow.modelData.key, choice.modelData)
-                        primary: tfChoices.values[choiceRow.modelData.key] === choice.modelData
-                        onClicked: card.pick(tfRow.modelData.id, choiceRow.modelData.key, choice.modelData)
-                      }
-                    }
-                  }
-                }
-              }
-              Text {
-                Layout.fillWidth: true
-                textFormat: Text.PlainText
-                wrapMode: Text.Wrap
-                text: "TensorFold's memory figure is for its default settings. Measure… finds the real numbers for the ones you pick."
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
               }
             }
           }
