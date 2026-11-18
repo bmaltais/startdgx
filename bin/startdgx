@@ -62,6 +62,7 @@ AGENT_LINK = "/usr/local/bin/omarchy-agent-local"
 ENGINE_DIR = ".local/share/omarchy-local-ai"
 STARTDGX_DIR = ".local/share/startdgx"
 MANIFEST = f"~/{STARTDGX_DIR}/manifest.json"
+COMFYUI_RECORDS = f"{STARTDGX_DIR}/comfyui.json"
 BACKUP_DIR = f"{STARTDGX_DIR}/backup"
 
 
@@ -393,6 +394,13 @@ def passthrough(*engine_args):
 ENGINE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-dgx\.(\d+)$")
 MANIFEST_MARK = "#manifest"
 MEMORY_MARK = "#memory"
+COMFYUI_MARK = "#comfyui"
+# The managed ComfyUI installs that are running, and what each holds: one "KiB<TAB>path" line apiece. It reads the records
+# and each install's pid file, nothing else, so a poll costs a few file reads (the real status call is comfyui status).
+COMFYUI_RSS = (f"f=$HOME/{COMFYUI_RECORDS}; if [ -f \"$f\" ]; then sed -n 's/^ *\"path\": *\"\\(.*\\)\",*$/\\1/p' \"$f\" | "
+               "while IFS= read -r p; do pid=$(cat \"$p/.state/comfyui.pid\" 2>/dev/null); "
+               "if [ -n \"$pid\" ] && tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null | grep -q main.py; then "
+               "printf '%s\\t%s\\n' \"$(sed -n 's/^VmRSS:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$pid/status)\" \"$p\"; fi; done; fi;")
 
 
 def engine_update(host_tag, pinned=None):
@@ -411,10 +419,11 @@ def cmd_status(args):
   host = target(args.host)
   out = ssh_raw(host, f"{ENGINE} status --json; rc=$?; if [ $rc = 0 ]; then echo; echo '{MANIFEST_MARK}'; "
                       f"grep -m1 '\"tag\"' {MANIFEST} 2>/dev/null; echo '{MEMORY_MARK}'; "
-                      f"sed -n 's/^MemAvailable: *\\([0-9]*\\).*/\\1/p' /proc/meminfo 2>/dev/null; fi; exit $rc",
+                      f"sed -n 's/^MemAvailable: *\\([0-9]*\\).*/\\1/p' /proc/meminfo 2>/dev/null; echo '{COMFYUI_MARK}'; {COMFYUI_RSS} fi; exit $rc",
                 timeout=args.timeout, what="status").stdout
   status, _, rest = out.partition(f"\n{MANIFEST_MARK}\n")
-  manifest, _, memory = rest.partition(f"{MEMORY_MARK}\n")
+  manifest, _, rest = rest.partition(f"{MEMORY_MARK}\n")
+  memory, _, comfy = rest.partition(f"{COMFYUI_MARK}\n")
   tag = re.search(r'"tag":\s*"([^"]*)"', manifest)
   update = engine_update(tag[1]) if tag else None
   kib = re.match(r"\d+", memory.strip())
@@ -427,6 +436,9 @@ def cmd_status(args):
     extra["engine_update"] = update
   if kib:
     extra["ram_available_gib"] = round(int(kib[0]) / 1048576, 1)
+  running = [line.split("\t", 1) for line in comfy.splitlines() if "\t" in line]
+  if running:
+    extra["comfyui"] = [{"path": path, "rss_mib": round(int(rss) / 1024)} for rss, path in running if rss.isdigit()]
   if extra and isinstance(document, dict):
     sys.stdout.write(json.dumps({**document, **extra}) + "\n")
   else:
@@ -2456,12 +2468,15 @@ def public(row):
 
 def demo_status(args):
   with demo_state() as state:
-    status = demo_host(state, args.host)["status"]
+    machine = demo_host(state, args.host)
+    status, comfyui = machine["status"], machine.get("comfyui", {}).get("installs", [])
   # The demo machine has something else holding 14 GiB (a model loaded through ComfyUI, say), so the bar shows it.
   held = sum((row.get("_observed") or row.get("observed") or {}).get("ram_used_gib") or 0
              for row in status["models"].values() if row["unit"] == "active")
+  held += sum(DEMO_COMFYUI_GIB for i in comfyui if i["managed"] and i.get("state") == "up")
   available = round(max(0.0, status["ram_total_gib"] - held - 14), 1)
-  print(json.dumps({**status, "ram_available_gib": available,
+  running = [{"path": i["path"], "rss_mib": DEMO_COMFYUI_GIB * 1024} for i in comfyui if i["managed"] and i.get("state") == "up"]
+  print(json.dumps({**status, "ram_available_gib": available, **({"comfyui": running} if running else {}),
                     "models": {rid: public(row) for rid, row in status["models"].items()}}, indent=2))
 
 
@@ -2914,10 +2929,28 @@ def demo_logs(args):
   print(f"Demo: {rid or 'no model'} on {args.host} has no logs")
 
 
+DEMO_COMFYUI_GIB = 31  # what a demo ComfyUI holds while it runs
+
+
+def demo_comfyui_pick(installs, which):
+  """The managed install `which` names (a label or a folder), or the only one; the host script's resolve."""
+  managed = [i for i in installs if i["managed"]]
+  if not managed:
+    raise Error("No ComfyUI is managed on this host; adopt or install one first")
+  if which:
+    hits = [i for i in managed if i["path"] == which or i["label"] == which]
+    if not hits:
+      raise Error(f"{which} isn't managed here; adopt it first")
+    return hits[0]
+  if len(managed) > 1:
+    raise Error("Several ComfyUI installs are managed here; say which: " + ", ".join(i["label"] or i["path"] for i in managed))
+  return managed[0]
+
+
 def demo_comfyui(args):
-  """The ComfyUI commands on a demo machine: its installs are in comfyui.json (none on a machine without the file), and
-  adopting or forgetting one only flips its `managed`."""
-  with demo_state(write=args.verb in ("adopt", "forget")) as state:
+  """The ComfyUI commands on a demo machine: its installs are in comfyui.json (none on a machine without the file).
+  Adopting or forgetting one flips its `managed`; start and stop flip its `state` (up or stopped) at once."""
+  with demo_state(write=args.verb != "discover" and args.verb != "list" and args.verb != "status") as state:
     installs = demo_host(state, args.host).setdefault("comfyui", {"installs": []})["installs"]
     if args.verb in ("adopt", "forget"):
       path = comfyui_dir(args.dir)
@@ -2938,7 +2971,43 @@ def demo_comfyui(args):
         answer = {"forgot": path}
       print(json.dumps(answer) if args.json else comfyui_done(args.verb, answer, args.host))
       return
+    if args.verb in ("status", "start", "stop", "autostart"):
+      item = demo_comfyui_pick(installs, comfyui_which(args.dir))
+      others = [i["path"] for i in installs if i["managed"] and i["path"] != item["path"] and i.get("state") == "up"]
+      if args.verb == "status":
+        up = item.get("state") == "up"
+        answer = {"install": {k: v for k, v in item.items() if k not in ("state", "rss_mib", "autostart")}, "too_old": not item["json_capable"], "running_elsewhere": others,
+                  "status": None if not item["json_capable"] else {
+                    "schema": 1, "root": item["path"], "installed": True, "state": "up" if up else "stopped", "pid": 4242 if up else None,
+                    "rss_mib": DEMO_COMFYUI_GIB * 1024 if up else None, "port": 8188, "bind": "0.0.0.0",
+                    "comfy": {"version": "v0.45.4 (2026-11-15)", "commit": "2aa4d535a", "newer_release": "v0.45.6"},
+                    "service": {"installed": bool(item.get("autostart")), "active": up and bool(item.get("autostart")), "enabled": "enabled" if item.get("autostart") else ""}}}
+        if args.json:
+          print(json.dumps(answer))
+        else:
+          cmd_comfyui_status_text(answer)
+        return
+      if args.verb in ("start", "autostart") and not (args.verb == "autostart" and args.state == "off"):
+        if others:
+          raise Error(f"ComfyUI in {others[0]} is running; stop it first (one at a time on a machine)")
+        item.update(state="up", autostart=True)
+        answer = {"started": item["path"]} if args.verb == "start" else {"autostart": True, "path": item["path"]}
+      elif args.verb == "autostart":
+        if not item.get("autostart"):
+          raise Error(f"ComfyUI in {item['path']} isn't set to start at boot")
+        item.update(state="stopped", autostart=False)
+        answer = {"autostart": False, "path": item["path"]}
+      else:
+        was = item.get("state") == "up"
+        item["state"] = "stopped"
+        answer = {"stopped": item["path"], "was_running": was}
+      if args.json:
+        print(json.dumps(answer))
+      else:
+        cmd_comfyui_action_text(args, answer)
+      return
     shown = installs if args.verb == "discover" else [i for i in installs if i["managed"]]
+  shown = [{k: v for k, v in i.items() if k not in ("state", "rss_mib", "autostart")} for i in shown]
   answer = {"installs": shown}
   if args.json:
     print(json.dumps(answer))
@@ -2963,7 +3032,6 @@ DEMO_COMMANDS = {"comfyui": demo_comfyui, "status": demo_status, "list": demo_li
 # "Error:" line on stderr. list and discover are read-only: discover reads the service unit, running processes, the
 # records and a bounded walk of $HOME (5 deep, no dot folders, symlinked top-level folders such as ~/usbdisk followed),
 # and runs no script of an install (git is asked only to describe the tool's checkout).
-COMFYUI_RECORDS = ".local/share/startdgx/comfyui.json"
 COMFYUI_UNIT = ".config/systemd/user/dgx-comfyui.service"
 COMFYUI_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$")
 COMFYUI_SCRIPT = '''
@@ -2975,7 +3043,7 @@ def fail(text):
   print("Error: " + text, file=sys.stderr)
   sys.exit(1)
 def clean_path(raw):
-  if not raw or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+  if not raw or any(ord(c) < 32 or ord(c) == 127 or c in '"\\\\' for c in raw):
     fail("that isn't a usable folder name")
   path = os.path.expanduser(raw)
   if not os.path.isabs(path) or ".." in path.split("/"):
@@ -3081,6 +3149,65 @@ def discover():
     item["label"] = records[path].get("label", "") if path in records else ""
     out.append(item)
   print(json.dumps({"installs": out}))
+ANSI = re.compile("\\x1b\\\\[[0-9;]*[A-Za-z]")
+def say_line(text):
+  lines = [ANSI.sub("", l).strip() for l in text.splitlines() if ANSI.sub("", l).strip()]
+  return lines[-1] if lines else "failed"
+def resolve(name):
+  installs = load()
+  if not installs:
+    fail("No ComfyUI is managed on this host; adopt or install one first")
+  if name:
+    if name.startswith("/") or name.startswith("~/"):
+      want = clean_path(name)
+      hits = [r for r in installs if os.path.realpath(r["path"]) == want]
+    else:
+      hits = [r for r in installs if r.get("label") == name]
+    if not hits:
+      fail(name + " isn't managed here; adopt it first")
+    return os.path.realpath(hits[0]["path"]), hits[0]
+  if len(installs) > 1:
+    fail("Several ComfyUI installs are managed here; say which: " + ", ".join(r.get("label") or r["path"] for r in installs))
+  return os.path.realpath(installs[0]["path"]), installs[0]
+def user_env():
+  env = dict(os.environ)
+  runtime = "/run/user/%d" % os.getuid()
+  env.setdefault("XDG_RUNTIME_DIR", runtime)
+  env.setdefault("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + runtime + "/bus")
+  return env
+def running_roots():
+  roots = set()
+  for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+      continue
+    try:
+      argv = open("/proc/%s/cmdline" % pid, "rb").read().split(b"\\0")
+      if not any(a.endswith(b"main.py") for a in argv):
+        continue
+      cwd = os.path.realpath("/proc/%s/cwd" % pid)
+    except OSError:
+      continue
+    if is_dgx(os.path.dirname(cwd)):
+      roots.add(os.path.dirname(cwd))
+  return roots
+def unit_root():
+  try:
+    for line in open(UNIT):
+      if line.startswith("WorkingDirectory="):
+        return os.path.realpath(line.split("=", 1)[1].strip())
+  except OSError:
+    pass
+  return ""
+def service_active(path):
+  if unit_root() != path:
+    return False
+  return subprocess.run(["systemctl", "--user", "is-active", "--quiet", "dgx-comfyui.service"], env=user_env()).returncode == 0
+def tool(path, *argv, timeout=120):
+  try:
+    r = subprocess.run([os.path.join(path, "dgx-comfyui.sh"), *argv], capture_output=True, text=True, timeout=timeout, env=user_env(), stdin=subprocess.DEVNULL, cwd=path)
+  except subprocess.TimeoutExpired:
+    fail("dgx-comfyui.sh " + argv[0] + " didn't finish in time")
+  return r
 ARGV = sys.argv[2:]
 mode = ARGV[0]
 if mode == "discover":
@@ -3113,6 +3240,54 @@ elif mode == "forget":
       fail(path + " isn't managed")
     save(rest)
   print(json.dumps({"forgot": path}))
+elif mode in ("status", "start", "stop", "autostart"):
+  path, record = resolve(ARGV[1] if len(ARGV) > 1 and ARGV[1] else "")
+  item = inspect(path)
+  item.update(managed=True, label=record.get("label", ""), origin=record.get("origin", ""))
+  if not item["present"] or item["kind"] != "dgx-comfyui":
+    fail(path + " is no longer a dgx-comfyui install; forget it")
+  others = sorted(running_roots() - {path})
+  if mode == "status":
+    status = None
+    if item["json_capable"]:
+      r = tool(path, "status", "--json", timeout=60)
+      try:
+        status = json.loads(r.stdout)
+      except ValueError:
+        fail("dgx-comfyui.sh status --json gave no JSON: " + say_line(r.stderr or r.stdout))
+    print(json.dumps({"install": item, "status": status, "too_old": not item["json_capable"], "running_elsewhere": others}))
+  elif mode == "start":
+    if not item["installed"]:
+      fail(path + " has no ComfyUI yet; install it first")
+    if others:
+      fail("ComfyUI in " + others[0] + " is running; stop it first (one at a time on a machine)")
+    r = tool(path, "service")
+    if r.returncode != 0:
+      fail(say_line(r.stderr or r.stdout))
+    print(json.dumps({"started": path}))
+  elif mode == "stop":
+    if path not in running_roots() and not service_active(path):
+      print(json.dumps({"stopped": path, "was_running": False}))
+    elif not service_active(path):
+      fail("ComfyUI in " + path + " was started in a terminal; stop it there (Ctrl+C)")
+    else:
+      r = tool(path, "stop")
+      if r.returncode != 0:
+        fail(say_line(r.stderr or r.stdout))
+      print(json.dumps({"stopped": path, "was_running": True}))
+  else:
+    on = ARGV[2] == "on"
+    if on:
+      if others:
+        fail("ComfyUI in " + others[0] + " is running; stop it first (one at a time on a machine)")
+      r = tool(path, "service")
+    else:
+      if unit_root() != path:
+        fail("ComfyUI in " + path + " isn't set to start at boot")
+      r = tool(path, "service", "--disable")
+    if r.returncode != 0:
+      fail(say_line(r.stderr or r.stdout))
+    print(json.dumps({"autostart": on, "path": path}))
 else:
   fail("unknown mode " + mode)
 '''.replace("@RECORDS@", COMFYUI_RECORDS).replace("@UNIT@", COMFYUI_UNIT)
@@ -3175,8 +3350,65 @@ def cmd_comfyui_forget(args):
   print(json.dumps(answer) if args.json else comfyui_done("forget", answer, args.host))
 
 
+def comfyui_action(args, mode, *extra):
+  return comfyui_run(target(args.host), args, mode, comfyui_which(args.dir), *extra)
+
+
+def comfyui_which(path):
+  """The install named by --dir: a label, or a folder (absolute, or starting with ~/); empty when the host has just one."""
+  if not path:
+    return ""
+  if path.startswith("/") or path.startswith("~/"):
+    return comfyui_dir(path)
+  if not COMFYUI_LABEL_RE.match(path):
+    raise Error("Name an install by its label, or by its folder (absolute, or starting with ~/)")
+  return path
+
+
+def cmd_comfyui_status(args):
+  answer = comfyui_action(args, "status")
+  if args.json:
+    print(json.dumps(answer))
+    return
+  cmd_comfyui_status_text(answer)
+
+
+def cmd_comfyui_status_text(answer):
+  print(comfyui_install_line(answer["install"]))
+  status = answer["status"]
+  if answer["too_old"]:
+    print("  too old for startdgx to read its state (no --json): update it on the host")
+  elif status:
+    print(f"  {status['state']}" + (f" at port {status['port']}" if status["state"] != "stopped" else "") +
+          (f", using {status['rss_mib'] / 1024:.1f} GiB" if status.get("rss_mib") else "") +
+          f"; ComfyUI {status['comfy']['version'] or 'not installed'}" +
+          (f" (newer: {status['comfy']['newer_release']})" if status["comfy"]["newer_release"] else ""))
+  if answer["running_elsewhere"]:
+    print(f"  ComfyUI in {answer['running_elsewhere'][0]} is running (one at a time on a machine)")
+
+
+def cmd_comfyui_action_text(args, answer):
+  if "started" in answer:
+    print(f"Started ComfyUI in {answer['started']} on {args.host} as a background service")
+  elif "stopped" in answer:
+    print(f"Stopped ComfyUI in {answer['stopped']} on {args.host}" if answer["was_running"] else f"ComfyUI in {answer['stopped']} wasn't running")
+  elif answer["autostart"]:
+    print(f"ComfyUI in {answer['path']} runs in the background and starts at boot; it was started now")
+  else:
+    print(f"ComfyUI in {answer['path']} no longer starts at boot, and was stopped")
+
+
+def cmd_comfyui_act(args):
+  answer = comfyui_action(args, args.verb, *([args.state] if args.verb == "autostart" else []))
+  if args.json:
+    print(json.dumps(answer))
+  else:
+    cmd_comfyui_action_text(args, answer)
+
+
 def cmd_comfyui(args):
-  return {"discover": cmd_comfyui_list, "list": cmd_comfyui_list, "adopt": cmd_comfyui_adopt, "forget": cmd_comfyui_forget}[args.verb](args)
+  return {"discover": cmd_comfyui_list, "list": cmd_comfyui_list, "adopt": cmd_comfyui_adopt, "forget": cmd_comfyui_forget,
+          "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act}[args.verb](args)
 
 
 def build_parser():
@@ -3297,15 +3529,23 @@ def build_parser():
   add("logs", passthrough("logs"), optional_model=True, description="Show a model's last error and logs (default: the last one started).")
   cp = sub.add_parser("comfyui", description="ComfyUI installs (dgx-comfyui) on a host: find existing ones and adopt them under startdgx, "
                       "list the ones it manages, or forget one. startdgx never changes or deletes an install's folder.")
-  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget")
-  for verb in ("discover", "list", "adopt", "forget"):
+  cv = cp.add_subparsers(dest="verb", required=True, metavar="discover|list|adopt|forget|status|start|stop|autostart")
+  for verb in ("discover", "list", "adopt", "forget", "status", "start", "stop", "autostart"):
     c = cv.add_parser(verb, description={"discover": "Read-only: the installs on HOST (the service's, a running one, the ones startdgx manages and a bounded search of the home folder). A ComfyUI that dgx-comfyui didn't install is listed as not managed.",
                                           "list": "The installs startdgx manages on HOST.",
                                           "adopt": "Manage an existing dgx-comfyui install in DIR: only startdgx's own record is written.",
-                                          "forget": "Stop managing the install in DIR. The folder is not touched."}[verb])
+                                          "forget": "Stop managing the install in DIR. The folder is not touched.",
+                                          "status": "One managed install's state, from its own dgx-comfyui.sh status --json.",
+                                          "start": "Run the install as a background service (dgx-comfyui.sh service); it restarts after a crash and starts at boot. Refused while another install on HOST runs.",
+                                          "stop": "Stop the install's service. A ComfyUI started in a terminal is refused: stop it there.",
+                                          "autostart": "on: run it as a background service and start it now (as start). off: remove the service, which stops it and ends starting at boot."}[verb])
     c.add_argument("host")
     if verb in ("adopt", "forget"):
       c.add_argument("--dir", required=True, metavar="DIR", help="the install's folder on the host (absolute, or starting with ~/)")
+    if verb in ("status", "start", "stop", "autostart"):
+      c.add_argument("--dir", metavar="LABEL|DIR", help="which install: its label, or its folder; optional when HOST has just one managed")
+    if verb == "autostart":
+      c.add_argument("state", choices=("on", "off"))
     if verb == "adopt":
       c.add_argument("--label", help="a short name for it in the panel")
     c.add_argument("--json", action="store_true")

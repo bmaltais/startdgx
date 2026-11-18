@@ -1636,6 +1636,21 @@ ds comfyui adopt $g --dir /home/demo/ComfyUI >/dev/null 2>&1; ok $((!$?)) "demo 
 ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null; ok $? "demo forget"
 dj 'd["installs"] == []' comfyui list $g --json
 dj 'd["installs"] == []' comfyui discover $a --json
+ds comfyui adopt $g --dir /home/demo/dgx-comfyui --label main >/dev/null; ds comfyui adopt $g --dir /media/demo/usb/dgx-comfyui --label usb >/dev/null
+dj '"comfyui" not in d' status $g
+dj 'd["status"]["state"] == "stopped" and not d["too_old"]' comfyui status $g --dir main --json
+dj 'd["too_old"] and d["status"] is None' comfyui status $g --dir usb --json
+ds comfyui start $g >/dev/null 2>&1; ok $((!$?)) "demo start with two managed installs and no --dir says which"
+ds comfyui start $g --dir main >/dev/null; ok $? "demo start runs an install"
+dj 'd["comfyui"] == [{"path": "/home/demo/dgx-comfyui", "rss_mib": 31744}]' status $g
+dj 'd["ram_available_gib"] < 60' status $g
+ds comfyui start $g --dir usb 2>&1 | grep -q "is running; stop it first"; ok $? "demo start of a second install is refused while the first runs"
+ds comfyui autostart $g --dir usb off >/dev/null 2>&1; ok $((!$?)) "demo autostart off for an install that isn't set to start at boot is refused"
+ds comfyui stop $g --dir main >/dev/null; ok $? "demo stop"
+dj '"comfyui" not in d' status $g
+ds comfyui autostart $g --dir main on >/dev/null; ds comfyui autostart $g --dir main off >/dev/null; ok $? "demo autostart on then off"
+dj 'd["status"]["state"] == "stopped"' comfyui status $g --dir main --json
+ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null; ds comfyui forget $g --dir /media/demo/usb/dgx-comfyui >/dev/null
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
 #@part comfyui
 # ComfyUI installs: the host script (discover, list, adopt, forget) runs for real against the fake home, through the fake ssh.
@@ -1685,9 +1700,69 @@ s uninstall me@dgx --dry-run 2>&1 | grep -q "No install manifest"; ok $? "so uni
 
 # forget
 s comfyui forget me@dgx --dir "$home/dgx-comfyui" >/dev/null; ok $? "forget drops the record"
-[ -f "$home/dgx-comfyui/dgx-comfyui.sh" ] && [ -d "$home/dgx-comfyui/.state" ]; ok $? "and leaves the folder alone"
+present "$home/dgx-comfyui/dgx-comfyui.sh" "$home/dgx-comfyui/.state"; ok $? "and leaves the folder alone"
 s comfyui forget me@dgx --dir "$home/dgx-comfyui" >/dev/null 2>&1; ok $((!$?)) "forgetting an unmanaged install is refused"
 s comfyui list me@dgx --json | py 'len(d["installs"])==1'; ok $? "list shows what is left"
 grep -q "python3 -I - comfyui" "$FAKE_LOG"; ok $? "every call is one ssh running the host script"
+
+# status, start, stop, autostart: each install's own dgx-comfyui.sh is a fake that logs its arguments and flips a state file.
+fake_tool() { # ROOT: a dgx-comfyui.sh that answers status --json, service, service --disable and stop
+  cat >"$1/dgx-comfyui.sh" <<'F'
+#!/usr/bin/env bash
+echo "dgx $PWD $*" >>"$FAKE_HOST/calls"
+unit=$HOME/.config/systemd/user/dgx-comfyui.service
+case "$*" in
+  "status --json") printf '{"schema":1,"root":"%s","installed":true,"state":"%s","pid":null,"rss_mib":null,"port":8188,"bind":"0.0.0.0","comfy":{"version":"v0.45.4","commit":"abc","newer_release":""},"service":{"installed":false,"active":false,"enabled":""}}\n' "$PWD" "$(cat "$PWD/.fake-state" 2>/dev/null || echo stopped)";;
+  service) mkdir -p "${unit%/*}"; echo "WorkingDirectory=$PWD" >"$unit"; echo active >"$FAKE_HOST/running-dgx-comfyui.service"; echo up >"$PWD/.fake-state"; printf '\033[32m✓\033[0m unit written\n';;
+  "service --disable") rm -f "$unit"; echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
+  stop) echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; echo stopped >"$PWD/.fake-state";;
+  *) echo "Error: unknown $*" >&2; exit 2;;
+esac
+F
+  chmod +x "$1/dgx-comfyui.sh"
+}
+comfy_up() { ( cd "$home/dgx-comfyui/ComfyUI" && exec python3 -c 'import time; time.sleep(120)' main.py ) >/dev/null 2>&1 </dev/null & echo $! >"$tmp/comfy.pid"; sleep 0.5; }
+fake_tool "$home/dgx-comfyui"; fake_tool "$tmp/usb/dgx-comfyui"
+mkdir -p "$home/dgx-comfyui/ComfyUI" "$tmp/usb/dgx-comfyui/ComfyUI"; : >"$home/dgx-comfyui/ComfyUI/main.py"; : >"$tmp/usb/dgx-comfyui/ComfyUI/main.py"
+# one with a lean tool checkout (no lib/jsonout.py): too old to read
+rm -f "$tmp/usb/dgx-comfyui/lib/jsonout.py"
+s comfyui adopt me@dgx --dir "$home/dgx-comfyui" --label main >/dev/null
+s comfyui status me@dgx --json 2>&1 | grep -q "Several ComfyUI installs"; ok $? "with two managed installs, status without --dir says which are there"
+s comfyui status me@dgx --dir main --json | py 'd["install"]["label"]=="main" and d["status"]["state"]=="stopped" and d["too_old"] is False and d["running_elsewhere"]==[]'; ok $? "status reads the install's own status --json, found by label"
+s comfyui status me@dgx --dir "$tmp/usb/dgx-comfyui" --json | py 'd["too_old"] is True and d["status"] is None'; ok $? "an install without lib/jsonout.py is too old, and its script isn't run for status"
+grep -q "dgx $tmp/usb/dgx-comfyui status" "$FAKE_HOST/calls" 2>/dev/null; ok $((!$?)) "(the script log has no status call for it)"
+s comfyui status me@dgx --dir /nowhere --json >/dev/null 2>&1; ok $((!$?)) "an unmanaged folder is refused"
+s comfyui status me@dgx --dir main | grep -q "stopped"; ok $? "status prints a plain line"
+
+s comfyui start me@dgx --dir main >/dev/null; ok $? "start runs the service"
+grep -q "dgx $home/dgx-comfyui service" "$FAKE_HOST/calls"; ok $? "through the install's own dgx-comfyui.sh service"
+s comfyui status me@dgx --dir main --json | py 'd["status"]["state"]=="up"'; ok $? "and status then says up"
+# a second install can't start while the first runs: a real process stands in for the running ComfyUI
+comfy_up
+s comfyui start me@dgx --dir "$tmp/usb/dgx-comfyui" 2>&1 | grep -q "is running; stop it first"; ok $? "starting a second install is refused while the first runs, and names it"
+s comfyui status me@dgx --dir "$tmp/usb/dgx-comfyui" --json | py 'd["running_elsewhere"]==["'"$home"'/dgx-comfyui"]'; ok $? "status names the install that runs elsewhere"
+s comfyui stop me@dgx --dir main >/dev/null; ok $? "stop stops the service"
+grep -q "dgx $home/dgx-comfyui stop" "$FAKE_HOST/calls"; ok $? "through its own dgx-comfyui.sh stop"
+# a ComfyUI started in a terminal (no service) is shown but not stopped
+echo inactive >"$FAKE_HOST/running-dgx-comfyui.service"; rm -f "$home/.config/systemd/user/dgx-comfyui.service"
+: >"$FAKE_HOST/calls"; s comfyui stop me@dgx --dir main 2>&1 | grep -q "started in a terminal"; ok $? "stop refuses a ComfyUI started in a terminal"
+grep -q "dgx " "$FAKE_HOST/calls"; ok $((!$?)) "and runs nothing"
+kill "$(cat "$tmp/comfy.pid")" 2>/dev/null; sleep 0.3
+s comfyui stop me@dgx --dir main --json | py 'd["was_running"] is False'; ok $? "stop when it isn't running says so"
+
+s comfyui autostart me@dgx --dir main on >/dev/null; ok $? "autostart on starts the service"
+s comfyui autostart me@dgx --dir "$tmp/usb/dgx-comfyui" off >/dev/null 2>&1; ok $((!$?)) "autostart off for an install the unit isn't for is refused (it would remove the other's)"
+present "$home/.config/systemd/user/dgx-comfyui.service"; ok $? "and the unit is still there"
+s comfyui autostart me@dgx --dir main off >/dev/null; ok $? "autostart off removes the service"
+none_of "$home/.config/systemd/user/dgx-comfyui.service"; ok $? "and the unit is gone"
+s comfyui start me@dgx --dir main --json | py 'd["started"]=="'"$home"'/dgx-comfyui"'; ok $? "start --json says what it started"
+grep -q $'\033' <<<"$(s comfyui start me@dgx --dir main 2>&1)"; ok $((!$?)) "terminal controls from the script never reach the output"
+
+# the memory a running ComfyUI holds rides on the status poll
+mkdir -p "$home/.local/share/omarchy-local-ai"; printf '#!/bin/sh\necho "{\\"models\\":{}}"\n' >"$home/.local/share/omarchy-local-ai/omarchy-local-ai"; chmod +x "$home/.local/share/omarchy-local-ai/omarchy-local-ai"
+s status me@dgx | py '"comfyui" not in d'; ok $? "status has no comfyui key while none runs"
+comfy_up; cp "$tmp/comfy.pid" "$home/dgx-comfyui/.state/comfyui.pid"
+s status me@dgx | py 'len(d["comfyui"])==1 and d["comfyui"][0]["path"]=="'"$home"'/dgx-comfyui" and d["comfyui"][0]["rss_mib"]>0'; ok $? "status carries a running ComfyUI's path and memory"
+kill "$(cat "$tmp/comfy.pid")" 2>/dev/null
 #@part end
 echo "1..$n"; exit $bad
