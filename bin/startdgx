@@ -19,6 +19,7 @@ import os
 import pty
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -1925,6 +1926,81 @@ def cmd_engine(args):
     print(json.dumps({"repo": ENGINE_REPO, "tag": ENGINE_TAG, "comfyui_repo": COMFYUI_REPO, "comfyui_tag": COMFYUI_TAG}))
   else:
     print(f"{ENGINE_REPO} {ENGINE_TAG}")
+
+
+# self-update: the plugin updates itself, on this computer (no host, no ssh). It is `omarchy plugin update` for this one plugin,
+# which the panel can ask for: fetch the repo's HEAD, fast-forward the folder to it, validate it (rolling back if it fails), and
+# with --restart restart the Omarchy shell a moment later, which is what loads the new files (the shell keeps running the old
+# ones until then). A folder that is not a git checkout (a copy made by scripts/reload) or that has edits is refused, with why.
+PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+SELF_UPDATE_CHANGES = 8
+
+
+def self_git(*argv, check=False):
+  env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=os.environ.get("GIT_SSH_COMMAND", "ssh -oBatchMode=yes"))
+  try:
+    run = subprocess.run(["git", "-C", PLUGIN_DIR, *argv], capture_output=True, text=True, timeout=60, env=env)
+  except (OSError, subprocess.SubprocessError) as error:
+    raise Error(f"git didn't run: {error}") from error
+  if check and run.returncode != 0:
+    raise Error(f"git {argv[0]} failed: {(run.stderr.strip() or run.stdout.strip())[-300:]}")
+  return run
+
+
+def self_state(fetch=True):
+  """The plugin folder against its repo's HEAD: { managed, why, commit, subject, behind, changes, dirty }."""
+  if DEMO:
+    return {"managed": True, "why": "", "commit": "d2efd47", "subject": "Picker: a model is listed once", "behind": 2, "dirty": False,
+            "changes": ["Set up shares the model on the tailnet", "A model is listed once in the picker"]}
+  inside = self_git("rev-parse", "--is-inside-work-tree")
+  top = self_git("rev-parse", "--show-toplevel").stdout.strip()
+  if inside.returncode != 0 or os.path.realpath(top) != PLUGIN_DIR:
+    return {"managed": False, "why": "This copy of the plugin was not installed with `omarchy plugin add`, so it can't update itself. Add it again, or update the checkout it was copied from.",
+            "commit": "", "subject": "", "behind": 0, "changes": [], "dirty": False}
+  head = self_git("log", "-1", "--format=%h%n%s").stdout.splitlines()
+  state = {"managed": True, "why": "", "commit": head[0] if head else "", "subject": head[1] if len(head) > 1 else "", "behind": 0, "changes": [],
+           "dirty": bool(self_git("status", "--porcelain").stdout.strip())}
+  if fetch:
+    fetched = self_git("fetch", "--quiet", "origin", "HEAD")
+    if fetched.returncode != 0:
+      raise Error(f"Can't reach the plugin's repository: {(fetched.stderr.strip() or 'fetch failed')[-200:]}")
+    state["behind"] = int(self_git("rev-list", "--count", "HEAD..FETCH_HEAD", check=True).stdout.strip() or 0)
+    state["changes"] = self_git("log", f"--max-count={SELF_UPDATE_CHANGES}", "--format=%s", "HEAD..FETCH_HEAD").stdout.splitlines()
+  return state
+
+
+def cmd_self_update(args):
+  state = self_state()
+  result = dict(state, ok=True, updated=False, restarting=False)
+  if not args.check and state["managed"] and state["behind"] > 0:
+    if state["dirty"]:
+      raise Error(f"The plugin's folder has local changes ({PLUGIN_DIR}), so it was not updated. Stash or discard them, then try again.")
+    if DEMO:
+      result.update(updated=True, behind=0)
+    else:
+      before = self_git("rev-parse", "HEAD", check=True).stdout.strip()
+      if self_git("merge", "--ff-only", "FETCH_HEAD").returncode != 0:
+        raise Error("The plugin can't be fast-forwarded: its history has diverged from the repository's. Nothing was changed.")
+      validate = shutil.which("omarchy-plugin-validate")
+      if validate and subprocess.run([validate, PLUGIN_DIR], capture_output=True).returncode != 0:
+        self_git("reset", "--hard", before)
+        raise Error("The new version failed Omarchy's plugin validation, so it was rolled back.")
+      after = self_state(fetch=False)
+      result.update(updated=True, commit=after["commit"], subject=after["subject"], behind=0)
+    if args.restart and not DEMO:
+      # The shell loads a plugin once, when it starts: restart it a moment after this answer is out, detached so it outlives this process.
+      subprocess.Popen(["sh", "-c", "sleep 2; exec omarchy-restart-shell"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+      result["restarting"] = True
+  if args.json:
+    print(json.dumps(result))
+  elif not state["managed"]:
+    print(state["why"])
+  elif result["updated"]:
+    print(f"Updated to {result['commit']}." + (" Restarting the shell." if result["restarting"] else " Restart the shell to load it: omarchy-restart-shell"))
+  elif state["behind"] > 0:
+    print(f"{state['behind']} newer change(s) at {state['commit']}: " + "; ".join(state["changes"]))
+  else:
+    print(f"Up to date at {state['commit']}.")
 
 
 # hf search: the anonymous Hugging Face API, read-only, on this computer (no host, no ssh). The base address is
@@ -4278,6 +4354,12 @@ def build_parser():
   de.add_argument("--json", action="store_true")
   de.set_defaults(fn=cmd_destination)
   e = sub.add_parser("engine"); e.add_argument("--json", action="store_true"); e.set_defaults(fn=cmd_engine)
+  su = sub.add_parser("self-update", description="Update this plugin from its repository (what `omarchy plugin update` does for it): fast-forward its folder to the "
+                      "repository's HEAD and validate it. --check only says whether there is something newer. --restart then restarts the Omarchy shell, which loads the new files.")
+  su.add_argument("--check", action="store_true", help="only look: change nothing")
+  su.add_argument("--restart", action="store_true", help="after an update, restart the Omarchy shell a moment later")
+  su.add_argument("--json", action="store_true", help="as {managed, why, commit, subject, behind, changes, dirty, updated, restarting}")
+  su.set_defaults(fn=cmd_self_update)
   add("add", cmd_add)
   i = add("install", cmd_install, timeout=3600)
   i.add_argument("--dry-run", action="store_true", help="print what would change and change nothing")

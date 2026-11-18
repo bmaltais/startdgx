@@ -137,6 +137,22 @@ FocusScope {
         onClicked: { spin.restart(); view.svc.dispatch({ type: "refresh" }) }
         Timer { id: spin; interval: 900 }
       }
+      Button {
+        iconText: "\uf013"
+        tooltipText: view.dgx.selfWaiting ? "StartDGX: an update is waiting" : "About StartDGX and its update"
+        onClicked: view.svc.dispatch({ type: "appSettings" })
+        // An update is waiting: a dot on the corner.
+        Rectangle {
+          visible: view.dgx.selfWaiting
+          width: Style.space(8)
+          height: width
+          radius: width / 2
+          color: Color.accent
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(2)
+        }
+      }
       // Keeps clear of the close button in the card's corner.
       Item { Layout.preferredWidth: Style.space(24) }
     }

@@ -1031,6 +1031,52 @@ echo "$out" | grep -q 'tag it v0.6.4-dgx.N'; ok $? "release-engine says which re
 g rev-parse -q --verify refs/tags/v0.6.3-dgx.3 >/dev/null; ok $((!$?)) "release-engine creates no tag when it refuses"
 "$rel" v0.6.4-dgx.1 "$fork" >/dev/null 2>&1; ok $? "release-engine accepts the tag named for the upstream release HEAD contains"
 
+# self-update: the plugin's own folder, a git checkout of a repository (here a local one). Omarchy's validator and its shell restart are stubs.
+cat >"$tmp/bin/omarchy-plugin-validate" <<'F'
+#!/usr/bin/env bash
+[ -z "${FAKE_VALIDATE_FAIL:-}" ]
+F
+cat >"$tmp/bin/omarchy-restart-shell" <<'F'
+#!/usr/bin/env bash
+echo restarted >>"$FAKE_RESTART"
+F
+chmod +x "$tmp/bin/omarchy-plugin-validate" "$tmp/bin/omarchy-restart-shell"
+export FAKE_RESTART=$tmp/restart
+su_git() { git -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@"; }
+su_origin=$tmp/su-origin su_plugin=$tmp/su-plugin
+mkdir -p "$su_origin/bin"; cp "$here/bin/startdgx" "$su_origin/bin/startdgx"
+su_git -C "$su_origin" init -q -b main && su_git -C "$su_origin" add -A && su_git -C "$su_origin" commit -q -m "first"
+su_git clone -q "$su_origin" "$su_plugin"
+sj() { python3 "$su_plugin/bin/startdgx" self-update "$@"; }
+sj --check --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["managed"] and d["behind"] == 0 and not d["updated"]))'
+ok $? "self-update --check: a plugin at its repository's HEAD is up to date"
+echo change >"$su_origin/new.txt"; su_git -C "$su_origin" add -A; su_git -C "$su_origin" commit -q -m "a newer thing"
+sj --check --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["behind"] == 1 and d["changes"] == ["a newer thing"] and not d["updated"]))'
+ok $? "self-update --check sees a newer commit and its subject, and changes nothing"
+if [ ! -e "$su_plugin/new.txt" ]; then su_ok=0; else su_ok=1; fi
+ok "$su_ok" "self-update --check leaves the folder as it was"
+echo local >"$su_plugin/mine.txt"; su_git -C "$su_plugin" add mine.txt
+sj --json 2>"$tmp/su-err" >/dev/null; su_code=$?
+[ "$su_code" -ne 0 ] && grep -q "local changes" "$tmp/su-err" && [ ! -e "$su_plugin/new.txt" ]; su_ok=$?
+ok "$su_ok" "self-update refuses a folder with local changes, and says so"
+su_git -C "$su_plugin" reset -q --hard; rm -f "$su_plugin/mine.txt"
+FAKE_VALIDATE_FAIL=1 sj --json 2>"$tmp/su-err" >/dev/null; su_code=$?
+[ "$su_code" -ne 0 ] && grep -q "rolled back" "$tmp/su-err" && [ ! -e "$su_plugin/new.txt" ]; su_ok=$?
+ok "$su_ok" "self-update rolls back a version that fails Omarchy's validation"
+sj --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["updated"] and d["behind"] == 0 and not d["restarting"]))'
+ok $? "self-update fast-forwards the folder, and does not restart the shell unless asked"
+if [ -e "$su_plugin/new.txt" ] && [ ! -e "$FAKE_RESTART" ]; then su_ok=0; else su_ok=1; fi
+ok "$su_ok" "the new file is there and the shell was not restarted"
+echo more >"$su_origin/more.txt"; su_git -C "$su_origin" add -A; su_git -C "$su_origin" commit -q -m "another"
+sj --restart --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["updated"] and d["restarting"]))'
+ok $? "self-update --restart says it is restarting the shell"
+for _ in 1 2 3 4 5 6 7 8; do [ -e "$FAKE_RESTART" ] && break; sleep 1; done
+if [ -e "$FAKE_RESTART" ]; then su_ok=0; else su_ok=1; fi
+ok "$su_ok" "the shell was restarted, a moment later"
+su_copy=$tmp/su-copy; mkdir -p "$su_copy/bin"; cp "$here/bin/startdgx" "$su_copy/bin/startdgx"
+python3 "$su_copy/bin/startdgx" self-update --check --json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (not d["managed"] and "omarchy plugin add" in d["why"]))'
+ok $? "self-update says a plain copy (not a git checkout) can't update itself"
+
 #@part discover
 # discover, against a fake tailscale and a fake ssh that answers per peer from $tmp/disco/peers
 disco=$tmp/disco; mkdir -p "$disco/bin" "$disco/peers"
@@ -1141,6 +1187,10 @@ dj 'sorted(d) == ["demo@gx10-demo", "demo@spark-a", "demo@spark-b", "demo@spark-
 ok $? "demo hosts --json lists the fixture machines"
 # gx10-demo mirrors a real Spark's answers (tests/js/fixtures/gx10-*.json): long names, a recipe of yours, a model store with
 # models on it, and a recipe that measured one context twice.
+dj 'd["managed"] and d["behind"] == 2 and len(d["changes"]) == 2 and not d["updated"]' self-update --check --json
+ok $? "demo self-update --check offers two changes and runs no git"
+dj 'd["updated"] and d["behind"] == 0 and not d["restarting"]' self-update --restart --json
+ok $? "demo self-update updates nothing for real and never restarts the shell"
 g=demo@gx10-demo
 dj 'd["models"]["'$abl'"]["name"] == "Qwen3.8 27B Abliterated TensorFold" and d["models"]["'$abl'"]["shared"] and d["models"]["'$nem'"]["unit"] == "failed" and len(d["models"]) == 5' status $g
 ok $? "demo gx10-demo has a long-named shared model, a failed one, and five in all"
