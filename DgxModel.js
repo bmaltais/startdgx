@@ -719,6 +719,49 @@ function linkedCount(storage) {
   return storage ? storage.models.filter(function (m) { return m.location !== "nvme" && m.location !== "both" }).length : 0
 }
 
+// ---- the plugin's own update (`startdgx self-update --json`) ------------------------------------------------------
+// { managed, why, commit, subject, behind, changes: [subject], dirty, updated, restarting }, or null when it isn't that.
+function parseSelfUpdate(text) {
+  const p = parseJson(text)
+  if (!isPlainObject(p) || typeof p.managed !== "boolean" || !Array.isArray(p.changes)) return null
+  return { managed: p.managed, why: String(p.why || ""), commit: String(p.commit || ""), subject: String(p.subject || ""), behind: Number(p.behind) > 0 ? Number(p.behind) : 0,
+           changes: p.changes.map(String), dirty: p.dirty === true, updated: p.updated === true, restarting: p.restarting === true }
+}
+
+// Whether an update is waiting: the header's gear says so.
+function selfUpdateWaiting(info) { return !!info && info.managed && info.behind > 0 }
+
+// The StartDGX window's one page. c: { info (parseSelfUpdate or null), error, checking, updating }.
+function appPages(c) {
+  const info = c.info
+  const fields = []
+  const busy = c.checking || c.updating
+  fields.push({ key: "installed", type: "info", label: "Installed", hint: info && info.commit !== "" ? info.commit + (info.subject !== "" ? " · " + info.subject : "") : c.error !== "" || !info ? "Not known yet." : "Not a git checkout." })
+  if (c.error !== "") fields.push({ key: "problem", type: "info", label: "The update", hint: c.error, note: { kind: "bad", text: c.error } })
+  if (info && !info.managed) {
+    fields.push({ key: "unmanaged", type: "info", label: "Updating", hint: info.why })
+  } else if (info && info.dirty && info.behind > 0) {
+    fields.push({ key: "dirty", type: "info", label: "Update available", hint: info.behind + " newer change" + (info.behind === 1 ? "" : "s") + ", but this folder has local edits, so it won't be touched. Discard or stash them first." })
+  } else if (info && info.behind > 0) {
+    const more = info.behind > info.changes.length ? " (and " + (info.behind - info.changes.length) + " more)" : ""
+    fields.push({ key: "update", type: "action", label: "Update available", button: c.updating ? "Updating…" : "Update…", disabled: busy,
+      hint: info.behind + " newer change" + (info.behind === 1 ? "" : "s") + ": " + info.changes.join("; ") + more + ". Updating restarts the shell: the bar and this window go for a few seconds." })
+  } else if (info) {
+    fields.push({ key: "check", type: "action", label: "Up to date", button: c.checking ? "Looking…" : "Check again", disabled: busy, hint: "StartDGX is at the latest version of its repository." })
+  } else if (!c.error) {
+    fields.push({ key: "check", type: "info", label: "Looking for updates", hint: "Asking the plugin's repository…" })
+  }
+  if (c.error !== "" && !c.checking) fields.push({ key: "check", type: "action", label: "Try again", button: "Check", disabled: busy, hint: "Look for an update again." })
+  return [{ title: "StartDGX", fields: fields }]
+}
+
+// What a click in that window asks for, as a dispatch action, or null.
+function appChange(key) {
+  if (key === "update") return { type: "selfUpdate" }
+  if (key === "check") return { type: "selfCheck" }
+  return null
+}
+
 // c: { machine, update (engineUpdate), needsSetup, storage (parseStorage or null), readError, busy (a store change waits) }
 function hostPages(c) {
   const general = []

@@ -50,19 +50,20 @@ Updates: when a newer engine is pinned, the panel offers Update… on the machin
 
 Two things upgrade separately: the panel on your desktop, and the engine on each Spark.
 
-1. **The panel (and the CLI that ships with it), on the Omarchy desktop:**
+1. **The panel (and the CLI that ships with it), on the Omarchy desktop:** open the panel and press the **gear in its header**
+   (it has a dot when an update is waiting). The StartDGX window says what is installed and what is newer, and **Update…**
+   fast-forwards the plugin, checks it and restarts the shell (the bar and the panel go for a few seconds; the shell loads a
+   plugin once, when it starts). The same from a terminal:
    ```
-   omarchy plugin update io.github.bmaltais.startdgx --yes
+   startdgx self-update --check     # is there something newer? changes nothing
+   startdgx self-update --restart   # update, then restart the shell
    ```
-   then restart the shell, which loads the plugin once at start and keeps running the old one until then:
-   `omarchy-restart-shell` (the bar is gone for a few seconds). Open the panel after it:
-   `omarchy-shell io.github.bmaltais.startdgx open`. This works for a plugin added with `omarchy plugin add`; if the
-   update prints "fetch failed" or "cannot fast-forward", the folder is a plain copy or has local changes: remove the
-   plugin and add it again (step 1 of the install).
+   This works for a plugin added with `omarchy plugin add` (a git checkout in `~/.config/omarchy/plugins/`). A plain copy
+   or a folder with local edits is refused, and the window says why: remove the plugin and add it again (step 1 of the
+   install), or `omarchy plugin update io.github.bmaltais.startdgx --yes` then `omarchy-restart-shell` by hand.
    Check it took with `grep 'ENGINE_TAG =' ~/.config/omarchy/plugins/io.github.bmaltais.startdgx/bin/startdgx`.
-   A copy made from a checkout (`scripts/reload`, how this repo's developer runs it) is a plain copy that
-   `omarchy plugin update` doesn't touch: pull the checkout, `git submodule update --init scripts/devkit`, run
-   `scripts/reload`, then `scripts/reload --check` (it says "in sync" when the copy matches).
+   A copy made from a checkout (`scripts/reload`, how this repo's developer runs it) can't update itself: pull the checkout,
+   `git submodule update --init scripts/devkit`, run `scripts/reload`, then `scripts/reload --check` ("in sync").
 2. **The engine, on each Spark:** a new panel pins a new engine release (`ENGINE_TAG` in `bin/startdgx`). A machine on an
    older one shows **Update…** in the panel; it opens a terminal for `startdgx install USER@SPARK`, which needs the
    Spark's `sudo` password. Update the panel first: the engine offer compares the machine's tag with the installed

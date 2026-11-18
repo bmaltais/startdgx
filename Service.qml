@@ -12,6 +12,7 @@
 //   omarchy-shell io.github.bmaltais.startdgx removeModel <host> <model>   the manager with a model's remove card
 //   omarchy-shell io.github.bmaltais.startdgx forget <host>      the manager with a machine's forget card
 //   omarchy-shell io.github.bmaltais.startdgx settings <host> <model|""> <page|"">   a machine's settings window, or a model's, on a page
+//   omarchy-shell io.github.bmaltais.startdgx about              the manager with the plugin's own window (its version and update)
 //   omarchy-shell io.github.bmaltais.startdgx size <width> <height>   the manager at that size, centred (0 0: the default)
 pragma ComponentBehavior: Bound
 import QtQuick
@@ -36,7 +37,7 @@ Item {
 
   // ---- what the window shows ----------------------------------------------
   property bool shown: false
-  // A card floats over the manager: "add" (Add machine), "uninstall", "forget", "hostSettings" (one machine's), "modelSettings", "addModel" (a
+  // A card floats over the manager: "add" (Add machine), "uninstall", "forget", "hostSettings" (one machine's), "appSettings" (the plugin's own: its version and update), "modelSettings", "addModel" (a
   // machine's model picker, Add recipe or Find card), "remove" or "recipeRun" (one model's or recipe's), or "" for none.
   property string card: ""
   // The path the Add recipe card opens with (IPC addRecipe's second argument).
@@ -67,6 +68,7 @@ Item {
     root.card = ""
     root.shown = true
     core.refreshAll()
+    core.checkSelf(true)
     // Not when a card was opened with it (an IPC call for a card on a closed manager): the card keeps the keys.
     Qt.callLater(function () { if (root.card === "") managerView.focusList() })
   }
@@ -114,6 +116,12 @@ Item {
 
   // The gear on a machine's row, or on a model's: its settings window. A machine's reads its storage, a model's the
   // context sizes its recipe has measured.
+  function showAppSettings() {
+    root.ensureManager()
+    root.cardPage = ""
+    root.card = "appSettings"
+    core.checkSelf(true)
+  }
   function showHostSettings(host, page) {
     if (!core.hosts[host]) return
     root.ensureManager()
@@ -245,6 +253,9 @@ Item {
     case "stop": core.stop(action.host, action.id); break
     case "share": case "unshare": core.share(action.host, action.id, action.type); break
     case "move": core.move(action.host, action.id, action.to); break
+    case "appSettings": root.showAppSettings(); break
+    case "selfCheck": core.checkSelf(false); break
+    case "selfUpdate": core.updateSelf(); break
     case "hostSettings": root.showHostSettings(action.host, action.page); break
     case "modelSettings": root.showModelSettings(action.host, action.id, action.page); break
     case "recipeSettings": root.showRecipeSettings(action.host, action.recipe, action.page); break
@@ -318,6 +329,7 @@ Item {
     function removeModel(host: string, model: string): void { root.showRemove(host, model) }
     function forget(host: string): void { root.showForget(host) }
     function settings(host: string, model: string, page: string): void { if (model !== "") root.showModelSettings(host, model, page); else root.showHostSettings(host, page) }
+    function about(): void { root.showAppSettings() }
     function size(width: int, height: int): void { root.ensureManager(); win.resizeTo(width, height) }
     function start(host: string, model: string): string { core.start(host, model); return "ok" }
     function stop(host: string, model: string): string { core.stop(host, model); return "ok" }
@@ -442,7 +454,7 @@ Item {
       visible: root.card !== ""
       anchors.centerIn: frame
       // The settings windows are wider than the other cards: pages on the left, a page on the right.
-      width: Math.min(Style.space(root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? 760 : 560), win.width - Style.space(40))
+      width: Math.min(Style.space(root.card === "appSettings" || root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? 760 : 560), win.width - Style.space(40))
       height: Math.min(Math.max(Style.space(260), cardLoader.item ? (cardLoader.item as Item).implicitHeight : 0), win.height - Style.space(80))
       radius: root.radius
       color: Color.menu.background
@@ -459,14 +471,14 @@ Item {
         property var owner: root
         anchors.fill: parent
         active: root.card !== ""
-        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? settingsCard
+        sourceComponent: root.card === "uninstall" ? uninstallCard : root.card === "forget" ? forgetCard : root.card === "appSettings" || root.card === "hostSettings" || root.card === "modelSettings" || root.card === "recipeSettings" || root.card === "comfySettings" ? settingsCard
           : root.card === "addModel" ? addModelCard : root.card === "remove" ? removeCard
           : root.card === "recipe" ? recipeCard : root.card === "recipeRun" ? recipeRunCard : root.card === "findComfy" ? findComfyCard : root.card === "comfyForget" ? comfyForgetCard : root.card === "installComfy" ? installComfyCard : addCard
         onLoaded: (cardLoader.item as Item).forceActiveFocus()
       }
       Component { id: addCard; AddMachineView { svc: cardLoader.owner } }
       Component { id: uninstallCard; UninstallView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
-      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : cardLoader.owner.card === "comfySettings" ? "comfy" : "model"; path: cardLoader.owner.cardModel; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
+      Component { id: settingsCard; SettingsCard { svc: cardLoader.owner; kind: cardLoader.owner.card === "appSettings" ? "app" : cardLoader.owner.card === "hostSettings" ? "host" : cardLoader.owner.card === "recipeSettings" ? "recipe" : cardLoader.owner.card === "comfySettings" ? "comfy" : "model"; path: cardLoader.owner.cardModel; recipeRow: cardLoader.owner.cardRecipe; host: cardLoader.owner.cardHost; model: cardLoader.owner.cardModel; startPage: cardLoader.owner.cardPage } }
       Component { id: forgetCard; ForgetView { svc: cardLoader.owner; host: cardLoader.owner.cardHost } }
       Component { id: addModelCard; AddModelView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; query: cardLoader.owner.cardQuery } }
       Component { id: recipeCard; AddRecipeView { svc: cardLoader.owner; host: cardLoader.owner.cardHost; path: cardLoader.owner.cardPath } }

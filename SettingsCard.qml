@@ -10,7 +10,7 @@ FocusScope {
   id: card
 
   property var svc
-  property string kind: "host"          // "host", "model", "recipe" (a row of the model picker) or "comfy" (an install)
+  property string kind: "host"          // "app" (the plugin's own), "host", "model", "recipe" (a row of the model picker) or "comfy" (an install)
   property string host: ""
   property string model: ""
   property string path: ""              // a "comfy" window's install: its folder
@@ -59,7 +59,9 @@ FocusScope {
 
   // A recipe added from TensorFold's list: its row there, with the choices the machine was given.
   readonly property var tfRow: card.kind === "recipe" ? Model.tfAddedRow(card.dgx.tfList, card.model) : null
-  readonly property var pages: card.kind === "comfy"
+  readonly property var pages: card.kind === "app"
+    ? Model.appPages({ info: card.dgx.selfInfo, error: card.dgx.selfError, checking: card.dgx.selfChecking, updating: card.dgx.selfUpdating })
+    : card.kind === "comfy"
     ? (card.comfyInfo ? Model.comfyPages({ host: card.host, info: card.comfyInfo, answer: card.comfyAnswer, error: card.comfyMine ? card.dgx.comfyStatusError : "", pending: card.comfyPending,
         workflows: card.comfyWorkflows, health: card.comfyHealth }) : [])
     : card.kind === "recipe"
@@ -75,7 +77,7 @@ FocusScope {
         location: Model.locationOf(card.storage, card.model), choices: card.choices,
         variantsLoading: card.mine && card.dgx.variantsLoading, variantsError: card.mine ? card.dgx.variantsError : "",
         away: Model.isAway(card.dgx.shownState[card.host]) }) : []
-  readonly property var values: card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow, destination: card.dgx.destinationOf(card.host, card.model) }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
+  readonly property var values: card.kind === "app" ? ({}) : card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow, destination: card.dgx.destinationOf(card.host, card.model) }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
 
   // The model went (a removal finished): nothing left to set.
   readonly property bool gone: (card.kind === "model" && !card.entry) || (card.kind === "comfy" && !card.comfyInstall)
@@ -105,8 +107,8 @@ FocusScope {
   SettingsWindow {
     id: win
     anchors.fill: parent
-    title: card.kind === "comfy" ? String(card.comfyInfo ? card.comfyInfo.name : card.path) : card.kind === "recipe" ? String(card.recipeNow.name || card.model) : card.kind === "host" ? card.machine : String(card.entry ? card.entry.name || card.model : card.model)
-    subtitle: card.kind === "comfy" ? "COMFYUI  ·  ON " + card.machine.toUpperCase() : card.kind === "recipe" ? "RECIPE  ·  ON " + card.machine.toUpperCase() : card.kind === "host" ? "SETTINGS" : "SETTINGS  ·  ON " + card.machine.toUpperCase()
+    title: card.kind === "app" ? "StartDGX" : card.kind === "comfy" ? String(card.comfyInfo ? card.comfyInfo.name : card.path) : card.kind === "recipe" ? String(card.recipeNow.name || card.model) : card.kind === "host" ? card.machine : String(card.entry ? card.entry.name || card.model : card.model)
+    subtitle: card.kind === "app" ? "ABOUT AND UPDATE" : card.kind === "comfy" ? "COMFYUI  ·  ON " + card.machine.toUpperCase() : card.kind === "recipe" ? "RECIPE  ·  ON " + card.machine.toUpperCase() : card.kind === "host" ? "SETTINGS" : "SETTINGS  ·  ON " + card.machine.toUpperCase()
     pages: card.pages
     values: card.values
     footerText: card.problem !== "" ? card.problem : card.kind === "recipe" && card.dgx.draftError !== "" ? card.dgx.draftError : card.svc.notice !== "" ? card.svc.notice : "Changes apply instantly"
@@ -114,7 +116,10 @@ FocusScope {
 
     onChanged: function (key, value) {
       card.problem = ""
-      if (card.kind === "comfy") {
+      if (card.kind === "app") {
+        const action = Model.appChange(key)
+        if (action) card.svc.dispatch(action)
+      } else if (card.kind === "comfy") {
         const action = Model.comfyChange(card.host, card.comfyInfo, card.comfyAnswer, key, value)
         if (action) card.svc.dispatch(action)
       } else if (card.kind === "recipe") {

@@ -100,6 +100,29 @@ Item {
   property string draftError: ""
   property var draftWarnings: []
 
+  // The plugin's own update (`startdgx self-update`, on this computer): what the last look said (Model.parseSelfUpdate), why it failed, and a look or
+  // an update running. An update asks the CLI to restart the shell after it, so a successful one ends this window with it.
+  property var selfInfo: null
+  property string selfError: ""
+  property double selfCheckedMs: 0
+  property bool selfUpdating: false
+  readonly property bool selfChecking: selfQuery.busy
+  readonly property bool selfWaiting: Model.selfUpdateWaiting(service.selfInfo)
+  // A look, unless one is running, an update runs, or `soon` (the header's: when the manager opens) and one was made in the last ten minutes.
+  function checkSelf(soon) {
+    if (service.selfUpdating || selfQuery.busy) return
+    if (soon && Date.now() - service.selfCheckedMs < 600000) return
+    service.selfError = ""
+    selfQuery.ask("self", [service.script, "self-update", "--check", "--json"])
+  }
+  function updateSelf() {
+    if (service.selfUpdating || selfQuery.busy) return
+    service.selfError = ""
+    service.selfUpdating = true
+    selfProc.command = [service.script, "self-update", "--restart", "--json"]
+    selfProc.running = true
+  }
+
   // TensorFold's list in the model picker (`tensorfold list --json`, also from this computer): Model.parseTfList's answer, why it failed.
   property var tfList: null
   property string tfError: ""
@@ -960,6 +983,30 @@ Item {
       if (service.listHost === recipeConfirmProc.host) service.listRecipes(recipeConfirmProc.host)
       service.loadUserRecipes(recipeConfirmProc.host)
       if (service.variantsId !== "") service.planContext(service.variantsHost, service.variantsId)
+    }
+  }
+
+  Query {
+    id: selfQuery
+    onAnswered: function (key, code, out, err) {
+      service.selfCheckedMs = Date.now()
+      const d = code === 0 ? Model.parseSelfUpdate(out) : null
+      if (d) service.selfInfo = d
+      else service.selfError = code === 0 ? "The answer could not be read" : Model.errorLine(err, "The look for an update did not run")
+    }
+  }
+
+  Process {
+    id: selfProc
+    stdout: StdioCollector { id: selfOut; waitForEnd: true }
+    stderr: StdioCollector { id: selfErr; waitForEnd: true }
+    onExited: function (code) {
+      service.selfUpdating = false
+      const d = code === 0 ? Model.parseSelfUpdate(selfOut.text) : null
+      if (!d) { service.selfError = code === 0 ? "The answer could not be read" : Model.errorLine(selfErr.text, "The update did not run"); return }
+      service.selfInfo = d
+      service.selfCheckedMs = Date.now()
+      if (d.restarting) service.notice = "Updated to " + d.commit + ". Restarting the shell…"
     }
   }
 

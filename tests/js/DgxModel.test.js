@@ -1875,3 +1875,42 @@ test("recipeOffers: a model's build for other hardware is not listed beside the 
     "the AMD builds are gone; a model with no usable build keeps its row, to say why")
   assert.deepStrictEqual(M.recipeOffers([list[0], list[2]], { models: {} }).map((o) => o.recipe.id), ["flash-gufo", "z-image-turbo-sdcpp"], "two of the same name blocked: neither is usable, both stay")
 })
+
+const selfJson = (over) => JSON.stringify(Object.assign({ managed: true, why: "", commit: "d2efd47", subject: "Picker", behind: 0, changes: [], dirty: false, ok: true, updated: false, restarting: false }, over))
+
+test("parseSelfUpdate reads the CLI's answer and refuses what isn't one", () => {
+  const d = M.parseSelfUpdate(selfJson({ behind: 2, changes: ["a", "b"] }))
+  assert.strictEqual(d.behind, 2); assert.deepStrictEqual(d.changes, ["a", "b"]); assert.strictEqual(d.managed, true)
+  assert.strictEqual(M.parseSelfUpdate(""), null)
+  assert.strictEqual(M.parseSelfUpdate("[]"), null)
+  assert.strictEqual(M.parseSelfUpdate(JSON.stringify({ managed: "yes", changes: [] })), null)
+  assert.strictEqual(M.parseSelfUpdate(JSON.stringify({ managed: true })), null)
+  assert.strictEqual(M.selfUpdateWaiting(d), true)
+  assert.strictEqual(M.selfUpdateWaiting(M.parseSelfUpdate(selfJson())), false)
+  assert.strictEqual(M.selfUpdateWaiting(M.parseSelfUpdate(selfJson({ managed: false, behind: 3 }))), false, "a copy that can't update isn't offered one")
+  assert.strictEqual(M.selfUpdateWaiting(null), false)
+})
+
+test("appPages: what the StartDGX window says and offers", () => {
+  const page = (c) => M.appPages(Object.assign({ info: null, error: "", checking: false, updating: false }, c))[0].fields
+  const keys = (c) => page(c).map((f) => f.key + ":" + f.type)
+  assert.deepStrictEqual(keys({}), ["installed:info", "check:info"], "before the first answer")
+  assert.deepStrictEqual(keys({ info: M.parseSelfUpdate(selfJson()) }), ["installed:info", "check:action"], "up to date: check again")
+  const waiting = M.parseSelfUpdate(selfJson({ behind: 3, changes: ["one", "two"] }))
+  const u = page({ info: waiting }).find((f) => f.key === "update")
+  assert.strictEqual(u.type, "action"); assert.strictEqual(u.button, "Update…")
+  assert.ok(/3 newer changes: one; two \(and 1 more\)\. Updating restarts the shell/.test(u.hint), u.hint)
+  assert.strictEqual(page({ info: waiting, updating: true }).find((f) => f.key === "update").disabled, true, "no second click while it runs")
+  assert.strictEqual(page({ info: waiting, updating: true }).find((f) => f.key === "update").button, "Updating…")
+  assert.deepStrictEqual(keys({ info: M.parseSelfUpdate(selfJson({ managed: false, why: "A plain copy" })) }), ["installed:info", "unmanaged:info"], "a copy can't update: no button")
+  assert.deepStrictEqual(keys({ info: M.parseSelfUpdate(selfJson({ behind: 1, changes: ["x"], dirty: true })) }), ["installed:info", "dirty:info"], "local edits: no button")
+  const failed = page({ error: "Can't reach the plugin's repository" })
+  assert.deepStrictEqual(failed.map((f) => f.key), ["installed", "problem", "check"])
+  assert.strictEqual(failed[1].note.kind, "bad")
+})
+
+test("appChange: Update… and Check ask for the update and the look", () => {
+  assert.deepStrictEqual(M.appChange("update"), { type: "selfUpdate" })
+  assert.deepStrictEqual(M.appChange("check"), { type: "selfCheck" })
+  assert.strictEqual(M.appChange("installed"), null)
+})
