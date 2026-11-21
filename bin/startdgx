@@ -73,10 +73,11 @@ COMFYUI_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 # fugue-helper-cuda-aarch64-linux.tar.zst): until HELPER_URL is set, install needs --from. HELPER_SHA256 is the sha256 of the file at HELPER_URL.
 HELPER_URL = ""
 HELPER_SHA256 = ""
-FUGUE_HELPER_PORT = 8787
+# Fugue's own default (helper/fugue-helper.service and helper/README.md there).
+FUGUE_HELPER_PORT = 8765
 FUGUE_HELPER_MODELS = "~/.local/share/omarchy/agent-local/models"
-FUGUE_MODELS_RE = re.compile(r"^(~|/)[A-Za-z0-9_./-]*$")
-FUGUE_URL_RE = re.compile(r"^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$")
+FUGUE_MODELS_RE = re.compile(r"^(~/|/)[A-Za-z0-9_./-]+\Z")
+FUGUE_URL_RE = re.compile(r"^https://[A-Za-z0-9._~:/?#!$&()*+,;=%-]+\Z")
 # A local file goes to the host as base64 text through the ssh session, so it is held in memory here.
 FUGUE_UPLOAD_MAX = 512 << 20
 FUGUE_HELPER_RECORD = f"{STARTDGX_DIR}/fugue-helper.json"
@@ -122,7 +123,7 @@ RID_RE = re.compile(r"^[a-z0-9]+([.-][a-z0-9]+)*$")
 IMAGE_RE = re.compile(r"^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$")
 QUADLET_RE = re.compile(r"^omarchy-agent-local(-model-[a-z0-9]+([.-][a-z0-9]+)*\.container|\.network)$")
 SERVE_PATH_RE = re.compile(r"^/local-ai(/[A-Za-z0-9._-]+)*$")
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 
 # Read-only, for uninstall: what the engine made under the user's home. Model quadlets carry the engine's header;
 # its network quadlet has none, so it's known by its name and network. JSON comes back base64'd, to parse here.
@@ -1657,7 +1658,7 @@ def fugue_helper_steps(state):
   if state.get("fugue_helper") != "1":
     return []
   heredoc = "STARTDGX_FUGUE_HELPER_SCRIPT"
-  return [(FUGUE_HELPER_REMOVE_TEXT, f"python3 -I - fugue-helper remove '{{}}' <<'{heredoc}'\n{FUGUE_HELPER_SCRIPT}{heredoc}")]
+  return [(FUGUE_HELPER_REMOVE_TEXT, f"python3 -I - fugue-helper remove <<'{heredoc}'\n{fugue_helper_script({'lenient': True})}{heredoc}")]
 
 
 def replaced_engine_plan(manifest, state, args):
@@ -4406,10 +4407,10 @@ HOME = os.path.expanduser("~")
 RECORD, UNIT, BINARY = os.path.join(HOME, "@RECORD@"), os.path.join(HOME, "@UNIT@"), os.path.join(HOME, "@BINARY@")
 KEY, STAGE = os.path.join(HOME, "@KEY@"), os.path.join(HOME, "@UPLOAD@")
 SERVICE = "fugue-helper.service"
-MODELS_RE = re.compile(r"^(~|/)[A-Za-z0-9_./-]*$")
+MODELS_RE = re.compile(r"^(~/|/)[A-Za-z0-9_./-]+\Z")
 ARGV = sys.argv[2:]
 mode = ARGV[0]
-opts = json.loads(ARGV[1]) if len(ARGV) > 1 else {}
+opts = json.loads(@OPTS@)
 def fail(text):
   try:
     os.unlink(STAGE)
@@ -4427,10 +4428,16 @@ def systemctl(*argv):
   return subprocess.run(["systemctl", "--user", *argv], capture_output=True, text=True, env=user_env())
 def load():
   try:
-    return json.load(open(RECORD))
+    rec = json.load(open(RECORD))
+    if not isinstance(rec, dict):
+      raise ValueError("not an object")
+    return rec
   except FileNotFoundError:
     return {}
   except (OSError, ValueError):
+    if opts.get("lenient"):
+      print("  skipped the Fugue helper: " + RECORD + " isn't valid; fix or delete it, then run: startdgx fugue-helper remove", file=sys.stderr)
+      sys.exit(0)
     fail(RECORD + " isn't valid JSON; move it aside")
 def save(rec):
   os.makedirs(os.path.dirname(RECORD), exist_ok=True)
@@ -4470,8 +4477,13 @@ def state(rec):
           "models": rec.get("models", []), "binary_sha256": binary_sha(rec), "key": os.path.isfile(KEY),
           "created": {"binary": bool(rec.get("created_binary")), "unit": bool(rec.get("created_unit")), "key": bool(rec.get("created_key"))}}
 def read_key():
+  key = ""
   try:
-    key = open(KEY).readline().strip()
+    fd = os.open(KEY, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as f:
+      if os.fstat(f.fileno()).st_mode & 0o077:
+        fail("the key file " + KEY + " can be read by others; run: chmod 600 " + KEY)
+      key = f.readline().strip()
   except OSError:
     key = ""
   if not key:
@@ -4504,7 +4516,13 @@ def fetch():
   """The file to install, at STAGE: uploaded there already, or downloaded (https only)."""
   if opts.get("url"):
     os.makedirs(os.path.dirname(STAGE), exist_ok=True)
-    r = subprocess.run(["curl", "-fsSL", "--proto", "=https", "--max-time", "3000", "-o", STAGE, "--", opts["url"]], capture_output=True, text=True)
+    if not re.fullmatch(r"https://[^@\s\"\\]+", opts["url"]):
+      fail("the URL must be https, with no user name or password in it")
+    if not opts.get("sha256"):
+      fail("a download needs --sha256, the hash of what it should be")
+    # The URL goes to curl on stdin (-K -), not in its arguments, which any user on the host can read.
+    r = subprocess.run(["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "3000", "-o", STAGE, "-K", "-"],
+                       input='url = "' + opts["url"] + '"\n', capture_output=True, text=True)
     if r.returncode != 0:
       fail("downloading " + opts["url"] + " failed: " + ((r.stderr.strip().splitlines() or ["curl failed"])[-1]))
   elif not os.path.isfile(STAGE):
@@ -4525,14 +4543,16 @@ def unpack(dest):
   flags = ["--zstd"] if head == b"\x28\xb5\x2f\xfd" else ["-z"] if head[:2] == b"\x1f\x8b" else None
   if flags is None:
     fail("the file is neither the helper binary (ELF) nor a .tar.zst or .tar.gz holding it")
-  listing = subprocess.run(["tar", *flags, "-tf", STAGE], capture_output=True, text=True)
+  listing = subprocess.run(["tar", *flags, "--quoting-style=escape", "-tf", STAGE], capture_output=True, text=True)
   if listing.returncode != 0:
     fail("can't read the archive: " + ((listing.stderr.strip().splitlines() or ["tar failed"])[-1]))
+  if "\\" in listing.stdout:
+    fail("the archive has a member name with a backslash or a newline in it")
   names = [n for n in listing.stdout.splitlines() if os.path.basename(n) == "fugue-helper-cuda" and not n.startswith("/") and ".." not in n.split("/") and not n.endswith("/")]
   if len(names) != 1:
     fail("the archive must hold exactly one file named fugue-helper-cuda")
   with open(dest, "wb") as out:
-    r = subprocess.run(["tar", *flags, "-xOf", STAGE, "--", names[0]], stdout=out, stderr=subprocess.PIPE, text=True)
+    r = subprocess.run(["tar", *flags, "--no-wildcards", "-xOf", STAGE, "--", names[0]], stdout=out, stderr=subprocess.PIPE, text=True)
   if r.returncode != 0 or os.path.getsize(dest) == 0:
     fail("can't unpack the archive: " + ((r.stderr.strip().splitlines() or ["tar failed"])[-1]))
   if open(dest, "rb").read(4) != b"\x7fELF":
@@ -4552,10 +4572,15 @@ elif mode == "install":
   rec = load()
   need_linger()
   port, models = opts["port"], opts["models"]
-  if not isinstance(port, int) or not 1 <= port <= 65535:
+  if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
     fail("the port must be a number from 1 to 65535")
   models_arg(models)
   listen = tailnet_ip()
+  for path, flag in ((BINARY, "created_binary"), (UNIT, "created_unit")):
+    if os.path.islink(path) or (os.path.exists(path) and not rec.get(flag)):
+      fail(path + " exists and isn't startdgx's; move it aside")
+  if os.path.islink(KEY):
+    fail(KEY + " is a symlink; move it aside")
   fetch()
   os.makedirs(os.path.dirname(STAGE), exist_ok=True)
   fd, unpacked = tempfile.mkstemp(dir=os.path.dirname(STAGE), prefix=".fugue-helper-unpack-")
@@ -4595,11 +4620,15 @@ elif mode == "install":
     with os.fdopen(fd, "w") as f:
       f.write(secrets.token_hex(32) + "\n")
     key_made = True
-  with open(UNIT, "w") as f:
-    f.write(unit_text(listen, port, models))
+  text = unit_text(listen, port, models)
+  fd, tmp = tempfile.mkstemp(dir=os.path.dirname(UNIT), prefix=".fugue-helper-")
+  with os.fdopen(fd, "w") as f:
+    f.write(text)
+  os.chmod(tmp, 0o644)
+  os.replace(tmp, UNIT)
   info = os.stat(BINARY)
   rec = {"schema": 1, "binary": BINARY, "unit": UNIT, "key": KEY, "listen": listen, "port": port, "models": models,
-         "binary_sha256": sha_of(BINARY), "binary_size": info.st_size, "binary_mtime_ns": info.st_mtime_ns,
+         "binary_sha256": sha_of(BINARY), "unit_sha256": hashlib.sha256(text.encode()).hexdigest(), "binary_size": info.st_size, "binary_mtime_ns": info.st_mtime_ns,
          "created_binary": created["binary"], "created_unit": created["unit"], "created_key": created["key"], "created_dirs": made_dirs,
          "installed_at": int(time.time())}
   save(rec)
@@ -4644,15 +4673,18 @@ elif mode == "remove":
   for path, flag, name in ((BINARY, "created_binary", "binary"), (UNIT, "created_unit", "unit"), (KEY, "created_key", "key")):
     if not os.path.lexists(path):
       continue
+    recorded = rec.get(name + "_sha256")
     if name == "key" and opts.get("keep_key"):
       kept.append({"path": path, "why": "--keep-key"})
+    elif rec.get(flag) and recorded and (os.path.islink(path) or sha_of(path) != recorded):
+      kept.append({"path": path, "why": "it has changed since startdgx wrote it"})
     elif rec.get(flag):
       os.unlink(path)
       removed.append(path)
     else:
       kept.append({"path": path, "why": "it was there before startdgx installed the helper"})
-  for d in rec.get("created_dirs", []):
-    if remove_dir_if_empty(d):
+  for d in rec.get("created_dirs", []) if isinstance(rec.get("created_dirs"), list) else []:
+    if d in (os.path.dirname(BINARY), os.path.dirname(KEY)) and remove_dir_if_empty(d):
       removed.append(d)
   systemctl("daemon-reload")
   os.unlink(RECORD)
@@ -4662,9 +4694,14 @@ else:
 '''.replace("@RECORD@", FUGUE_HELPER_RECORD).replace("@UNIT@", FUGUE_HELPER_UNIT).replace("@BINARY@", FUGUE_HELPER_BINARY).replace("@KEY@", FUGUE_HELPER_KEY).replace("@UPLOAD@", FUGUE_HELPER_UPLOAD)
 
 
-def fugue_helper_run(host, args, *argv):
+def fugue_helper_script(options):
+  """The host script with its options (the download URL among them) in its text: stdin is not on any command line."""
+  return FUGUE_HELPER_SCRIPT.replace("@OPTS@", repr(json.dumps(options)))
+
+
+def fugue_helper_run(host, args, mode, options):
   """Runs the host script in MODE [JSON]; its one JSON line, parsed."""
-  out = ssh_raw(host, f"python3 -I - fugue-helper {shlex.join(argv)}", stdin=FUGUE_HELPER_SCRIPT, timeout=args.timeout, what="fugue-helper").stdout
+  out = ssh_raw(host, f"python3 -I - fugue-helper {shlex.join([mode])}", stdin=fugue_helper_script(options), timeout=args.timeout, what="fugue-helper").stdout
   try:
     return json.loads(out.strip().splitlines()[-1])
   except (ValueError, IndexError) as error:
@@ -4680,7 +4717,7 @@ def fugue_helper_options(args):
   if sha and not SHA_RE.match(sha):
     raise Error("--sha256 takes 64 hexadecimal digits")
   port = args.port
-  if not 1 <= port <= 65535:
+  if isinstance(port, bool) or not 1 <= port <= 65535:
     raise Error("--port takes a number from 1 to 65535")
   models = (args.models or FUGUE_HELPER_MODELS).split(":")
   for path in models:
@@ -4688,8 +4725,10 @@ def fugue_helper_options(args):
       raise Error(f"--models takes absolute folders (or ~/...), colon-separated, with only letters, digits and _ . / - in them: {path!r} isn't one")
   options = {"sha256": sha, "port": port, "models": models, "start": bool(args.start)}
   if "://" in source:
-    if not source.startswith("https://") or not FUGUE_URL_RE.match(source):
-      raise Error("--from takes a file on this computer or an https URL")
+    if not source.startswith("https://") or not FUGUE_URL_RE.match(source) or urllib.parse.urlsplit(source).username is not None or "@" in urllib.parse.urlsplit(source).netloc:
+      raise Error("--from takes a file on this computer or an https URL (without a user name or password in it)")
+    if not sha:
+      raise Error("--from a URL needs --sha256, the hash of what it should download")
     return {**options, "url": source}
   path = os.path.abspath(os.path.expanduser(source))
   if not os.path.isfile(path):
@@ -4721,11 +4760,11 @@ def cmd_fugue_helper(args):
       with open(path, "rb") as f:
         payload = base64.b64encode(f.read()).decode()
       ssh_raw(host, f"umask 077; mkdir -p ~/{STARTDGX_DIR} && base64 -d > ~/{FUGUE_HELPER_UPLOAD}", stdin=payload + "\n", timeout=args.timeout, what="upload")
-    answer = fugue_helper_run(host, args, "install", json.dumps(options))
+    answer = fugue_helper_run(host, args, "install", options)
   elif args.verb == "remove":
-    answer = fugue_helper_run(host, args, "remove", json.dumps({"keep_key": args.keep_key}))
+    answer = fugue_helper_run(host, args, "remove", {"keep_key": args.keep_key})
   else:
-    answer = fugue_helper_run(host, args, args.verb)
+    answer = fugue_helper_run(host, args, args.verb, {})
   fugue_helper_print(args, host, answer)
 
 
