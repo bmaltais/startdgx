@@ -184,7 +184,7 @@ HOST_SETUP = r'''
 echo engine-host-setup "$1" @CDI_COMPAT@
 '''
 CDI_COMPAT = 'engine-cdi-compat'
-MACHINE_SETUP_TAIL = 'ln -sf "$2" /usr/local/bin/omarchy-agent-local\n'
+MACHINE_SETUP_TAIL = 'ln -sf "$2" /usr/local/bin/omarchy-models\n'
 F
 n=0; bad=0
 ok() { n=$((n+1)); if [ "$1" = 0 ]; then echo "ok - $2"; else bad=$((bad+1)); echo "not ok - $2"; fi; }
@@ -227,7 +227,7 @@ if [ "$1" = recipe ]; then
       if grep -q BAD "$3"; then printf '%s\n' "recipes/bad: no name" "recipes/bad: no runtime"; exit 1; fi; echo "Recipe $(basename "$3" .toml) is valid";;
     add) if grep -q BAD "$3"; then printf '%s\n' "Error: recipes/bad: no name" "recipes/bad: no runtime" >&2; exit 1; fi
       cp "$3" "$HOME/added.toml"; basename "$3" >"$HOME/added.name"; echo "Added recipe $(basename "$3" .toml)";;
-    remove) if [ "$3" = used ]; then echo "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used" >&2; exit 1; fi; echo "Removed recipe $3";;
+    remove) if [ "$3" = used ]; then echo "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy models remove used" >&2; exit 1; fi; echo "Removed recipe $3";;
     list) echo '[{"id":"mine","user":true,"source":"drafted"}]';;
     confirm) if [ "$3" = none ]; then echo "Error: Recipe none has no estimated variant to confirm" >&2; exit 1; fi; echo "Confirmed 1 estimated variant(s) of $3";;
   esac
@@ -238,6 +238,8 @@ if [ "$1" = measure ]; then
   if [ "$5" = --yes ]; then echo "Measured $2 at context $4: 61.2 GiB RAM"; echo "$2" >"$HOME/measured"; else echo "Nothing was changed. Run again with --yes to do it."; fi
   exit
 fi
+if [ -f "$HOME/fake-status.json" ] && [ "$1 $2" = "status --json" ]; then cat "$HOME/fake-status.json"; exit; fi
+if [ "$1 $2" = "memory --json" ]; then if [ -f "$HOME/fake-memory.json" ]; then cat "$HOME/fake-memory.json"; exit; fi; echo "usage: no memory" >&2; exit 2; fi
 echo '{"models":{}}'
 F
 chmod +x "$eng/omarchy-local-ai"
@@ -247,6 +249,11 @@ pin=$(s engine | cut -d' ' -f2)
 st() { s status me@dgx | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($1))"; }
 settag() { mkdir -p "${FAKE_MANIFEST%/*}"; printf '{\n  "engine": {\n    "tag": "%s",\n    "repo": "r"\n  }\n}\n' "$1" >"$FAKE_MANIFEST"; }
 rm -f "$FAKE_MANIFEST"; st '"engine_update" not in d and d["models"] == {}'; ok $? "status adds nothing where the host records no engine tag"
+# what a running model holds now rides on it too (the engine's memory --json); an engine without it adds nothing
+st '"live_ram_gib" not in str(d)'; ok $? "status adds no live memory where the engine has no memory command"
+echo '{"models":{"a":{"recipe":"a","unit":"active"},"b":{"recipe":"b","unit":"inactive"}}}' >"$FAKE_HOST/home/fake-status.json"; echo '{"a": 12.4, "zzz": 1.0}' >"$FAKE_HOST/home/fake-memory.json"
+st 'd["models"]["a"]["live_ram_gib"] == 12.4 and "live_ram_gib" not in d["models"]["b"] and "zzz" not in str(d)'; ok $? "status puts each running model's live memory on its row"
+rm -f "$FAKE_HOST/home/fake-status.json" "$FAKE_HOST/home/fake-memory.json"
 st 'isinstance(d["ram_available_gib"], float) and d["ram_available_gib"] > 0'; ok $? "status carries the host's available memory, which counts what programs outside the engine hold"
 settag v0.6.3-dgx.1; st 'd["engine_update"] == {"from": "v0.6.3-dgx.1", "to": "'"$pin"'"}'; ok $? "status says an older engine can be updated to the pin"
 settag "$pin"; st '"engine_update" not in d'; ok $? "and nothing where the host has the pin"
@@ -321,7 +328,7 @@ tilde='~'; (cd "$rd" && HOME=$rd s recipe validate me@dgx "$tilde/mine.toml" >/d
 s recipe list me@dgx --json | grep -q '"user":true'; ok $? "recipe list --json passes the engine's listing through"
 out=$(s recipe remove me@dgx mine); same "$out" "Removed recipe mine"; ok $? "recipe remove removes an unused recipe"
 out=$(s recipe remove me@dgx used 2>&1); ok $((!$?)) "recipe remove of one a model uses fails"
-same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy agent local remove used"; ok $? "with the engine's message"
+same "$out" "Error: Recipe used is used by the model used (Used) set up here; remove it first with: omarchy models remove used"; ok $? "with the engine's message"
 s recipe remove me@dgx '../x' >/dev/null 2>&1; ok $((!$?)) "recipe remove refuses what is no recipe id"
 printf 'name = "Dash"\n' >"$rd/-dash.toml"
 (cd "$rd" && s recipe validate me@dgx -- -dash.toml >/dev/null 2>&1); ok $((!$?)) "a path that starts with - is a path after --, and is then refused as a name that can't be an id"
@@ -652,7 +659,7 @@ none_of "$FAKE_HOST/root-call" "$FAKE_HOST/rsync.log" "$FAKE_MANIFEST" \
   && ! grep -q me@spark "$XDG_CONFIG_HOME/startdgx/hosts.json" && ! grep -q 'mkdir' "$FAKE_LOG"; ok $? "install --dry-run writes nothing"
 echo "$out" | grep -q 'install podman' && echo "$out" | grep -q 'enable linger for me' \
   && echo "$out" | grep -q '/etc/security/limits.d/99-rdma-memlock.conf' \
-  && echo "$out" | grep -q 'link /usr/local/bin/omarchy-agent-local -> /home/me/.local/share/omarchy-local-ai/omarchy-local-ai' && ! echo "$out" | grep -q 'install rsync'; ok $? "install --dry-run lists what it would change"
+  && echo "$out" | grep -q 'link /usr/local/bin/omarchy-models -> /home/me/.local/share/omarchy-local-ai/omarchy-local-ai' && ! echo "$out" | grep -q 'install rsync'; ok $? "install --dry-run lists what it would change"
 
 # m 'python condition': checks the fake host's manifest; item(kind, path or name) is one of its items.
 m() {
@@ -668,7 +675,7 @@ grep -qx -- -t "$FAKE_HOST/root-call"; ok $? "the root script runs with a termin
 out=$(FAKE_ROOT_ESC=1 s install me@spark --engine-path "$engine" 2>&1); echo "$out" | grep -q 'root]52;c;ZXZpbA==says' && ! echo "$out" | grep -q $'\033'
 ok $? "what the root script prints reaches this terminal without its terminal controls"
 grep -q engine-host-setup "$FAKE_HOST/root-call" && grep -q engine-cdi-compat "$FAKE_HOST/root-call" \
-  && grep -q "ln -sf \"\$2\" /usr/local/bin/omarchy-agent-local" "$FAKE_HOST/root-call"; ok $? "the root script is the engine's own HOST_SETUP and MACHINE_SETUP_TAIL"
+  && grep -q "ln -sf \"\$2\" /usr/local/bin/omarchy-models" "$FAKE_HOST/root-call"; ok $? "the root script is the engine's own HOST_SETUP and MACHINE_SETUP_TAIL"
 tail -1 "$FAKE_HOST/root-call" | grep -q "startdgx-install me $entry\$"; ok $? "the root script gets the user and the engine path"
 grep -q -- "-a --delete .*$engine/ me@spark:.local/share/omarchy-local-ai/" "$FAKE_HOST/rsync.log"; ok $? "install copies the engine with rsync"
 m 'd["schema_version"] == 1 and d["installed_at"]'; ok $? "the manifest has a schema version and install time"
@@ -676,7 +683,7 @@ m 'not item("linger", "me")["created_by_us"] and item("linger", "me")["previous"
 m 'item("package", "podman")["created_by_us"] and not item("package", "rsync")["created_by_us"]'; ok $? "only the packages that were missing are marked ours"
 m 'item("file", "'$limits'")["created_by_us"] and item("file", "'$limits'")["previous"]["exists"] is False'; ok $? "a root file the install created is marked ours"
 m 'not item("file", "/etc/cdi/nvidia.yaml")["created_by_us"]'; ok $? "an unchanged root file isn't marked ours"
-link=/usr/local/bin/omarchy-agent-local
+link=/usr/local/bin/omarchy-models
 m 'item("symlink", "'$link'")["previous"]["target"] == "/opt/old/agent" and item("symlink", "'$link'")["changed_by_us"] and not item("symlink", "'$link'")["created_by_us"]'
 ok $? "a re-pointed agent link keeps its previous target, and is marked changed, not created"
 m 'item("engine", "/home/me/.local/share/omarchy-local-ai")["created_by_us"]'; ok $? "the engine copy is marked ours"
@@ -791,7 +798,7 @@ installed() {
   cat >"$FAKE_HOST/engine-root" <<E
 mkdir -p "\$root/etc/security/limits.d" "\$root/usr/local/bin"
 printf '%s\\n' '$rdma' >"\$root$limits"
-ln -sfn '$fentry' "\$root/usr/local/bin/omarchy-agent-local"
+ln -sfn '$fentry' "\$root/usr/local/bin/omarchy-models"
 $engine_root
 E
   s install "${install_flags[@]}" me@spark --engine-path "$engine" >/dev/null || echo "installed: install failed" >&2
@@ -799,7 +806,7 @@ E
     "$h/.local/share/omarchy/agent-local/models/q1" "$h/.config/systemd/user" "$FAKE_HOST/podman" "${fentry%/*}"
   cp "$tmp/engine-stub" "$fentry"; chmod +x "$fentry"
   for rid in q1 q2; do
-    printf '# Generated by omarchy-agent-local use; changes are overwritten.\n[Container]\nImage=%s\n' "$img" >"$q/omarchy-agent-local-model-$rid.container"
+    printf '# Generated by omarchy-models use; changes are overwritten.\n[Container]\nImage=%s\n' "$img" >"$q/omarchy-agent-local-model-$rid.container"
   done
   printf '[Quadlet]\nDefaultDependencies=false\n\n[Network]\nNetworkName=omarchy-agent-local\nInternal=true\n' >"$q/omarchy-agent-local.network"
   printf '[Container]\nImage=docker.io/library/mine\n' >"$q/mine.container"
@@ -818,7 +825,7 @@ same "$(tree)" "$before" && none_of "$FAKE_HOST/root-call" && ! grep -qv -e 'sta
 echo "$out" | grep -q 'share q1 --off' && echo "$out" | grep -q '/local-ai/models.json' && ! echo "$out" | grep -q '/mine' \
   && echo "$out" | grep -q 'omarchy-agent-local-model-q2.container' && ! echo "$out" | grep -q 'mine.container' \
   && [ "$(echo "$out" | grep -c "$img")" = 1 ] && echo "$out" | grep -q 'disable linger for me' \
-  && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy agent local forget'; ok $? "uninstall --dry-run lists what it would change and keep"
+  && echo "$out" | grep -q "keep .*1.0 MiB" && echo "$out" | grep -q 'omarchy models forget'; ok $? "uninstall --dry-run lists what it would change and keep"
 
 uj() { s uninstall --dry-run --json "$@" me@spark | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
 cond='sorted(d) == ["host", "kept", "manual", "models_bytes", "packages", "recipes", "steps"] and d["host"] == "me@spark" and d["recipes"] == 0 and d["models_bytes"] == 1048576 and d["packages"] == []'
@@ -855,7 +862,7 @@ none_of "$q"/omarchy-agent-local* "$h/.config/omarchy/agent-local" "$h/.local/st
 ok $? "uninstall removes the engine, its quadlets, state, config, network, secret and image"
 present "$q/mine.container" "$h/.config/omarchy/other"; ok $? "uninstall keeps what isn't the engine's"
 [ -f "$h/.local/share/omarchy/agent-local/models/q1/blob" ] && echo "$out" | grep -q 'keep .*1.0 MiB'; ok $? "uninstall keeps the model weights by default and says how much"
-echo "$out" | grep -q 'omarchy agent local forget' && echo "$out" | grep -q 'authorized_keys'
+echo "$out" | grep -q 'omarchy models forget' && echo "$out" | grep -q 'authorized_keys'
 ok $? "uninstall says to forget the host on paired Omarchy machines, and that its authorized_keys entry stays"
 s uninstall --help | grep -q 'kept by default'; ok $? "uninstall --help says the models are kept by default"
 r=$FAKE_HOST/root
@@ -1219,7 +1226,7 @@ dj '{r["id"]: r for r in d}["nemotron-3.5-lightning-spark"]["user"] is True' lis
 ok $? "and it has a recipe of yours"
 dj 'd["store"] is None' storage $a --json; ok $? "a demo machine without storage.json has no store"
 model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
-dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(m) == sorted('"$model_keys"') for m in d["models"].values())' status $a
+dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(set(m) - {"live_ram_gib"}) == sorted('"$model_keys"') for m in d["models"].values())' status $a
 ok $? "demo status has the engine's status and model row keys, and the host's available memory"
 dj 'd["models"]["'$qwen'"]["unit"] == "active" and d["models"]["'$abl'"]["fits"] is False and d["models"]["'$nem'"]["unit"] == "failed" and d["models"]["'$nem'"]["error"]' status $a
 ok $? "demo spark-a has a running model, one that doesn't fit, and one that failed"
@@ -1251,10 +1258,10 @@ out=$(ds share $a $nem); same "$out" "Sharing $nem on your tailnet (demo)"; ok $
 dj 'd["models"]["'$nem'"]["shared"] is True' status $a; ok $? "and the model is shared, stopped or not"
 out=$(ds share $a $nem --off); same "$out" "$nem is no longer shared"; ok $? "demo share --off says so"
 dj 'd["models"]["'$nem'"]["shared"] is False' status $a; ok $? "and the model is private again"
-out=$(ds share $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy agent local use $flash"; ok $? "demo share refuses a model that isn't set up"
+out=$(ds share $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy models use $flash"; ok $? "demo share refuses a model that isn't set up"
 out=$(ds start $a $abl 2>&1); ok $((!$?)) "demo start refuses a model that doesn't fit"
 echo "$out" | grep -q '^Error: Not enough memory'; ok $? "and says why"
-out=$(ds start $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy agent local use $flash"; ok $? "demo start refuses a model that isn't set up"
+out=$(ds start $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy models use $flash"; ok $? "demo start refuses a model that isn't set up"
 
 out=$(ds use --detach $a $flash); ok $? "demo use --detach succeeds"
 same "$(echo "$out" | wc -l)" 1 && echo "$out" | grep -q "^Setting up $flash in the background"; ok $? "and prints one line"

@@ -61,6 +61,24 @@ var QUEUED_WORDS = { start: "start queued", stop: "stop queued", delete: "remova
 // What a move shows while it runs, by its mark.
 var MOVE_WORDS = { "move-usb": "Moving to USB", "move-nvme": "Moving to NVMe" }
 
+// An update's download on the model's own row (the engine's `update_progress`, the shape of an installing row's `install`):
+// null unless it is waiting or downloading. Its reload shows in `unit` as any restart does.
+function updateDownload(entry) {
+  const p = entry && entry.update_progress
+  return p && typeof p === "object" && (p.phase === "waiting" || p.phase === "downloading") ? p : null
+}
+
+// The download a row shows: an update's, else a first setup's.
+function modelDownload(entry) { return updateDownload(entry) || (entry && entry.install) || null }
+
+// What a running model holds now, in GiB: what the machine's `memory` says when the status carries it (`live_ram_gib`),
+// else what it took to load (`observed.ram_used_gib`, which an idle model may since have let go of).
+function modelGib(entry) {
+  const live = entry && entry.live_ram_gib
+  if (live !== undefined && live !== null && isFinite(Number(live)) && Number(live) >= 0) return Number(live)
+  return entry && entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
+}
+
 // What a model is doing, as one word for the row's colour and dot (`kind`) and the words under its name:
 // running, loading, stopping, removing, installing, failed, doesNotFit or stopped. `pending` is a start, stop
 // or delete just asked for, which shows once its command runs; the host's answer wins as soon as it has moved on
@@ -76,6 +94,8 @@ function modelState(entry, pending) {
   const unit = entry.unit
   const error = String(entry.error || "")
   const phase = entry.install ? entry.install.phase : ""
+  const update = updateDownload(entry)
+  if (update && pending === "") return { kind: "installing", text: update.phase === "waiting" ? "Waiting to update" : "Updating" }
   if (pending === "delete" && unit !== "removing") return { kind: "removing", text: unit === "installing" ? "Cancelling" : "Removing" }
   if (pending === "start" && (unit === "inactive" || unit === "failed")) return { kind: "loading", text: "Loading" }
   if (pending === "stop" && (unit === "active" || unit === "activating")) return { kind: "stopping", text: "Stopping" }
@@ -153,7 +173,7 @@ function meter(entry, nowMs, pending) {
   const seconds = function (value, fallback) { return Number(value) > 0 ? Number(value) : fallback }
   switch (kind) {
   case "installing": {
-    const install = entry.install || {}
+    const install = updateDownload(entry) || entry.install || {}
     if (install.phase === "waiting") return { label: "Waiting", fraction: 0, value: "" }
     const total = Number(install.total_bytes) || 0
     return { label: "Downloading", fraction: total > 0 ? (Number(install.done_bytes) || 0) / total : 0, value: downloadRate(Number(install.rate_bytes_s) || 0) }
@@ -165,7 +185,7 @@ function meter(entry, nowMs, pending) {
     if (entry.unit !== "removing") return { label: state.text, fraction: 0, value: "" }
     return { label: state.text, fraction: phaseProgress(elapsed, seconds(entry.expected_remove_seconds, 10)), value: "" }
   case "running": {
-    const used = entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
+    const used = modelGib(entry)
     const total = Number(entry.ram_total_gib) || 0
     return { label: "Memory", fraction: total > 0 ? Math.min(1, used / total) : 0, value: Math.round(used) + " of " + Math.round(total) + " GiB" }
   }
@@ -332,7 +352,7 @@ function hostMemory(status, profile) {
   const list = modelList(status)
   for (let i = 0; i < list.length; i++) {
     const e = list[i]
-    const gib = e.unit === "active" && e.observed ? Number(e.observed.ram_used_gib) || 0 : 0
+    const gib = e.unit === "active" ? modelGib(e) : 0
     if (gib <= 0) continue
     segments.push({ id: String(e.recipe), name: String(e.name || e.recipe), gib: gib })
     models += gib
@@ -443,12 +463,12 @@ function actionError(stderr, host) {
   return setupNeeded(line) ? hostName(host) + " needs its one-time root setup: Install… on its row runs it" : line
 }
 
-// The footer's line after a command: its last line, without the engine's pointers elsewhere (the agents panel, a
+// The footer's line after a command: its last line, without the engine's pointers elsewhere (the local models panel, a
 // journalctl command), since the row itself follows a setup.
 function actionNotice(kind, stdout) {
   const line = lastLine(stdout)
   if (kind !== "use") return line
-  return line.replace(/; (the agents panel shows its progress, or )?follow it with: journalctl.*$/, "")
+  return line.replace(/; (the (local models|agents) panel shows its progress, or )?follow it with: journalctl.*$/, "")
 }
 
 // ---- keyboard ----------------------------------------------------------------------------------------
