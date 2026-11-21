@@ -52,6 +52,8 @@ case "$cmd" in
     if [ -n "${FAKE_ROOT_ESC:-}" ]; then printf 'root\033]52;c;ZXZpbA==\007says\n'; fi
     if [ -f "$FAKE_HOST/probe.after" ]; then cp "$FAKE_HOST/probe.after" "$FAKE_HOST/probe"; fi
     if [ -n "${FAKE_ROOT_FAIL:-}" ]; then exit 1; fi;;
+  # fugue-helper install's upload of a local file: base64 text into the fake home.
+  *"base64 -d > "*) host bash -c "$cmd";;
   *"cat > "*manifest*) mkdir -p "${FAKE_MANIFEST%/*}"; cat >"$FAKE_MANIFEST";;
   *"cat "*manifest.json*) cat "$FAKE_MANIFEST" 2>/dev/null; true;;
   *"profile"*) echo '{"ram_class":128,"gpus":[]}';;
@@ -136,6 +138,7 @@ cat >"$FAKE_HOSTBIN/tailscale" <<'F'
 printf '%s\n' "tailscale $*" >>"$FAKE_HOST/calls"
 case "$*" in
   "serve status --json") cat "$FAKE_HOST/serve.json" 2>/dev/null || echo '{}';;
+  "ip -4") cat "$FAKE_HOST/tailnet-ip" 2>/dev/null || echo 100.64.0.10;;
   "debug prefs") printf '{"OperatorUser": "%s"}\n' "$(cat "$FAKE_HOST/operator" 2>/dev/null)";;
   "set --operator="*) printf '%s' "${2#--operator=}" >"$FAKE_HOST/operator";;
   "serve --yes --set-path "*" off") python3 -c '
@@ -829,6 +832,14 @@ mkdir -p "$FAKE_HOST/home/.local/share/startdgx"; printf '{"installs": [{"path":
 cond='any("2 ComfyUI install(s)" in k and "forget" in k for k in d["kept"]) and not any("comfyui" in step.lower() for step in d["steps"])'
 uj; ok $? "uninstall says it keeps the ComfyUI installs startdgx manages, and removes nothing of theirs"
 rm -f "$FAKE_HOST/home/.local/share/startdgx/comfyui.json"
+# A Fugue helper startdgx installed: its binary and unit are ours, its key was there before.
+fh=$FAKE_HOST/home; mkdir -p "$fh/.local/lib/fugue" "$fh/.config/fugue" "$fh/.config/systemd/user"; : >"$fh/.local/lib/fugue/fugue-helper-cuda"; : >"$fh/.config/systemd/user/fugue-helper.service"
+echo mykey >"$fh/.config/fugue/helper.key"; echo mine >"$fh/.config/fugue/notes"
+printf '{"schema": 1, "created_binary": true, "created_unit": true, "created_key": false, "created_dirs": []}\n' >"$fh/.local/share/startdgx/fugue-helper.json"
+cond='any("Fugue helper" in step for step in d["steps"])'
+uj; ok $? "uninstall --dry-run --json lists removing the Fugue helper startdgx installed"
+s uninstall --dry-run me@spark | grep -q 'Fugue helper'; ok $? "and so does the text plan"
+present "$fh/.local/lib/fugue/fugue-helper-cuda"; ok $? "(the dry run removed nothing)"
 out=$(FAKE_ID='me;x' s uninstall --dry-run me@spark 2>&1); ok $((!$?)) "uninstall refuses a host that reports an odd user"
 echo "$out" | grep -q 'unexpected user'; ok $? "and says so, before comparing it with the manifest's"
 call() { grep -n -m1 -F -e "$1" "$FAKE_HOST/calls" | cut -d: -f1; }
@@ -851,6 +862,9 @@ r=$FAKE_HOST/root
 grep -q 'loginctl disable-linger me' "$FAKE_HOST/calls" && none_of "$r$limits" "$r$link"; ok $? "uninstall undoes as root what the install created"
 grep -qx -- -t "$FAKE_HOST/root-call" && tail -1 "$FAKE_HOST/root-call" | grep -q " startdgx-uninstall$"; ok $? "the root part is one sudo script run with a terminal"
 none_of "$h/.local/share/startdgx" && ! grep -q me@spark "$XDG_CONFIG_HOME/startdgx/hosts.json"; ok $? "uninstall deletes the manifest and forgets the host"
+none_of "$fh/.local/lib/fugue/fugue-helper-cuda" "$fh/.config/systemd/user/fugue-helper.service"; ok $? "uninstall removes the Fugue helper's binary and unit, which startdgx made"
+present "$fh/.config/fugue/helper.key" "$fh/.config/fugue/notes"; ok $? "and keeps its key (it was there before) and what isn't the helper's"
+grep -q 'systemctl --user disable --now fugue-helper.service' "$FAKE_HOST/calls"; ok $? "after stopping and disabling it"
 
 before_root="put $cdi 'cdiVersion: 0.6.0'; put /etc/systemd/user.conf.d/99-rdma-memlock.conf '$rdma'"; installed; before_root=''
 s uninstall me@spark >/dev/null 2>&1
@@ -1845,6 +1859,34 @@ ds comfyui recipe install $g image_krea2_turbo_t2i --dir main >/dev/null; ok $? 
 dj '[m["state"] for m in d["recipe"]["models"]] == ["have", "missing", "missing", "missing"]' comfyui recipe check $g image_krea2_turbo_t2i --dir main --json
 later comfyui recipe check $g image_krea2_turbo_t2i --dir main --json | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not (all(m['state'] == 'have' for m in d['recipe']['models']) and d['recipe']['download_bytes'] == 0))"; ok $? "and the models are there once it has run"
 ds comfyui forget $g --dir /home/demo/dgx-comfyui >/dev/null
+# the Fugue helper in demo mode: nothing is run, the state is the demo's, the address and key are the fixture's
+dj 'd["installed"] is False and d["key"] is False' fugue-helper status $g --json
+ds fugue-helper install $g >/dev/null 2>&1; ok $((!$?)) "demo fugue-helper install without --from is refused, as the real one is"
+printf '\177ELF demo\n' >"$tmp/demo-helper"
+ds fugue-helper install $g --from "$tmp/demo-helper" --port 0 >/dev/null 2>&1; ok $((!$?)) "demo install checks the port"
+ds fugue-helper install $g --from "$tmp/demo-helper" --models 'x;y' >/dev/null 2>&1; ok $((!$?)) "and the models folders"
+ds fugue-helper install $g --from "$tmp/demo-helper" --sha256 nothex >/dev/null 2>&1; ok $((!$?)) "and the sha256"
+ds fugue-helper on $g >/dev/null 2>&1; ok $((!$?)) "demo on with nothing installed is refused"
+ds fugue-helper provider $g --json >/dev/null 2>&1; ok $((!$?)) "and so is provider"
+dj 'd["installed"] and d["key_created"] and not d["started"] and d["address"] == "http://100.64.0.10:8787" and d["binary_sha256"] == "0d3c4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b"' fugue-helper install $g --from "$tmp/demo-helper" --json
+dj 'd["installed"] and not d["active"] and d["key"] and d["address"] == "http://100.64.0.10:8787"' fugue-helper status $g --json
+ds fugue-helper status $g | grep -q "stopped"; ok $? "demo status in words"
+dj 'd["active"] and d["enabled"]' fugue-helper on $g --json
+dj 'd["active"] and d["enabled"]' fugue-helper status $g --json
+dj 'not d["active"] and not d["enabled"]' fugue-helper off $g --json
+ds fugue-helper provider $g >/dev/null 2>&1; ok $((!$?)) "demo provider without --json is refused"
+dj 'd == {"name": "gx10-demo", "type": "fugue-helper", "address": "http://100.64.0.10:8787", "key": "demo0000000000000000000000000000000000000000000000000000000000ff"}' fugue-helper provider $g --json
+ds fugue-helper status $g --json | grep -q demo0000; ok $((!$?)) "demo status never has the key"
+dj 'any("Fugue helper" in s for s in d["steps"])' uninstall $g --dry-run --json
+dj 'not d["key_created"] and d["started"] and d["active"]' fugue-helper install $g --from "$tmp/demo-helper" --start --json
+dj 'len(d["removed"]) == 3 and d["kept"] == []' fugue-helper remove $g --json
+dj 'not d["installed"] and not d["key"]' fugue-helper status $g --json
+dj 'not any("Fugue helper" in s for s in d["steps"])' uninstall $g --dry-run --json
+ds fugue-helper remove $g >/dev/null 2>&1; ok $((!$?)) "demo remove with nothing installed is refused"
+ds fugue-helper install $g --from "$tmp/demo-helper" >/dev/null; dj 'len(d["removed"]) == 2 and d["kept"][0]["why"] == "--keep-key"' fugue-helper remove $g --keep-key --json
+dj 'not d["installed"] and d["key"]' fugue-helper status $g --json
+ds fugue-helper install $g --from https://example.com/helper.tar.zst --json | grep -q '"key_created": false'; ok $? "demo install --from an https URL keeps the key it still has"
+ds fugue-helper remove $g >/dev/null
 same "$(cat "$DEMO_CALLS")" ""; ok $? "demo mode never runs ssh, rsync, sudo, tailscale, git, systemd or the terminal launcher (the log is cumulative: this covers every demo case above)"
 #@part comfyui
 # ComfyUI installs: the host script (discover, list, adopt, forget) runs for real against the fake home, through the fake ssh.
@@ -2140,5 +2182,151 @@ s status me@dgx | py '"comfyui" not in d'; ok $? "status has no comfyui key whil
 comfy_up; cp "$tmp/comfy.pid" "$home/dgx-comfyui/.state/comfyui.pid"
 s status me@dgx | py 'len(d["comfyui"])==1 and d["comfyui"][0]["path"]=="'"$home"'/dgx-comfyui" and d["comfyui"][0]["rss_mib"]>0 and d["comfyui"][0]["port"]>0 and d["comfyui"][0]["bind"]'; ok $? "status carries a running ComfyUI's path, memory and where it listens"
 kill "$(cat "$tmp/comfy.pid")" 2>/dev/null
+#@part fugue
+# Fugue's helper on a host: the host script runs for real against the fake home, through the fake ssh; systemctl, loginctl and
+# tailscale are the fake host's stubs (systemctl keeps what is enabled and active in files).
+py() { python3 -I -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if ($1) else 1)"; }
+cat >"$FAKE_HOSTBIN/loginctl" <<'F'
+#!/usr/bin/env bash
+if [ "$1" = show-user ]; then [ -e "$FAKE_HOST/no-linger" ] && echo no || echo yes; fi
+F
+cat >"$FAKE_HOSTBIN/systemctl" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "${0##*/} $*" >>"$FAKE_HOST/calls"
+unit=${*: -1}
+case "$2" in
+  is-active) [ -e "$FAKE_HOST/active-$unit" ];;
+  is-enabled) [ -e "$FAKE_HOST/enabled-$unit" ];;
+  enable) : >"$FAKE_HOST/enabled-$unit"; [ "$3" != --now ] || : >"$FAKE_HOST/active-$unit";;
+  disable) rm -f "$FAKE_HOST/enabled-$unit"; [ "$3" != --now ] || rm -f "$FAKE_HOST/active-$unit";;
+  restart) : >"$FAKE_HOST/active-$unit";;
+esac
+F
+chmod +x "$FAKE_HOSTBIN"/*
+s add me@dgx >/dev/null
+home=$FAKE_HOST/home; mkdir -p "$home"
+bin=$home/.local/lib/fugue/fugue-helper-cuda; unit=$home/.config/systemd/user/fugue-helper.service; key=$home/.config/fugue/helper.key; rec=$home/.local/share/startdgx/fugue-helper.json
+fake=$tmp/fugue-helper-cuda; printf '\177ELF fake helper one\n' >"$fake"; sum=$(sha256sum <"$fake" | cut -c1-64)
+fh() { s fugue-helper "$@"; }
+fails() { local out; if out=$("$@" 2>&1); then return 1; fi; printf '%s' "$out"; }
+
+fh status me@dgx --json | py 'd["installed"] is False and d["managed"] is False and d["key"] is False and d["active"] is False'; ok $? "status on a host with no helper says not installed"
+fh status me@dgx | grep -q "isn't installed"; ok $? "and says so in words"
+
+# install: the arguments are checked before anything reaches the host
+: >"$FAKE_LOG"
+fails fh install me@dgx | grep -q "No published fugue-helper build exists yet.*--from"; ok $? "install without --from says no build is published yet and to pass --from"
+fails fh install me@dgx --from "$fake" --port 0 | grep -q "1 to 65535"; ok $? "install refuses port 0"
+fails fh install me@dgx --from "$fake" --port 70000 | grep -q "1 to 65535"; ok $? "and port 70000"
+fails fh install me@dgx --from "$fake" --port abc >/dev/null; ok $? "and a port that isn't a number"
+fails fh install me@dgx --from "$fake" --models '/ok:/x; touch /tmp/pwned' | grep -q "isn't one"; ok $? "install refuses a models folder with shell characters"
+fails fh install me@dgx --from "$fake" --models 'relative/dir' | grep -q "isn't one"; ok $? "and a relative one"
+fails fh install me@dgx --from "$fake" --models '/a/../etc' | grep -q "isn't one"; ok $? "and one with .."
+fails fh install me@dgx --from "$fake" --models '/a%h' | grep -q "isn't one"; ok $? "and a systemd specifier"
+fails fh install me@dgx --from "$fake" --sha256 xyz | grep -q "64 hexadecimal"; ok $? "install refuses a sha256 that isn't 64 hex digits"
+fails fh install me@dgx --from "$tmp/nowhere" | grep -q "isn't a file"; ok $? "install refuses a file that isn't there"
+fails fh install me@dgx --from http://example.com/helper | grep -q "https URL"; ok $? "install refuses a plain http URL"
+fails fh install me@dgx --from 'https://example.com/x;y"z' | grep -q "https URL"; ok $? "and an https URL with quotes in it"
+fails fh install nobody@dgx --from "$fake" | grep -q "isn't added"; ok $? "and a host that isn't added"
+grep -q 'fugue-helper' "$FAKE_LOG"; ok $((!$?)) "none of them reached the host"
+
+# install against the fake host
+: >"$FAKE_HOST/no-linger"; fails fh install me@dgx --from "$fake" | grep -q "enable-linger"; ok $? "install refuses without lingering, and says the command"
+none_of "$bin" "$unit" "$key" "$rec" "$home/.local/share/startdgx/fugue-helper.upload"; ok $? "and creates nothing, the upload included"
+rm -f "$FAKE_HOST/no-linger"; : >"$FAKE_HOST/tailnet-ip"
+fails fh install me@dgx --from "$fake" | grep -q "no tailnet IPv4"; ok $? "install refuses a host with no tailnet address"
+none_of "$bin" "$unit" "$key" "$rec"; ok $? "and creates nothing"
+rm -f "$FAKE_HOST/tailnet-ip"
+fails fh install me@dgx --from "$fake" --sha256 "$(printf 0%.0s {1..64})" | grep -q "nothing was installed"; ok $? "a wrong --sha256 is refused on the host"
+none_of "$bin" "$unit" "$key" "$rec" "$home/.local/share/startdgx/fugue-helper.upload"; ok $? "and installs nothing"
+printf 'not a binary\n' >"$tmp/junk"; fails fh install me@dgx --from "$tmp/junk" | grep -q "neither the helper binary"; ok $? "a file that is neither a binary nor an archive is refused"
+none_of "$bin" "$unit" "$key" "$rec"; ok $? "and installs nothing"
+out=$(fh install me@dgx --from "$fake" --sha256 "$sum" --port 9000 --models '/srv/m:~/models' --json); ok $? "install with a right --sha256 succeeds"
+printf '%s' "$out" | py 'd["installed"] and d["address"]=="http://100.64.0.10:9000" and d["binary_sha256"]=="'"$sum"'" and d["key_created"] and not d["started"] and not d["active"] and not d["enabled"]'; ok $? "it answers with the tailnet address, the binary's sha256, a new key, and not started"
+cmp -s "$fake" "$bin" && [ -x "$bin" ]; ok $? "the binary is on the host and executable"
+same "$(stat -c %a "$key")" 600 && [ "$(wc -c <"$key")" = 65 ]; ok $? "the key is a 64-digit hex line, mode 600"
+grep -q -- "--listen 100.64.0.10 --port 9000 --key-file %h/.config/fugue/helper.key --models /srv/m:%h/models" "$unit"; ok $? "the unit listens on the tailnet address and port with the key file and the models"
+grep -q 'daemon-reload' "$FAKE_HOST/calls" && ! grep -q 'systemctl --user enable\|systemctl --user restart' "$FAKE_HOST/calls"; ok $? "install reloaded systemd and did not start or enable it"
+printf '%s' "$out" | grep -q "$(cat "$key")"; ok $((!$?)) "the install answer doesn't hold the key"
+none_of "$home/.local/share/startdgx/fugue-helper.upload"; ok $? "the upload is gone"
+py 'd["created_binary"] and d["created_unit"] and d["created_key"] and d["binary_sha256"]=="'"$sum"'" and d["created_dirs"]' <"$rec"; ok $? "the record says startdgx made the binary, unit and key, and the folders"
+none_of "$FAKE_HOST/home/.local/share/startdgx/manifest.json"; ok $? "and no install manifest is written (that file means startdgx installed the engine)"
+
+# status never shows the key
+key_text=$(cat "$key")
+fh status me@dgx --json | py 'd["installed"] and d["key"] is True and d["address"]=="http://100.64.0.10:9000" and d["binary_sha256"]=="'"$sum"'" and not d["active"] and not d["enabled"] and d["created"]["key"]'; ok $? "status: installed, address, sha256, key present, not running"
+{ fh status me@dgx --json; fh status me@dgx; } | grep -q "$key_text"; ok $((!$?)) "status never prints the key"
+fh status me@dgx | grep -q "stopped, does not start at boot"; ok $? "status in words"
+
+# on and off
+fh on me@dgx --json | py 'd["active"] and d["enabled"]'; ok $? "on starts it and has it start at boot"
+grep -q 'systemctl --user enable --now fugue-helper.service' "$FAKE_HOST/calls"; ok $? "through systemctl --user enable --now"
+fh status me@dgx --json | py 'd["active"] and d["enabled"]'; ok $? "status then says running and enabled"
+fh off me@dgx --json | py 'not d["active"] and not d["enabled"]'; ok $? "off stops it and ends starting at boot"
+grep -q 'systemctl --user disable --now fugue-helper.service' "$FAKE_HOST/calls"; ok $? "through systemctl --user disable --now"
+: >"$FAKE_HOST/no-linger"; fails fh on me@dgx | grep -q "enable-linger"; ok $? "on refuses without lingering"
+rm -f "$FAKE_HOST/no-linger"
+
+# provider
+fails fh provider me@dgx | grep -q "needs\|ask with --json\|secret"; ok $? "provider without --json is refused"
+out=$(fh provider me@dgx --json); ok $? "provider --json succeeds"
+printf '%s' "$out" | py 'd=={"name":"dgx","type":"fugue-helper","address":"http://100.64.0.10:9000","key":"'"$key_text"'"}'; ok $? "it prints the providers.json entry, with the host's name, address and key"
+
+# re-install keeps the key, updates the binary and the unit
+printf '\177ELF fake helper two\n' >"$fake"; sum2=$(sha256sum <"$fake" | cut -c1-64)
+out=$(fh install me@dgx --from "$fake" --json --start); ok $? "installing again succeeds"
+printf '%s' "$out" | py 'not d["key_created"] and d["binary_sha256"]=="'"$sum2"'" and d["started"] and d["active"] and d["enabled"] and d["port"]==8787'; ok $? "it keeps the key, installs the new binary, resets the port to the default and --start starts and enables it"
+same "$(cat "$key")" "$key_text"; ok $? "the key file is unchanged"
+grep -q -- "--port 8787 .*--models %h/.local/share/omarchy/agent-local/models$" "$unit"; ok $? "the unit has the new port and the default models folder"
+py 'd["created_key"] and d["created_binary"] and d["created_unit"]' <"$rec"; ok $? "the record still says startdgx made them"
+fh provider me@dgx --json | py 'd["key"]=="'"$key_text"'" and d["address"]=="http://100.64.0.10:8787"'; ok $? "provider gives the same key and the new address"
+
+# archives
+mkdir -p "$tmp/arch/helper-1"; printf '\177ELF in a gzip\n' >"$tmp/arch/helper-1/fugue-helper-cuda"; echo other >"$tmp/arch/helper-1/README"
+tar -C "$tmp/arch" -czf "$tmp/helper.tar.gz" helper-1
+fh install me@dgx --from "$tmp/helper.tar.gz" --sha256 "$(sha256sum <"$tmp/helper.tar.gz" | cut -c1-64)" >/dev/null; ok $? "a .tar.gz holding the helper installs, checked against its own sha256"
+cmp -s "$tmp/arch/helper-1/fugue-helper-cuda" "$bin"; ok $? "the helper binary is what was in it"
+if command -v zstd >/dev/null && tar --zstd -cf "$tmp/helper.tar.zst" -C "$tmp/arch" helper-1 2>/dev/null; then
+  printf '\177ELF in a zstd\n' >"$tmp/arch/helper-1/fugue-helper-cuda"; tar --zstd -cf "$tmp/helper.tar.zst" -C "$tmp/arch" helper-1
+  fh install me@dgx --from "$tmp/helper.tar.zst" >/dev/null; ok $? "a .tar.zst holding the helper installs"
+  cmp -s "$tmp/arch/helper-1/fugue-helper-cuda" "$bin"; ok $? "the helper binary is what was in it"
+fi
+printf 'x\n' >"$tmp/arch/helper-1/other"; tar -C "$tmp/arch" -czf "$tmp/none.tar.gz" helper-1/other
+cp "$bin" "$tmp/before-bin"; fails fh install me@dgx --from "$tmp/none.tar.gz" | grep -q "exactly one file named fugue-helper-cuda"; ok $? "an archive without the helper is refused"
+cmp -s "$tmp/before-bin" "$bin"; ok $? "and the installed binary is untouched"
+
+# a URL is downloaded on the host, with curl, https only
+cat >"$FAKE_HOSTBIN/curl" <<'F'
+#!/usr/bin/env bash
+printf '%s\n' "curl $*" >>"$FAKE_HOST/calls"
+while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift 2;; --) url=$2; shift 2;; *) shift;; esac; done
+printf '\177ELF from %s\n' "$url" >"$out"
+F
+chmod +x "$FAKE_HOSTBIN/curl"
+fh install me@dgx --from https://example.com/fugue-helper-cuda >/dev/null; ok $? "install --from an https URL downloads on the host"
+grep -q 'curl .*--proto =https .* -- https://example.com/fugue-helper-cuda' "$FAKE_HOST/calls" && grep -q 'from https://example.com/fugue-helper-cuda' "$bin"; ok $? "with curl, https only, and installs what it got"
+none_of "$home/.local/share/startdgx/fugue-helper.upload"; ok $? "and leaves no download behind"
+
+# remove deletes only what install created
+echo mine >"$home/.config/fugue/other"
+fh remove me@dgx --keep-key --json | py 'any(r.endswith("/fugue-helper-cuda") for r in d["removed"]) and any(r.endswith("/fugue-helper.service") for r in d["removed"]) and not any(r.endswith("helper.key") for r in d["removed"]) and d["kept"][0]["why"]=="--keep-key"'; ok $? "remove --keep-key deletes the binary and unit and keeps the key"
+none_of "$bin" "$unit" "$rec"; present "$key" "$home/.config/fugue/other"; ok $? "the key and other files stay, and the record goes"
+grep -q 'systemctl --user disable --now fugue-helper.service' "$FAKE_HOST/calls"; ok $? "after stopping and disabling it"
+fails fh remove me@dgx | grep -q "didn't install the Fugue helper"; ok $? "remove with nothing to remove says so"
+fh install me@dgx --from "$fake" --json | py 'not d["key_created"]'; ok $? "installing after --keep-key keeps that key"
+fh remove me@dgx >/dev/null; ok $? "remove (no flag)"
+present "$key"; ok $? "doesn't delete a key startdgx didn't make this time (it was there before)"
+rm -f "$key"; fh install me@dgx --from "$fake" --json | py 'd["key_created"]'; ok $? "a fresh install makes a key"
+fh remove me@dgx >/dev/null; ok $? "remove"
+none_of "$bin" "$unit" "$key" "$rec" "$home/.local/lib/fugue" "$home/.local/share/startdgx/fugue-helper.upload"; ok $? "deletes the binary, unit, key it made, the record and the empty folder it made"
+present "$home/.config/fugue/other" "$home/.config/systemd/user"; ok $? "and nothing else"
+
+# what was there before is never ours
+mkdir -p "$home/.local/lib/fugue" "$home/.config/fugue" "$home/.config/systemd/user"
+printf '\177ELF by hand\n' >"$bin"; echo "[Unit]" >"$unit"; echo handkey >"$key"; chmod 644 "$key"
+fh install me@dgx --from "$fake" --json | py 'not d["key_created"] and not d["created"]["binary"] and not d["created"]["unit"] and not d["created"]["key"]'; ok $? "a helper set up by hand is updated, not claimed: the record says it wasn't made by startdgx"
+same "$(cat "$key")" handkey && same "$(stat -c %a "$key")" 600; ok $? "its key is kept, and made private (the helper refuses a key others can read)"
+fh remove me@dgx >/dev/null; ok $? "remove"
+present "$bin" "$unit" "$key"; ok $? "leaves all three"
 #@part end
 echo "1..$n"; exit $bad
