@@ -121,7 +121,7 @@ Your models, recipes and settings stay: an update replaces the engine and the pl
   to restore is missing or changed, the uninstall stops short of deleting the manifest and backups, so running it
   again picks up where it stopped.
 
-  Two things are left for you: run `omarchy agent local forget <host>` (the host's tailnet name) on each Omarchy
+  Two things are left for you: run `omarchy models forget <host>` (the host's tailnet name) on each Omarchy
   machine paired with it, and remove the controller's key from the host's `~/.ssh/authorized_keys` if it shouldn't
   reach it any more.
 - [x] For the panel:

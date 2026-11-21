@@ -336,7 +336,7 @@ Rectangle {
         PanelToolTip {
           id: amountTip
           visible: meterHover.hovered && amountTip.text !== ""
-          text: row.kind === "installing" && row.entry.install ? Model.downloadAmount(Number(row.entry.install.done_bytes) || 0, Number(row.entry.install.total_bytes) || 0) : ""
+          text: row.kind === "installing" && Model.modelDownload(row.entry) ? Model.downloadAmount(Number(Model.modelDownload(row.entry).done_bytes) || 0, Number(Model.modelDownload(row.entry).total_bytes) || 0) : ""
         }
       }
       Text {

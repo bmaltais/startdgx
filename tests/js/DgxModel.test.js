@@ -700,6 +700,8 @@ test("actionNotice: the footer's line after a command, without the engine's poin
   const unit = "omarchy-agent-local-use-qwen3.8-flash-next-tensorfold.service"
   assert.strictEqual(M.actionNotice("use", "Recipe x: 3 file(s)\nSetting up qwen3.8-flash-next-tensorfold in the background; the agents panel shows its progress, or follow it with: journalctl --user -u " + unit + " -f\n"),
     "Setting up qwen3.8-flash-next-tensorfold in the background")
+  assert.strictEqual(M.actionNotice("use", "Setting up x in the background; the local models panel shows its progress, or follow it with: journalctl --user -u u -f\n"),
+    "Setting up x in the background", "engine v0.9.0's wording")
   assert.strictEqual(M.actionNotice("use", "qwen3.8-flash-next-tensorfold is already being set up; follow it with: journalctl --user -u " + unit + " -f"),
     "qwen3.8-flash-next-tensorfold is already being set up")
   assert.strictEqual(M.actionNotice("stop", "Stopped a"), "Stopped a")
@@ -737,7 +739,7 @@ test("keyAction: f asks before it forgets, and a held key acts once", () => {
 const uninstallPlan = (over) => Object.assign({
   host: "me@spark", steps: ["stop the engine's units (omarchy-agent-local-*.service)", "delete the engine ~/.local/share/omarchy-local-ai", "forget me@spark here"],
   kept: ["keep ~/.local/share/omarchy/agent-local (47.5 GiB of model weights; --delete-models deletes them)", "keep the packages podman rsync (the install added them; --remove-packages removes them)"],
-  manual: ["on each Omarchy machine paired with me@spark, run: omarchy agent local forget <its tailnet name>"],
+  manual: ["on each Omarchy machine paired with me@spark, run: omarchy models forget <its tailnet name>"],
   models_bytes: 47.5 * 2 ** 30, packages: ["podman", "rsync"]
 }, over)
 
@@ -755,7 +757,7 @@ test("uninstallText: the plan as the card shows it, as the CLI's dry run says it
     "stop the engine's units (omarchy-agent-local-*.service)", "delete the engine ~/.local/share/omarchy-local-ai", "forget me@spark here",
     "keep ~/.local/share/omarchy/agent-local (47.5 GiB of model weights; --delete-models deletes them)",
     "keep the packages podman rsync (the install added them; --remove-packages removes them)",
-    "", "Left for you to do:", "on each Omarchy machine paired with me@spark, run: omarchy agent local forget <its tailnet name>"].join("\n"))
+    "", "Left for you to do:", "on each Omarchy machine paired with me@spark, run: omarchy models forget <its tailnet name>"].join("\n"))
 })
 
 test("uninstallChoices: what the card lets you opt into, off by default, with what it costs", () => {
@@ -1052,7 +1054,7 @@ test("recipeSendCommand: the typed path comes after --, so one that starts with 
 })
 
 test("parseMeasurePlan keeps the engine's up-front note that other commands wait for the measure", () => {
-  const note = "while it runs, every other omarchy agent local command waits for it (the agents panel's start and stop too): typically 10 minutes"
+  const note = "while it runs, every other omarchy models command waits for it (the local models panel's start and stop too): typically 10 minutes"
   const plan = M.parseMeasurePlan("Measure mine at context 65536 (now a drafted variant)\n  download: 3.5 GiB to download\n  " + note + "\n  then: restarts the model\nNothing was changed. Run again with --yes to do it.\n")
   assert.ok(plan.includes(note))
   assert.strictEqual(plan.length, 4)
@@ -1913,4 +1915,30 @@ test("appChange: Update… and Check ask for the update and the look", () => {
   assert.deepStrictEqual(M.appChange("update"), { type: "selfUpdate" })
   assert.deepStrictEqual(M.appChange("check"), { type: "selfCheck" })
   assert.strictEqual(M.appChange("installed"), null)
+})
+
+// ---- engine v0.9.0: an update's download, and a running model's memory now ---------------------------------------
+
+test("an update shows on the model's own row: waiting, then downloading with its bytes", () => {
+  const waiting = row({ unit: "active", updating: true, update_progress: { phase: "waiting", done_bytes: 0, total_bytes: 10e9, rate_bytes_s: 0 } })
+  assert.deepStrictEqual(M.modelState(waiting, ""), { kind: "installing", text: "Waiting to update" })
+  const going = row({ unit: "active", updating: true, update_progress: { phase: "downloading", done_bytes: 4e9, total_bytes: 10e9, rate_bytes_s: 2e6 } })
+  assert.deepStrictEqual(M.modelState(going, ""), { kind: "installing", text: "Updating" })
+  assert.deepStrictEqual(M.meter(going, 0, ""), { label: "Downloading", fraction: 0.4, value: "2 MB/s" })
+  assert.strictEqual(M.toggleAction(going, ""), null, "no play or pause while it updates")
+  assert.strictEqual(M.modelLine(going, "", "").split(" · ")[0], "Updating")
+})
+
+test("an update's reload is the model's own: no progress left, it loads as any restart does", () => {
+  assert.strictEqual(M.modelState(row({ unit: "activating", updating: true, update_progress: null }), "").kind, "loading")
+  assert.strictEqual(M.modelState(row({ unit: "active", updating: false }), "").kind, "running")
+})
+
+test("a running model's memory is what it holds now when the machine says so, else what it took to load", () => {
+  const live = row({ unit: "active", live_ram_gib: 12.4 })
+  assert.deepStrictEqual(M.meter(live, 0, ""), { label: "Memory", fraction: 12.4 / 121.6, value: "12 of 122 GiB" })
+  assert.strictEqual(M.meter(row({ unit: "active", live_ram_gib: undefined }), 0, "").value, "28 of 122 GiB")
+  const status = { ram_total_gib: 121.6, models: { a: row({ recipe: "a", unit: "active", live_ram_gib: 12.4 }), b: row({ recipe: "b", unit: "active" }) } }
+  const mem = M.hostMemory(status, {})
+  assert.deepStrictEqual(mem.segments.map((s) => s.gib), [12.4, 27.9])
 })
