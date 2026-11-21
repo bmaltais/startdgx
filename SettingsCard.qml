@@ -48,6 +48,9 @@ FocusScope {
     available: card.comfyUsable, reason: card.comfyWhyNot, running: card.comfyDoctorMine && card.dgx.comfyDoctoring,
     error: card.comfyDoctorMine ? card.dgx.comfyDoctorError : "", doc: card.comfyDoctorMine ? card.dgx.comfyDoctor : null }
   onComfyPendingChanged: if (card.kind === "comfy" && card.comfyPending === "") card.dgx.comfyStatusFor(card.host, card.path)
+  // A machine's Fugue helper page: the machine answers (the page is only for one that does), and what the service holds is about this machine.
+  readonly property bool answers: !!card.dgx.hostState[card.host] && card.dgx.hostState[card.host].online === true
+  readonly property bool fugueMine: card.kind === "host" && card.dgx.fugueHost === card.host
   // What was typed that won't do, until the next change.
   property string problem: ""
 
@@ -71,13 +74,16 @@ FocusScope {
     : card.kind === "host"
     ? Model.hostPages({
         machine: card.machine, update: Model.engineUpdate(card.status), needsSetup: !!card.dgx.setupNeeded[card.host],
-        storage: card.storage, readError: card.dgx.storageErrors[card.host] || "", busy: (card.dgx.pending[card.host + "/"] || "") !== "" })
+        storage: card.storage, readError: card.dgx.storageErrors[card.host] || "", busy: (card.dgx.pending[card.host + "/"] || "") !== "",
+        // The Fugue helper page is for a machine that answers; what it says is read when the window opens and after each click.
+        fugue: card.answers ? { host: card.host, status: card.fugueMine ? card.dgx.fugueStatus : null, error: card.fugueMine ? card.dgx.fugueError : "",
+          busy: card.fugueMine ? card.dgx.fugueBusy : "", reading: card.fugueMine && card.dgx.fugueReading, copied: card.fugueMine && card.dgx.fugueCopied } : null })
     : card.entry ? Model.modelPages({
         entry: card.entry, pending: card.pending, sharing: card.sharing, store: card.storage ? card.storage.store : null,
         location: Model.locationOf(card.storage, card.model), choices: card.choices,
         variantsLoading: card.mine && card.dgx.variantsLoading, variantsError: card.mine ? card.dgx.variantsError : "",
         away: Model.isAway(card.dgx.shownState[card.host]) }) : []
-  readonly property var values: card.kind === "app" ? ({}) : card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow, destination: card.dgx.destinationOf(card.host, card.model) }) : card.kind === "host" ? Model.hostValues(card.storage) : Model.modelValues(card.entry)
+  readonly property var values: card.kind === "app" ? ({}) : card.kind === "comfy" ? Model.comfyValues(card.comfyAnswer) : card.kind === "recipe" ? Model.recipeValues({ tf: card.tfRow, destination: card.dgx.destinationOf(card.host, card.model) }) : card.kind === "host" ? Model.hostValues(card.storage, card.fugueMine ? card.dgx.fugueStatus : null) : Model.modelValues(card.entry)
 
   // The model went (a removal finished): nothing left to set.
   readonly property bool gone: (card.kind === "model" && !card.entry) || (card.kind === "comfy" && !card.comfyInstall)

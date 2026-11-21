@@ -338,6 +338,54 @@ Item {
     comfyOpenQuery.ask(host + "\n" + path, [service.script, "comfyui", "status", host, "--dir", path, "--json", "--timeout", "30"])
   }
   function cancelComfyStatus() { comfyStatusQuery.cancel() }
+
+  // A machine's Fugue helper page (`fugue-helper HOST status|on|off|provider --json`): read when the window opens and after each click, never
+  // by the machine poll. The answers are for fugueHost, until another machine's window opens.
+  property string fugueHost: ""
+  property var fugueStatus: null
+  property string fugueError: ""
+  property string fugueBusy: ""            // "on", "off", "install" or "copy": a click's command is running
+  property bool fugueCopied: false         // the provider entry went to the clipboard
+  readonly property bool fugueReading: fugueStatusQuery.busy
+  function fugueHelperOpen(host) {
+    service.fugueHost = host
+    service.fugueStatus = null
+    service.fugueError = ""
+    service.fugueCopied = false
+    service.fugueHelperRead(host)
+  }
+  function fugueHelperRead(host) { fugueStatusQuery.ask(host, Model.fugueHelperCommand(service.script, host, "status")) }
+  // `on`, `off` or `install` (with its arguments); the page waits for it, then reads the status again.
+  function fugueHelperAct(host, verb, extra) {
+    if (service.fugueBusy !== "") return
+    service.fugueHost = host
+    service.fugueBusy = verb
+    service.fugueError = ""
+    service.fugueCopied = false
+    fugueActQuery.ask(host, Model.fugueHelperCommand(service.script, host, verb, extra))
+  }
+  // Copy Fugue's providers.json entry: the answer holds the helper's key, so it goes from the command's output into the clipboard and
+  // nowhere else: not a property, not the notice or error line, not a notification, not a log.
+  function fugueHelperCopy(host) {
+    if (service.fugueBusy !== "") return
+    service.fugueHost = host
+    service.fugueBusy = "copy"
+    service.fugueError = ""
+    service.fugueCopied = false
+    fugueCopyQuery.ask(host, Model.fugueHelperCommand(service.script, host, "provider"))
+  }
+  function cancelFugueHelper() {
+    fugueStatusQuery.cancel()
+    if (service.fugueBusy === "copy") { fugueCopyQuery.cancel(); service.fugueBusy = "" }
+  }
+  // Qt's clipboard, through a TextEdit that never shows: no process, and the text is dropped again at once.
+  TextEdit { id: clipboard; visible: false; text: "" }
+  function toClipboard(text) {
+    clipboard.text = text
+    clipboard.selectAll()
+    clipboard.copy()
+    clipboard.text = ""
+  }
   function comfyRead(host, installs) {
     if (!installs) return
     const next = Object.assign({}, service.comfyui)
@@ -848,6 +896,36 @@ Item {
       const answer = code === 0 ? Model.parseComfyStatus(out) : null
       if (answer) service.comfyStatus = answer
       else service.comfyStatusError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+
+  Query {
+    id: fugueStatusQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.fugueHost) return
+      const answer = code === 0 ? Model.parseFugueHelperStatus(out) : null
+      if (answer) { service.fugueStatus = answer; if (service.fugueBusy === "") service.fugueError = "" }
+      else service.fugueError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+    }
+  }
+  Query {
+    id: fugueActQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.fugueHost) return
+      service.fugueBusy = ""
+      service.fugueError = code === 0 ? "" : Model.errorLine(err, "The machine didn't say")
+      service.fugueHelperRead(key)
+    }
+  }
+  Query {
+    id: fugueCopyQuery
+    onAnswered: function (key, code, out, err) {
+      if (key !== service.fugueHost) return
+      service.fugueBusy = ""
+      const entry = code === 0 ? Model.fugueProviderEntry(out) : ""
+      if (entry !== "") { service.toClipboard(entry); service.fugueCopied = true; service.fugueError = "" }
+      else service.fugueError = code === 0 ? "The machine's answer could not be read" : Model.errorLine(err, "The machine didn't say")
+      service.fugueHelperRead(key)
     }
   }
 

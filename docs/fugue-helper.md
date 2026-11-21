@@ -19,7 +19,7 @@ The unit runs `fugue-helper-cuda --serve-http --listen <tailnet ip> --port 8765 
 | --- | --- |
 | `status` | installed, active, enabled at boot, address (`http://<tailnet ip>:<port>`), the binary's sha256, whether a key exists. Never the key. |
 | `install --from FILE_OR_URL [--sha256 HEX] [--port N] [--models DIR[:DIR]] [--start]` | A file here goes to the host over the ssh session (up to 512 MiB); an https URL is downloaded on the host with curl (https only, redirects too, no user name or password in it, and `--sha256` is required: the URL goes to curl on its stdin, not in any command line). A bare binary or a `.tar.zst` / `.tar.gz` holding `fugue-helper-cuda`. `--sha256` checks the file as given before anything is installed. Needs the account to linger (it says the `sudo loginctl enable-linger` to run). Re-running updates the binary and unit that startdgx made and keeps the key; a binary or unit it didn't make (a symlink too) is refused: "exists and isn't startdgx's; move it aside". Files are written to a temporary name and renamed. Does not start it unless `--start`. There is no default download yet (`HELPER_URL` in `bin/startdgx` is empty until Fugue issue #104 publishes a build): without `--from` it says so. |
-| `on`, `off` | `systemctl --user enable --now` / `disable --now` (what the panel's switch will map to). |
+| `on`, `off` | `systemctl --user enable --now` / `disable --now` (what the panel's switch runs). |
 | `provider --json` | Fugue's providers.json entry: `{"name": HOSTNAME, "type": "fugue-helper", "address": ..., "key": ...}`. |
 | `remove [--keep-key]` | Stops and disables it and deletes what `install` created. |
 
@@ -34,3 +34,11 @@ The key never leaves the host except in `provider --json`'s answer, over the ssh
 ## Memory
 
 A running helper holds a loaded model for 600 s after its last job, beside the engine's servers. The status poll does not report it yet.
+
+## In the panel
+
+A machine's settings window (the gear) has a **Fugue helper** page, only for a machine that answers. It reads `status --json` when the window opens and after each click (not with the machine poll), and shows not installed / installed, off / running, the address, and a note when the status can't be read.
+
+- **Not installed:** the exact command to run, as selectable text (`startdgx fugue-helper install HOST --from FILE --start`), since no build is published (Fugue issue #104). `FUGUE_HELPER_BUILD` in `DgxModel.js` is the one place to fill in (an https URL and its sha256) to turn that into an **Install…** button.
+- **Installed:** the **Run the helper** switch (`on` / `off`) and **Copy Fugue provider entry**. Both wait while a command runs; a failure shows as a red note under the status.
+- **The key and the clipboard:** the copy runs `provider --json` through `bin/startdgx` like every other action. The answer is read in `DgxService.qml`, checked by `DgxModel.fugueProviderEntry`, and put on the clipboard through a hidden `TextEdit` (`selectAll()` + `copy()`), which is emptied at once. The key is not in a QML property, a label, the notice or error line, a notification or a command line. It does sit in the clipboard, so Omarchy's clipboard history (if enabled) keeps it too: the page says the key is a secret.
