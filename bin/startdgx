@@ -68,6 +68,20 @@ COMFYUI_RECORDS = f"{STARTDGX_DIR}/comfyui.json"
 COMFYUI_REPO = "https://github.com/bmaltais/dgx-comfyui"
 COMFYUI_TAG = "v0.1.0"
 COMFYUI_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+# Fugue's helper (fugue-helper --serve-http) on a host. No build is published yet (Fugue issue #104 will publish
+# fugue-helper-cuda-aarch64-linux.tar.zst): until HELPER_URL is set, install needs --from. HELPER_SHA256 is the sha256 of the file at HELPER_URL.
+HELPER_URL = ""
+HELPER_SHA256 = ""
+# Fugue's own default (helper/fugue-helper.service and helper/README.md there).
+FUGUE_HELPER_PORT = 8765
+FUGUE_HELPER_MODELS = "~/.local/share/omarchy/agent-local/models"
+FUGUE_MODELS_RE = re.compile(r"^(~/|/)[A-Za-z0-9_./-]+\Z")
+FUGUE_URL_RE = re.compile(r"^https://[A-Za-z0-9._~:/?#!$&()*+,;=%-]+\Z")
+# A local file goes to the host as base64 text through the ssh session, so it is held in memory here.
+FUGUE_UPLOAD_MAX = 512 << 20
+FUGUE_HELPER_RECORD = f"{STARTDGX_DIR}/fugue-helper.json"
+FUGUE_HELPER_REMOVE_TEXT = "stop the Fugue helper and remove what startdgx created for it (its binary, unit and key)"
 COMFYUI_SOURCE_RE = re.compile(r"^(https://[A-Za-z0-9._~/-]+|/[A-Za-z0-9._/-]+)$")
 COMFYUI_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BACKUP_DIR = f"{STARTDGX_DIR}/backup"
@@ -109,7 +123,7 @@ RID_RE = re.compile(r"^[a-z0-9]+([.-][a-z0-9]+)*$")
 IMAGE_RE = re.compile(r"^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$")
 QUADLET_RE = re.compile(r"^omarchy-agent-local(-model-[a-z0-9]+([.-][a-z0-9]+)*\.container|\.network)$")
 SERVE_PATH_RE = re.compile(r"^/local-ai(/[A-Za-z0-9._-]+)*$")
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 
 # Read-only, for uninstall: what the engine made under the user's home. Model quadlets carry the engine's header;
 # its network quadlet has none, so it's known by its name and network. JSON comes back base64'd, to parse here.
@@ -135,6 +149,7 @@ for path in {ENGINE_DIR} {ENGINE_STATE} {ENGINE_CONFIG} {ENGINE_DATA} {SHARE_UNI
 done
 if [ -d ~/{ENGINE_DATA} ]; then echo "models_bytes=$(du -sb ~/{ENGINE_DATA} | cut -f1)"; fi
 if [ -f ~/{COMFYUI_RECORDS} ]; then echo "comfyui=$(grep -o '"path"' ~/{COMFYUI_RECORDS} | wc -l | tr -d ' ')"; fi
+if [ -f ~/{FUGUE_HELPER_RECORD} ]; then echo fugue_helper=1; fi
 if [ -d ~/{ENGINE_RECIPES} ]; then echo "recipes=$(ls ~/{ENGINE_RECIPES}/*.toml 2>/dev/null | wc -l | tr -d ' ')"; fi
 exit 0
 '''
@@ -1637,6 +1652,15 @@ def user_plan(manifest, state, args):
   return steps, kept
 
 
+def fugue_helper_steps(state):
+  """The step that removes the Fugue helper startdgx installed (its record is there): the host script's remove, which deletes
+  only the files its record says startdgx created."""
+  if state.get("fugue_helper") != "1":
+    return []
+  heredoc = "STARTDGX_FUGUE_HELPER_SCRIPT"
+  return [(FUGUE_HELPER_REMOVE_TEXT, f"python3 -I - fugue-helper remove <<'{heredoc}'\n{fugue_helper_script({'lenient': True})}{heredoc}")]
+
+
 def replaced_engine_plan(manifest, state, args):
   """The user's steps where the engine was there before the install: what it set up isn't startdgx's to remove,
   so the only step puts back the engine --replace-engine replaced."""
@@ -1807,6 +1831,7 @@ def cmd_uninstall(args):
     raise Error(f"The manifest on {host} is for {pre.get('user')} ({pre.get('home')}), not {state['user']} ({state['home']})")
   user_steps, user_kept = user_plan(manifest, state, args)
   root_steps, root_kept = root_plan(manifest, state, args)
+  user_steps = fugue_helper_steps(state) + user_steps
   managed = state.get("comfyui", "0")
   if managed.isdigit() and int(managed):
     user_kept.append(f"keep the {managed} ComfyUI install(s) startdgx manages, with their folders and ~/{COMFYUI_RECORDS}; startdgx comfyui forget drops one")
@@ -3315,7 +3340,8 @@ def demo_uninstall(args):
   weights = sum(int((r.get("memory_gib") or 30) * 2**29) for r in installed)
   recipes = sum(1 for r in machine["list"] if r.get("user"))
   where = f"~/{ENGINE_DATA} ({size_text(weights)} of model weights"
-  steps = ["stop the engine's units (omarchy-agent-local-*.service)", f"remove ~/{QUADLET_DIR}/omarchy-agent-local.network",
+  steps = ([FUGUE_HELPER_REMOVE_TEXT] if machine.get("fugue_helper", {}).get("installed") else []) + [
+           "stop the engine's units (omarchy-agent-local-*.service)", f"remove ~/{QUADLET_DIR}/omarchy-agent-local.network",
            f"remove the podman network {NETWORK}", f"remove the podman secret {SECRET}",
            uninstall_state_text(bool(recipes) and not args.delete_recipes, recipes), f"delete ~/{ENGINE_CONFIG} (the engine's key, overlays and shares)"]
   steps += [f"delete {where})"] if args.delete_models else []
@@ -3592,7 +3618,52 @@ def demo_comfyui(args):
     print("No ComfyUI installs " + ("found" if args.verb == "discover" else "managed") + f" on {args.host}")
 
 
-DEMO_COMMANDS = {"comfyui": demo_comfyui, "status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "use": demo_use, "variants": demo_variants, "recipe": demo_recipe, "delete": demo_delete,
+def demo_fugue_helper_state(h, fixture):
+  """A demo machine's helper as the host script's status says it (h is what the demo keeps: installed, active, enabled, port, models, sha256, key, key_made)."""
+  on = bool(h.get("installed"))
+  return {"installed": on, "managed": on, "binary": on, "unit": on, "active": on and bool(h.get("active")), "enabled": on and bool(h.get("enabled")),
+          "address": f"http://{fixture['tailnet_ip']}:{h['port']}" if on else None, "port": h.get("port"), "listen": fixture["tailnet_ip"] if on else None,
+          "models": h.get("models", []), "binary_sha256": h.get("sha256") if on else None, "key": bool(h.get("key")),
+          "created": {"binary": on, "unit": on, "key": bool(h.get("key_made"))}}
+
+
+def demo_fugue_helper(args):
+  """The fugue-helper commands on a demo machine, from demo/fugue-helper.json (the tailnet address, a fake key and the binary's hash) and its state."""
+  if args.verb == "provider" and not args.json:
+    raise Error("provider prints the helper's key, a secret: ask with --json, and keep what it prints private")
+  fixture = read_fixture("fugue-helper.json")
+  options = fugue_helper_options(args) if args.verb == "install" else {}
+  with demo_state(write=args.verb in ("install", "on", "off", "remove")) as state:
+    h = demo_host(state, args.host).setdefault("fugue_helper", {"installed": False})
+    if args.verb != "install" and not h.get("installed"):
+      if args.verb == "status":
+        return fugue_helper_print(args, args.host, demo_fugue_helper_state(h, fixture))
+      if args.verb == "remove":
+        raise Error("startdgx didn't install the Fugue helper on this host (no record); nothing was removed")
+      raise Error("the Fugue helper isn't installed here; run: startdgx fugue-helper install")
+    if args.verb == "install":
+      made = not h.get("key")
+      h.update(installed=True, port=options["port"], models=options["models"], sha256=options["sha256"] or fixture["binary_sha256"], key=True,
+               key_made=True if made else h.get("key_made", False), active=h.get("active", False) or options["start"], enabled=h.get("enabled", False) or options["start"])
+      answer = {**demo_fugue_helper_state(h, fixture), "key_created": made, "started": options["start"]}
+    elif args.verb in ("on", "off"):
+      h.update(active=args.verb == "on", enabled=args.verb == "on")
+      answer = demo_fugue_helper_state(h, fixture)
+    elif args.verb == "remove":
+      key_left = bool(h.get("key")) and (args.keep_key or not h.get("key_made"))
+      key = f"~/{FUGUE_HELPER_KEY}"
+      answer = {"removed": [f"~/{FUGUE_HELPER_BINARY}", f"~/{FUGUE_HELPER_UNIT}"] + ([key] if h.get("key") and not key_left else []),
+                "kept": [{"path": key, "why": "--keep-key" if args.keep_key else "it was there before startdgx installed the helper"}] if key_left else []}
+      h.clear()
+      h.update(installed=False, key=key_left, key_made=False)
+    else:
+      answer = demo_fugue_helper_state(h, fixture)
+  if args.verb == "provider":
+    answer = {"address": answer["address"], "key": fixture["key"]}
+  fugue_helper_print(args, args.host, answer)
+
+
+DEMO_COMMANDS = {"fugue-helper": demo_fugue_helper, "comfyui": demo_comfyui, "status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "use": demo_use, "variants": demo_variants, "recipe": demo_recipe, "delete": demo_delete,
                  "add": demo_add, "storage": demo_storage, "move": demo_move, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
 
 
@@ -4321,6 +4392,404 @@ def cmd_comfyui(args):
           "status": cmd_comfyui_status, "start": cmd_comfyui_act, "stop": cmd_comfyui_act, "autostart": cmd_comfyui_act, "doctor": cmd_comfyui_doctor}[args.verb](args)
 
 
+# Fugue's helper (fugue-helper --serve-http) on a host, for Fugue's paired-host stages. startdgx records what it
+# created in ~/.local/share/startdgx/fugue-helper.json, a file of its own like comfyui.json (the install manifest says
+# the ENGINE was installed by startdgx): the binary, the systemd user unit and the key, each with whether startdgx made
+# it, so remove deletes only those. The key (~/.config/fugue/helper.key) never leaves the host except in `provider`'s
+# answer, over the ssh session. The host side is one script, run as python3 -I - fugue-helper MODE JSON.
+FUGUE_HELPER_BINARY = ".local/lib/fugue/fugue-helper-cuda"
+FUGUE_HELPER_KEY = ".config/fugue/helper.key"
+FUGUE_HELPER_UNIT = ".config/systemd/user/fugue-helper.service"
+FUGUE_HELPER_UPLOAD = f"{STARTDGX_DIR}/fugue-helper.upload"
+FUGUE_HELPER_SCRIPT = r'''
+import hashlib, ipaddress, json, os, re, shutil, subprocess, sys, tempfile, time
+HOME = os.path.expanduser("~")
+RECORD, UNIT, BINARY = os.path.join(HOME, "@RECORD@"), os.path.join(HOME, "@UNIT@"), os.path.join(HOME, "@BINARY@")
+KEY, STAGE = os.path.join(HOME, "@KEY@"), os.path.join(HOME, "@UPLOAD@")
+SERVICE = "fugue-helper.service"
+MODELS_RE = re.compile(r"^(~/|/)[A-Za-z0-9_./-]+\Z")
+ARGV = sys.argv[2:]
+mode = ARGV[0]
+opts = json.loads(@OPTS@)
+def fail(text):
+  try:
+    os.unlink(STAGE)
+  except OSError:
+    pass
+  print("Error: " + text, file=sys.stderr)
+  sys.exit(1)
+def user_env():
+  env = dict(os.environ)
+  runtime = "/run/user/%d" % os.getuid()
+  env.setdefault("XDG_RUNTIME_DIR", runtime)
+  env.setdefault("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + runtime + "/bus")
+  return env
+def systemctl(*argv):
+  return subprocess.run(["systemctl", "--user", *argv], capture_output=True, text=True, env=user_env())
+def load():
+  try:
+    rec = json.load(open(RECORD))
+    if not isinstance(rec, dict):
+      raise ValueError("not an object")
+    return rec
+  except FileNotFoundError:
+    return {}
+  except (OSError, ValueError):
+    if opts.get("lenient"):
+      print("  skipped the Fugue helper: " + RECORD + " isn't valid; fix or delete it, then run: startdgx fugue-helper remove", file=sys.stderr)
+      sys.exit(0)
+    fail(RECORD + " isn't valid JSON; move it aside")
+def save(rec):
+  os.makedirs(os.path.dirname(RECORD), exist_ok=True)
+  tmp = RECORD + ".tmp"
+  with open(tmp, "w") as f:
+    json.dump(rec, f, indent=2)
+    f.write("\n")
+  os.replace(tmp, RECORD)
+def sha_of(path):
+  digest = hashlib.sha256()
+  with open(path, "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+      digest.update(chunk)
+  return digest.hexdigest()
+def binary_sha(rec):
+  """The binary's sha256: the recorded one while its size and mtime are what they were, else hashed again."""
+  try:
+    info = os.stat(BINARY)
+  except OSError:
+    return None
+  if rec.get("binary_sha256") and rec.get("binary_size") == info.st_size and rec.get("binary_mtime_ns") == info.st_mtime_ns:
+    return rec["binary_sha256"]
+  return sha_of(BINARY)
+def need_linger():
+  user = os.environ.get("USER") or os.path.basename(HOME)
+  linger = subprocess.run(["loginctl", "show-user", user, "-p", "Linger", "--value"], capture_output=True, text=True).stdout.strip()
+  if linger != "yes":
+    fail("The helper has to keep running after the ssh session ends. Run on the host: sudo loginctl enable-linger " + user)
+def address(rec):
+  return "http://%s:%d" % (rec["listen"], rec["port"]) if rec.get("listen") and rec.get("port") else None
+def state(rec):
+  have_unit, have_binary = os.path.isfile(UNIT), os.path.isfile(BINARY)
+  return {"installed": have_unit and have_binary, "managed": bool(rec), "binary": have_binary, "unit": have_unit,
+          "active": systemctl("is-active", "--quiet", SERVICE).returncode == 0,
+          "enabled": systemctl("is-enabled", "--quiet", SERVICE).returncode == 0,
+          "address": address(rec) if have_unit else None, "port": rec.get("port"), "listen": rec.get("listen"),
+          "models": rec.get("models", []), "binary_sha256": binary_sha(rec), "key": os.path.isfile(KEY),
+          "created": {"binary": bool(rec.get("created_binary")), "unit": bool(rec.get("created_unit")), "key": bool(rec.get("created_key"))}}
+def read_key():
+  key = ""
+  try:
+    fd = os.open(KEY, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as f:
+      if os.fstat(f.fileno()).st_mode & 0o077:
+        fail("the key file " + KEY + " can be read by others; run: chmod 600 " + KEY)
+      key = f.readline().strip()
+  except OSError:
+    key = ""
+  if not key:
+    fail("There is no key yet (" + KEY + "); run: startdgx fugue-helper install")
+  return key
+def tailnet_ip():
+  try:
+    r = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=20)
+  except (OSError, subprocess.SubprocessError):
+    r = None
+  line = (r.stdout.split() or [""])[0] if r is not None and r.returncode == 0 else ""
+  try:
+    return str(ipaddress.IPv4Address(line))
+  except ValueError:
+    fail("This host has no tailnet IPv4 address (tailscale ip -4 gave none). Bring tailscale up there first: the helper listens only on it")
+def models_arg(models):
+  out = []
+  for path in models:
+    if not MODELS_RE.match(path) or ".." in path.split("/"):
+      fail("not a usable models folder: " + path)
+    out.append("%h" + path[1:] if path.startswith("~") else path)
+  return ":".join(out)
+def unit_text(listen, port, models):
+  exec_start = "%h/@BINARY@ --serve-http --listen " + listen + " --port " + str(port) + " --key-file %h/@KEY@ --models " + models_arg(models)
+  return "\n".join(["# Written by startdgx fugue-helper install; startdgx fugue-helper remove deletes it.",
+                    "[Unit]", "Description=Fugue helper (stable-diffusion.cpp stages over HTTP)", "After=network-online.target tailscaled.service",
+                    "Wants=network-online.target", "", "[Service]", "ExecStart=" + exec_start, "Restart=on-failure", "RestartSec=5", "",
+                    "[Install]", "WantedBy=default.target", ""])
+def fetch():
+  """The file to install, at STAGE: uploaded there already, or downloaded (https only)."""
+  if opts.get("url"):
+    os.makedirs(os.path.dirname(STAGE), exist_ok=True)
+    if not re.fullmatch(r"https://[^@\s\"\\]+", opts["url"]):
+      fail("the URL must be https, with no user name or password in it")
+    if not opts.get("sha256"):
+      fail("a download needs --sha256, the hash of what it should be")
+    # The URL goes to curl on stdin (-K -), not in its arguments, which any user on the host can read.
+    r = subprocess.run(["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "3000", "-o", STAGE, "-K", "-"],
+                       input='url = "' + opts["url"] + '"\n', capture_output=True, text=True)
+    if r.returncode != 0:
+      fail("downloading " + opts["url"] + " failed: " + ((r.stderr.strip().splitlines() or ["curl failed"])[-1]))
+  elif not os.path.isfile(STAGE):
+    fail("nothing was uploaded to install")
+  if opts.get("sha256") and sha_of(STAGE) != opts["sha256"]:
+    fail("the file's sha256 is " + sha_of(STAGE) + ", not the " + opts["sha256"] + " asked for; nothing was installed")
+def unpack(dest):
+  """Writes the helper binary from STAGE to dest: STAGE is the binary itself, or a .tar.zst or .tar.gz holding it."""
+  head = open(STAGE, "rb").read(4)
+  if head == b"\x7fELF":
+    with open(STAGE, "rb") as src, open(dest, "wb") as out:
+      while True:
+        chunk = src.read(1 << 20)
+        if not chunk:
+          break
+        out.write(chunk)
+    return
+  flags = ["--zstd"] if head == b"\x28\xb5\x2f\xfd" else ["-z"] if head[:2] == b"\x1f\x8b" else None
+  if flags is None:
+    fail("the file is neither the helper binary (ELF) nor a .tar.zst or .tar.gz holding it")
+  listing = subprocess.run(["tar", *flags, "--quoting-style=escape", "-tf", STAGE], capture_output=True, text=True)
+  if listing.returncode != 0:
+    fail("can't read the archive: " + ((listing.stderr.strip().splitlines() or ["tar failed"])[-1]))
+  if "\\" in listing.stdout:
+    fail("the archive has a member name with a backslash or a newline in it")
+  names = [n for n in listing.stdout.splitlines() if os.path.basename(n) == "fugue-helper-cuda" and not n.startswith("/") and ".." not in n.split("/") and not n.endswith("/")]
+  if len(names) != 1:
+    fail("the archive must hold exactly one file named fugue-helper-cuda")
+  with open(dest, "wb") as out:
+    r = subprocess.run(["tar", *flags, "--no-wildcards", "-xOf", STAGE, "--", names[0]], stdout=out, stderr=subprocess.PIPE, text=True)
+  if r.returncode != 0 or os.path.getsize(dest) == 0:
+    fail("can't unpack the archive: " + ((r.stderr.strip().splitlines() or ["tar failed"])[-1]))
+  if open(dest, "rb").read(4) != b"\x7fELF":
+    fail("fugue-helper-cuda in the archive isn't an executable (ELF)")
+def made(path, flag, rec, was_there):
+  """Whether startdgx made path: it didn't exist, or an earlier install of ours did."""
+  return bool(rec.get(flag)) if was_there and rec else not was_there
+def remove_dir_if_empty(path):
+  try:
+    os.rmdir(path)
+    return True
+  except OSError:
+    return False
+if mode == "status":
+  print(json.dumps(state(load())))
+elif mode == "install":
+  rec = load()
+  need_linger()
+  port, models = opts["port"], opts["models"]
+  if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+    fail("the port must be a number from 1 to 65535")
+  models_arg(models)
+  listen = tailnet_ip()
+  for path, flag in ((BINARY, "created_binary"), (UNIT, "created_unit")):
+    if os.path.islink(path) or (os.path.exists(path) and not rec.get(flag)):
+      fail(path + " exists and isn't startdgx's; move it aside")
+  if os.path.islink(KEY):
+    fail(KEY + " is a symlink; move it aside")
+  fetch()
+  os.makedirs(os.path.dirname(STAGE), exist_ok=True)
+  fd, unpacked = tempfile.mkstemp(dir=os.path.dirname(STAGE), prefix=".fugue-helper-unpack-")
+  os.close(fd)
+  try:
+    unpack(unpacked)
+    dirs = [os.path.dirname(BINARY), os.path.dirname(KEY)]
+    new_dirs = [d for d in dirs if not os.path.isdir(d)]
+    created = {"binary": made(BINARY, "created_binary", rec, os.path.exists(BINARY)), "unit": made(UNIT, "created_unit", rec, os.path.exists(UNIT)),
+               "key": made(KEY, "created_key", rec, os.path.exists(KEY))}
+    made_dirs = sorted(set(new_dirs) | {d for d in rec.get("created_dirs", []) if d in dirs})
+    for d in dirs + [os.path.dirname(UNIT)]:
+      os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(BINARY), prefix=".fugue-helper-")
+    os.close(fd)
+    try:
+      shutil.copyfile(unpacked, tmp)
+      os.chmod(tmp, 0o755)
+      os.replace(tmp, BINARY)
+    finally:
+      if os.path.exists(tmp):
+        os.unlink(tmp)
+  finally:
+    os.unlink(unpacked)
+  try:
+    os.unlink(STAGE)
+  except OSError:
+    pass
+  key_made = False
+  if os.path.exists(KEY):
+    if not open(KEY).readline().strip():
+      fail("the key file " + KEY + " is empty; delete it and install again")
+    os.chmod(KEY, 0o600)
+  else:
+    import secrets
+    fd = os.open(KEY, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+      f.write(secrets.token_hex(32) + "\n")
+    key_made = True
+  text = unit_text(listen, port, models)
+  fd, tmp = tempfile.mkstemp(dir=os.path.dirname(UNIT), prefix=".fugue-helper-")
+  with os.fdopen(fd, "w") as f:
+    f.write(text)
+  os.chmod(tmp, 0o644)
+  os.replace(tmp, UNIT)
+  info = os.stat(BINARY)
+  rec = {"schema": 1, "binary": BINARY, "unit": UNIT, "key": KEY, "listen": listen, "port": port, "models": models,
+         "binary_sha256": sha_of(BINARY), "unit_sha256": hashlib.sha256(text.encode()).hexdigest(), "binary_size": info.st_size, "binary_mtime_ns": info.st_mtime_ns,
+         "created_binary": created["binary"], "created_unit": created["unit"], "created_key": created["key"], "created_dirs": made_dirs,
+         "installed_at": int(time.time())}
+  save(rec)
+  r = systemctl("daemon-reload")
+  if r.returncode != 0:
+    fail("systemctl --user daemon-reload failed: " + ((r.stderr.strip().splitlines() or ["no reason given"])[-1]))
+  if opts.get("start"):
+    for verb in (["enable", SERVICE], ["restart", SERVICE]):
+      r = systemctl(*verb)
+      if r.returncode != 0:
+        fail("systemctl --user " + verb[0] + " failed: " + ((r.stderr.strip().splitlines() or ["no reason given"])[-1]))
+  print(json.dumps({**state(rec), "key_created": key_made, "started": bool(opts.get("start"))}))
+elif mode in ("on", "off"):
+  rec = load()
+  if not (os.path.isfile(BINARY) and os.path.isfile(UNIT)):
+    fail("the Fugue helper isn't installed here; run: startdgx fugue-helper install")
+  if mode == "on":
+    need_linger()
+    read_key()
+    r = systemctl("enable", "--now", SERVICE)
+  else:
+    r = systemctl("disable", "--now", SERVICE)
+  if r.returncode != 0:
+    fail("systemctl --user " + ("enable --now" if mode == "on" else "disable --now") + " failed: " + ((r.stderr.strip().splitlines() or ["no reason given"])[-1]))
+  if mode == "on":
+    time.sleep(0.5)
+    if systemctl("is-active", "--quiet", SERVICE).returncode != 0:
+      fail("the helper stopped right after starting; see: journalctl --user -u fugue-helper")
+  print(json.dumps(state(rec)))
+elif mode == "provider":
+  rec = load()
+  if not (os.path.isfile(UNIT) and address(rec)):
+    fail("the Fugue helper isn't installed here; run: startdgx fugue-helper install")
+  print(json.dumps({"address": address(rec), "key": read_key()}))
+elif mode == "remove":
+  rec = load()
+  if not rec:
+    fail("startdgx didn't install the Fugue helper on this host (no record); nothing was removed")
+  removed, kept = [], []
+  if os.path.exists(UNIT) or systemctl("is-active", "--quiet", SERVICE).returncode == 0:
+    systemctl("disable", "--now", SERVICE)
+  for path, flag, name in ((BINARY, "created_binary", "binary"), (UNIT, "created_unit", "unit"), (KEY, "created_key", "key")):
+    if not os.path.lexists(path):
+      continue
+    recorded = rec.get(name + "_sha256")
+    if name == "key" and opts.get("keep_key"):
+      kept.append({"path": path, "why": "--keep-key"})
+    elif rec.get(flag) and recorded and (os.path.islink(path) or sha_of(path) != recorded):
+      kept.append({"path": path, "why": "it has changed since startdgx wrote it"})
+    elif rec.get(flag):
+      os.unlink(path)
+      removed.append(path)
+    else:
+      kept.append({"path": path, "why": "it was there before startdgx installed the helper"})
+  for d in rec.get("created_dirs", []) if isinstance(rec.get("created_dirs"), list) else []:
+    if d in (os.path.dirname(BINARY), os.path.dirname(KEY)) and remove_dir_if_empty(d):
+      removed.append(d)
+  systemctl("daemon-reload")
+  os.unlink(RECORD)
+  print(json.dumps({"removed": removed, "kept": kept}))
+else:
+  fail("unknown mode " + mode)
+'''.replace("@RECORD@", FUGUE_HELPER_RECORD).replace("@UNIT@", FUGUE_HELPER_UNIT).replace("@BINARY@", FUGUE_HELPER_BINARY).replace("@KEY@", FUGUE_HELPER_KEY).replace("@UPLOAD@", FUGUE_HELPER_UPLOAD)
+
+
+def fugue_helper_script(options):
+  """The host script with its options (the download URL among them) in its text: stdin is not on any command line."""
+  return FUGUE_HELPER_SCRIPT.replace("@OPTS@", repr(json.dumps(options)))
+
+
+def fugue_helper_run(host, args, mode, options):
+  """Runs the host script in MODE [JSON]; its one JSON line, parsed."""
+  out = ssh_raw(host, f"python3 -I - fugue-helper {shlex.join([mode])}", stdin=fugue_helper_script(options), timeout=args.timeout, what="fugue-helper").stdout
+  try:
+    return json.loads(out.strip().splitlines()[-1])
+  except (ValueError, IndexError) as error:
+    raise Error(f"{host} gave an answer startdgx can't read") from error
+
+
+def fugue_helper_options(args):
+  """The install's options, checked here (the host checks them again): {source, url, path, sha256, port, models, start}."""
+  source = args.source or HELPER_URL
+  if not source:
+    raise Error("No published fugue-helper build exists yet (Fugue issue #104 will publish one). Pass --from FILE_OR_URL: a built fugue-helper-cuda, or a .tar.zst or .tar.gz holding it")
+  sha = (args.sha256 or (HELPER_SHA256 if not args.source else "")).lower()
+  if sha and not SHA_RE.match(sha):
+    raise Error("--sha256 takes 64 hexadecimal digits")
+  port = args.port
+  if isinstance(port, bool) or not 1 <= port <= 65535:
+    raise Error("--port takes a number from 1 to 65535")
+  models = (args.models or FUGUE_HELPER_MODELS).split(":")
+  for path in models:
+    if not FUGUE_MODELS_RE.match(path) or ".." in path.split("/"):
+      raise Error(f"--models takes absolute folders (or ~/...), colon-separated, with only letters, digits and _ . / - in them: {path!r} isn't one")
+  options = {"sha256": sha, "port": port, "models": models, "start": bool(args.start)}
+  if "://" in source:
+    if not source.startswith("https://") or not FUGUE_URL_RE.match(source) or urllib.parse.urlsplit(source).username is not None or "@" in urllib.parse.urlsplit(source).netloc:
+      raise Error("--from takes a file on this computer or an https URL (without a user name or password in it)")
+    if not sha:
+      raise Error("--from a URL needs --sha256, the hash of what it should download")
+    return {**options, "url": source}
+  path = os.path.abspath(os.path.expanduser(source))
+  if not os.path.isfile(path):
+    raise Error(f"{source} isn't a file")
+  if os.path.getsize(path) > FUGUE_UPLOAD_MAX:
+    raise Error(f"{source} is over {FUGUE_UPLOAD_MAX >> 20} MiB: put it where the host can download it and pass its https URL")
+  return {**options, "path": path}
+
+
+def fugue_helper_status_text(answer, host):
+  if not answer["installed"]:
+    print(f"The Fugue helper isn't installed on {host}" + (" (the binary or the unit is missing)" if answer["managed"] else ""))
+    return
+  state = "running" if answer["active"] else "stopped"
+  print(f"The Fugue helper on {host}: {state}, {'starts at boot' if answer['enabled'] else 'does not start at boot'}")
+  print(f"  address  {answer['address']}")
+  print(f"  binary   sha256 {answer['binary_sha256']}")
+  print(f"  key      {'present' if answer['key'] else 'missing'} (shown only by: startdgx fugue-helper provider {host} --json)")
+
+
+def cmd_fugue_helper(args):
+  if args.verb == "provider" and not args.json:
+    raise Error("provider prints the helper's key, a secret: ask with --json, and keep what it prints private")
+  host = target(args.host)
+  if args.verb == "install":
+    options = fugue_helper_options(args)
+    path = options.pop("path", None)
+    if path:
+      with open(path, "rb") as f:
+        payload = base64.b64encode(f.read()).decode()
+      ssh_raw(host, f"umask 077; mkdir -p ~/{STARTDGX_DIR} && base64 -d > ~/{FUGUE_HELPER_UPLOAD}", stdin=payload + "\n", timeout=args.timeout, what="upload")
+    answer = fugue_helper_run(host, args, "install", options)
+  elif args.verb == "remove":
+    answer = fugue_helper_run(host, args, "remove", {"keep_key": args.keep_key})
+  else:
+    answer = fugue_helper_run(host, args, args.verb, {})
+  fugue_helper_print(args, host, answer)
+
+
+def fugue_helper_print(args, host, answer):
+  """The answer as JSON, or as the lines a person reads; the key is in provider's answer only (with the name of the machine)."""
+  if args.verb == "provider":
+    print(json.dumps({"name": host.rsplit("@", 1)[-1], "type": "fugue-helper", "address": answer["address"], "key": answer["key"]}))
+  elif args.json:
+    print(json.dumps(answer))
+  elif args.verb == "status":
+    fugue_helper_status_text(answer, host)
+  elif args.verb == "install":
+    print(f"Fugue helper installed on {host}: {answer['address']}" + (" (new key made)" if answer["key_created"] else " (key kept)"))
+    print(f"  binary sha256 {answer['binary_sha256']}")
+    print("  running now" if answer["started"] else f"  not started: startdgx fugue-helper on {host}")
+  elif args.verb == "remove":
+    for path in answer["removed"]:
+      print(f"  removed {path}")
+    for item in answer["kept"]:
+      print(f"  kept {item['path']} ({item['why']})")
+    print(f"The Fugue helper is removed from {host}")
+  else:
+    print(f"The Fugue helper on {host} is {'on' if args.verb == 'on' else 'off'}" + (f": {answer['address']}" if args.verb == "on" else ""))
+
+
 def build_parser():
   p = argparse.ArgumentParser(prog="startdgx", description=__doc__)
   sub = p.add_subparsers(dest="command", required=True)
@@ -4502,6 +4971,28 @@ def build_parser():
   cr.add_argument("--json", action="store_true")
   cr.add_argument("--timeout", type=int, default=300, help="seconds to wait for the host (default: 300)")
   cr.set_defaults(fn=cmd_comfyui, verb="recipe")
+  fp = sub.add_parser("fugue-helper", description="Fugue's helper (fugue-helper --serve-http) on a host, for Fugue's paired-host stages: install it, switch it on and off, "
+                      "and print the providers.json entry Fugue needs. The key stays on the host; only provider shows it.")
+  fv = fp.add_subparsers(dest="verb", required=True, metavar="status|install|on|off|provider|remove")
+  for verb in ("status", "install", "on", "off", "provider", "remove"):
+    f = fv.add_parser(verb, description={"status": "Whether the helper is installed, running and set to start at boot, its address, the binary's sha256 and whether a key exists. Never prints the key.",
+                                         "install": "Install the helper binary and its systemd user unit, and make a key if there is none (an existing key is kept). Needs the account to linger. Does not start it unless --start; re-running updates the binary and unit.",
+                                         "on": "Start the helper and have it start at boot (systemctl --user enable --now).",
+                                         "off": "Stop the helper and stop it starting at boot (systemctl --user disable --now).",
+                                         "provider": "Print Fugue's providers.json entry for this host as JSON, with the key: a secret, shown only here, over the ssh session. Needs --json.",
+                                         "remove": "Stop and disable the helper and delete what install created (the binary, the unit and the key), nothing else."}[verb])
+    f.add_argument("host")
+    if verb == "install":
+      f.add_argument("--from", dest="source", metavar="FILE_OR_URL", help="the helper: a built fugue-helper-cuda, or a .tar.zst or .tar.gz holding it; a file here is sent to the host, an https URL is downloaded on it")
+      f.add_argument("--sha256", metavar="HEX", help="check the file (as given, an archive too) against this before installing")
+      f.add_argument("--port", type=int, default=FUGUE_HELPER_PORT, help="the port it listens on, on the tailnet address (default: %(default)s)")
+      f.add_argument("--models", metavar="DIR[:DIR]", help=f"folders it may read models from, colon-separated, absolute or ~/ (default: {FUGUE_HELPER_MODELS})")
+      f.add_argument("--start", action="store_true", help="also start it and have it start at boot")
+    if verb == "remove":
+      f.add_argument("--keep-key", action="store_true", help="keep the key file")
+    f.add_argument("--json", action="store_true")
+    f.add_argument("--timeout", type=int, default=1800 if verb == "install" else 60, help="seconds to wait for the host (default: %(default)s)")
+    f.set_defaults(fn=cmd_fugue_helper)
   hp = sub.add_parser("hf", description="Hugging Face, read-only, from this computer: search the MLX affine 4-bit repos of known families.")
   hv = hp.add_subparsers(dest="verb", required=True, metavar="search")
   hs = hv.add_parser("search", description="List the top 50 mlx repos for QUERY that are affine 4-bit by their config.json, of a "
