@@ -80,6 +80,7 @@ Item {
     if (root.card === "addModel") core.cancelPicker()
     if (root.card === "findComfy") core.cancelComfyFind()
     if (root.card === "comfySettings") core.cancelComfyWindow()
+    if (root.card === "hostSettings") core.cancelFugueHelper()
     if (root.card === "installComfy") core.cancelComfyPlan()
     root.card = ""
   }
@@ -130,6 +131,9 @@ Item {
     root.card = "hostSettings"
     const p = core.poller(host)
     if (p) p.pollStorage()
+    // The Fugue helper page asks its machine once now, not with the poll.
+    const state = core.hostState[host]
+    if (state && state.online === true) core.fugueHelperOpen(host)
   }
   function showModelSettings(host, id, page) {
     if (!core.entry(host, id)) return
@@ -271,6 +275,8 @@ Item {
     case "logs": core.launch("logs", action.host, action.id); root.close(); break
     case "uninstall": root.showUninstall(action.host); break
     case "forget": root.showForget(action.host); break
+    case "fugueHelper": core.fugueHelperAct(action.host, action.verb, action.extra); break
+    case "fugueCopy": core.fugueHelperCopy(action.host); break
     case "forgetNow": core.forget(action.host); root.closeCard(); break
     case "refresh": core.refreshAll(); break
     case "addMachine": root.showAddMachine(); break

@@ -1290,10 +1290,103 @@ test("hostPages: the model store is a choice among the usable disks, and waits w
 })
 
 test("hostValues: the disk in use, and the folder of your own", () => {
-  assert.deepStrictEqual(M.hostValues(storeOf(null)), { store: "", folder: "" })
-  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/startdgx-models")), { store: "/m/u", folder: "" })
-  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/mine")), { store: "", folder: "/m/u/mine" })
-  assert.deepStrictEqual(M.hostValues(null), { store: "", folder: "" })
+  assert.deepStrictEqual(M.hostValues(storeOf(null)), { store: "", folder: "", fugueHelper: false })
+  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/startdgx-models")), { store: "/m/u", folder: "", fugueHelper: false })
+  assert.deepStrictEqual(M.hostValues(storeOf("/m/u/mine")), { store: "", folder: "/m/u/mine", fugueHelper: false })
+  assert.deepStrictEqual(M.hostValues(null), { store: "", folder: "", fugueHelper: false })
+  assert.strictEqual(M.hostValues(null, { installed: true, active: true }).fugueHelper, true, "the helper's switch is lit while it runs")
+})
+
+// ---- the Fugue helper page ----
+const helperStatus = (over) => Object.assign({ installed: true, managed: true, active: true, enabled: true, address: "http://100.64.0.10:8765", key: true }, over)
+const helperPage = (over) => M.fugueHelperPage(Object.assign({ host: "demo@gx10-demo", status: helperStatus(), error: "", busy: "", reading: false, copied: false }, over))
+const helperKeys = (page) => page.fields.map((f) => f.key).join(",")
+
+test("hostPages: the Fugue helper page is there only for a machine that answers, between Storage and Machine", () => {
+  const base = { machine: "m", update: null, needsSetup: false, storage: null, readError: "", busy: false }
+  assert.deepStrictEqual(M.hostPages(base).map((p) => p.title), ["General", "Storage", "Machine"], "no answer, no page")
+  const pages = M.hostPages(Object.assign({}, base, { fugue: { host: "h", status: null, error: "", busy: "", reading: true, copied: false } }))
+  assert.deepStrictEqual(pages.map((p) => p.title), ["General", "Storage", "Fugue helper", "Machine"])
+})
+
+test("fugueHelperPage: not read yet, then not readable", () => {
+  let p = helperPage({ status: null, reading: true })
+  assert.strictEqual(helperKeys(p), "fugueAbout,fugueState")
+  assert.strictEqual(p.fields[0].hint, "Runs Fugue's image stages (encode, sample, decode) on this machine, for a Fugue on your computer.")
+  assert.strictEqual(p.fields[1].hint, "Asking the machine…")
+  p = helperPage({ status: null, error: "The machine didn't say" })
+  assert.strictEqual(p.fields[1].hint, "Not known: the machine's answer couldn't be read.")
+  assert.deepStrictEqual(p.fields[1].note, { kind: "bad", text: "The machine didn't say" })
+})
+
+test("fugueHelperPage: not installed shows the command to run, not a button, while no build is published", () => {
+  assert.strictEqual(M.FUGUE_HELPER_BUILD.url, "", "no published build yet: Fugue issue #104")
+  const p = helperPage({ status: helperStatus({ installed: false, managed: false, active: false, address: null }) })
+  assert.strictEqual(helperKeys(p), "fugueAbout,fugueState,fugueInstallCommand")
+  assert.strictEqual(p.fields[1].hint, "Not installed.")
+  const cmd = p.fields[2]
+  assert.strictEqual(cmd.type, "command")
+  assert.strictEqual(cmd.value, "startdgx fugue-helper install demo@gx10-demo --from FILE --start")
+  assert.ok(/Fugue issue #104/.test(cmd.hint))
+  assert.ok(!p.fields.some((f) => f.type === "action" || f.type === "bool"), "no button and no switch")
+  assert.ok(/binary or unit is missing/.test(helperPage({ status: helperStatus({ installed: false, active: false }) }).fields[1].hint))
+  assert.strictEqual(M.fugueHelperInstallText("it's@h"), "startdgx fugue-helper install 'it'\\''s@h' --from FILE --start", "a host with odd characters is quoted")
+  assert.deepStrictEqual(M.hostChange("h", "fugueInstall", true, null), { action: null }, "no Install… until a build is published")
+})
+
+test("fugueHelperPage: installed shows its state, the switch and the copy button", () => {
+  let p = helperPage()
+  assert.strictEqual(helperKeys(p), "fugueAbout,fugueState,fugueHelper,fugueCopy")
+  assert.strictEqual(p.fields[1].hint, "Running at http://100.64.0.10:8765; starts at boot.")
+  assert.strictEqual(p.fields[2].type, "bool")
+  assert.strictEqual(p.fields[2].disabled, false)
+  assert.strictEqual(p.fields[3].button, "Copy Fugue provider entry")
+  assert.strictEqual(p.fields[3].disabled, false)
+  assert.strictEqual(p.fields[3].hint, "Paste it into Fugue's providers.json (Settings > Providers); the key is a secret.")
+  assert.strictEqual(p.fields[3].note, undefined)
+  p = helperPage({ status: helperStatus({ active: false, enabled: false }) })
+  assert.strictEqual(p.fields[1].hint, "Installed, off at http://100.64.0.10:8765.")
+  assert.strictEqual(M.hostValues(null, helperStatus({ active: false })).fugueHelper, false)
+})
+
+test("fugueHelperPage: both controls wait while a command runs, and an error shows as a bad note", () => {
+  for (const busy of ["on", "off", "copy"]) {
+    const p = helperPage({ busy: busy })
+    assert.strictEqual(p.fields[2].disabled, true, busy)
+    assert.strictEqual(p.fields[3].disabled, true, busy)
+  }
+  assert.strictEqual(helperPage({ busy: "copy" }).fields[3].button, "Copying…")
+  const failed = helperPage({ error: "the helper stopped right after starting" })
+  assert.deepStrictEqual(failed.fields[1].note, { kind: "bad", text: "the helper stopped right after starting" })
+  assert.strictEqual(failed.fields[2].disabled, false, "and the switch can be tried again")
+  assert.deepStrictEqual(helperPage({ copied: true }).fields[3].note, { kind: "ok", text: "Copied to the clipboard. The key is not shown here." })
+  assert.strictEqual(helperPage({ copied: true, error: "x" }).fields[3].note, undefined, "no 'copied' beside an error")
+})
+
+test("hostChange: the helper's switch and copy button", () => {
+  assert.deepStrictEqual(M.hostChange("h", "fugueHelper", true, null), { action: { type: "fugueHelper", host: "h", verb: "on" } })
+  assert.deepStrictEqual(M.hostChange("h", "fugueHelper", false, null), { action: { type: "fugueHelper", host: "h", verb: "off" } })
+  assert.deepStrictEqual(M.hostChange("h", "fugueCopy", true, null), { action: { type: "fugueCopy", host: "h" } })
+})
+
+test("fugueHelperCommand: the CLI's verbs, always --json, host as an argument", () => {
+  assert.deepStrictEqual(M.fugueHelperCommand("/b/startdgx", "me@h", "status"), ["/b/startdgx", "fugue-helper", "status", "me@h", "--json"])
+  assert.deepStrictEqual(M.fugueHelperCommand("/b/startdgx", "me@h", "install", M.fugueHelperInstallArgs({ url: "https://x/y", sha256: "ab" })),
+    ["/b/startdgx", "fugue-helper", "install", "me@h", "--json", "--from", "https://x/y", "--sha256", "ab", "--start"])
+})
+
+test("parseFugueHelperStatus and fugueProviderEntry", () => {
+  assert.strictEqual(M.parseFugueHelperStatus("nonsense"), null)
+  assert.strictEqual(M.parseFugueHelperStatus("{}"), null)
+  assert.strictEqual(M.parseFugueHelperStatus('{"installed":false,"active":false}').installed, false)
+  assert.strictEqual(M.fugueHelperState(null), "unknown")
+  assert.strictEqual(M.fugueHelperState({ installed: true, active: false }), "off")
+  const entry = JSON.stringify({ name: "gx10", type: "fugue-helper", address: "http://100.64.0.10:8765", key: "k".repeat(64) })
+  assert.strictEqual(M.fugueProviderEntry(entry + "\n"), entry)
+  assert.strictEqual(M.fugueProviderEntry('{"name":"g","type":"other","address":"a","key":"k"}'), "")
+  assert.strictEqual(M.fugueProviderEntry('{"name":"g","type":"fugue-helper","address":"a","key":""}'), "")
+  assert.strictEqual(M.fugueProviderEntry("Error: no"), "")
+  assert.strictEqual(M.fugueProviderEntry(entry.replace('"name"', '"extra":1,"name"')), entry, "only the four fields are kept")
 })
 
 test("hostChange: what a click in the machine's panel asks for", () => {

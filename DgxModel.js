@@ -762,7 +762,8 @@ function appChange(key) {
   return null
 }
 
-// c: { machine, update (engineUpdate), needsSetup, storage (parseStorage or null), readError, busy (a store change waits) }
+// c: { machine, update (engineUpdate), needsSetup, storage (parseStorage or null), readError, busy (a store change waits),
+// fugue (fugueHelperPage's input, or absent: the machine doesn't answer, so there is no Fugue helper page) }
 function hostPages(c) {
   const general = []
   if (c.needsSetup) general.push({ key: "setup", type: "action", label: "Set up this machine", button: "Install…",
@@ -794,21 +795,111 @@ function hostPages(c) {
   if (note) store.note = note
   if (wait) { store.disabled = true; folder.disabled = true }
 
-  return [
+  const pages = [
     { title: "General", fields: general },
-    { title: "Storage", fields: [store, folder] },
+    { title: "Storage", fields: [store, folder] }]
+  if (c.fugue) pages.push(fugueHelperPage(c.fugue))
+  pages.push(
     { title: "Machine", fields: [
       { key: "uninstall", type: "action", label: "Uninstall the engine", button: "Uninstall…", hint: "See what uninstalling would change on the machine, then do it in a terminal." },
-      { key: "forget", type: "action", label: "Forget this machine", button: "Forget…", hint: "Take it off this list. Nothing on the machine changes, and Add machine can add it again." }] }
-  ]
+      { key: "forget", type: "action", label: "Forget this machine", button: "Forget…", hint: "Take it off this list. Nothing on the machine changes, and Add machine can add it again." }] })
+  return pages
+}
+
+// ---- Fugue's helper on a machine (the page "Fugue helper" of its settings window) ------------------------------------------
+// startdgx fugue-helper: Fugue's `fugue-helper --serve-http` on the machine, which runs Fugue's image stages for a Fugue on this computer.
+
+// The one place that says where a published helper build is. No build exists yet (Fugue issue #104): while `url` is empty the page shows
+// the command to run by hand. When a build is published, fill both in (an https URL and the sha256 of the file at it); the page then shows
+// an Install… button, which runs `fugue-helper install HOST --from URL --sha256 SHA256 --start`.
+var FUGUE_HELPER_BUILD = { url: "", sha256: "" }
+var FUGUE_PROVIDER_HINT = "Paste it into Fugue's providers.json (Settings > Providers); the key is a secret."
+
+// The command a person runs by hand to install the helper (HOST as the panel knows the machine, quoted for a shell when it needs it).
+function fugueHelperInstallText(host) {
+  const h = /^[A-Za-z0-9@._:-]+$/.test(String(host)) ? String(host) : "'" + String(host).replace(/'/g, "'\\''") + "'"
+  return "startdgx fugue-helper install " + h + " --from FILE --start"
+}
+
+// The command line of a fugue-helper verb. Always --json, and never anything that holds the key: provider's answer comes back on stdout.
+function fugueHelperCommand(script, host, verb, extra) {
+  return [script, "fugue-helper", verb, host, "--json"].concat(extra || [])
+}
+// The extra arguments of the Install… button, once FUGUE_HELPER_BUILD says where the build is.
+function fugueHelperInstallArgs(build) {
+  return ["--from", String(build.url), "--sha256", String(build.sha256), "--start"]
+}
+
+// `fugue-helper status --json` as an object, or null when it isn't one the panel can read (no key is in it).
+function parseFugueHelperStatus(text) {
+  const parsed = parseJson(text)
+  return isPlainObject(parsed) && typeof parsed.installed === "boolean" ? parsed : null
+}
+
+// Fugue's providers.json entry from `fugue-helper provider --json`, as the text to put on the clipboard (compact JSON), or "" when it
+// isn't a usable entry. The text holds the key: whoever calls this puts it on the clipboard and nowhere else.
+function fugueProviderEntry(text) {
+  const e = parseJson(text)
+  if (!isPlainObject(e) || e.type !== "fugue-helper") return ""
+  if (typeof e.name !== "string" || typeof e.address !== "string" || typeof e.key !== "string" || e.key === "" || e.address === "") return ""
+  return JSON.stringify({ name: e.name, type: e.type, address: e.address, key: e.key })
+}
+
+// "unknown" (not read yet, or couldn't be), "none" (not installed), "off", "running".
+function fugueHelperState(status) {
+  if (!status) return "unknown"
+  if (!status.installed) return "none"
+  return status.active ? "running" : "off"
+}
+
+// c: { host, status (parseFugueHelperStatus or null), error (why the last read or action failed, or ""), busy ("" or "on", "off", "install",
+// "copy": what is running), reading (a status read is running), copied (the entry went to the clipboard) }
+function fugueHelperPage(c) {
+  const state = fugueHelperState(c.status)
+  const working = c.busy !== ""
+  const fields = [{ key: "fugueAbout", type: "info", label: "What it is",
+    hint: "Runs Fugue's image stages (encode, sample, decode) on this machine, for a Fugue on your computer." }]
+  const note = c.error !== "" ? { kind: "bad", text: c.error } : null
+  if (state === "unknown") {
+    fields.push({ key: "fugueState", type: "info", label: "Status",
+      hint: c.reading ? "Asking the machine…" : "Not known: the machine's answer couldn't be read.", note: note || undefined })
+    return { title: "Fugue helper", fields: fields }
+  }
+  if (state === "none") {
+    const hint = c.status.managed ? "Not installed: its binary or unit is missing. Install it again to repair it." : "Not installed."
+    fields.push({ key: "fugueState", type: "info", label: "Status", hint: hint, note: note || undefined })
+    if (FUGUE_HELPER_BUILD.url !== "") {
+      fields.push({ key: "fugueInstall", type: "action", label: "Install the helper", button: c.busy === "install" ? "Installing…" : "Install…", disabled: working,
+        hint: "Downloads the helper to the machine, sets it up as a user service and starts it." })
+    } else {
+      fields.push({ key: "fugueInstallCommand", type: "command", label: "Install it from a terminal", value: fugueHelperInstallText(c.host),
+        hint: "No published helper build exists yet (Fugue issue #104). Run this in a terminal on this computer, with FILE a built fugue-helper-cuda or a .tar.zst or .tar.gz holding it." })
+    }
+    return { title: "Fugue helper", fields: fields }
+  }
+  const where = c.status.address ? " at " + c.status.address : ""
+  fields.push({ key: "fugueState", type: "info", label: "Status",
+    hint: (state === "running" ? "Running" + where : "Installed, off" + where) + (c.status.enabled ? "; starts at boot." : "."), note: note || undefined })
+  fields.push({ key: "fugueHelper", type: "bool", label: "Run the helper", disabled: working,
+    hint: "On starts it now and at every boot; off stops it." })
+  const copy = { key: "fugueCopy", type: "action", label: "Fugue provider entry", button: c.busy === "copy" ? "Copying…" : "Copy Fugue provider entry", disabled: working, hint: FUGUE_PROVIDER_HINT }
+  if (c.copied && c.error === "") copy.note = { kind: "ok", text: "Copied to the clipboard. The key is not shown here." }
+  fields.push(copy)
+  return { title: "Fugue helper", fields: fields }
+}
+
+// What the Fugue helper page's controls show.
+function fugueHelperValues(status) {
+  return { fugueHelper: fugueHelperState(status) === "running" }
 }
 
 // What the machine's panel shows in its controls: the disk the store is on (one this plugin made), or else the folder.
-function hostValues(storage) {
+function hostValues(storage, fugueStatus) {
   const path = storage && storage.store ? String(storage.store.path) : ""
-  if (path === "") return { store: "", folder: "" }
+  const helper = fugueHelperValues(fugueStatus || null)
+  if (path === "") return Object.assign({ store: "", folder: "" }, helper)
   const disks = storage.disks.filter(function (d) { return path === d.mount + STORE_FOLDER })
-  return disks.length ? { store: String(disks[0].mount), folder: "" } : { store: "", folder: path }
+  return Object.assign(disks.length ? { store: String(disks[0].mount), folder: "" } : { store: "", folder: path }, helper)
 }
 
 // What a click in the machine's panel asks for: { action } (null: nothing to do) and, when what was typed won't do, { error }.
@@ -820,6 +911,9 @@ function hostChange(host, key, value, storage) {
   case "setup": return { action: { type: "install", host: host, replace: true } }
   case "uninstall": return { action: { type: "uninstall", host: host } }
   case "forget": return { action: { type: "forget", host: host } }
+  case "fugueHelper": return { action: { type: "fugueHelper", host: host, verb: value === true ? "on" : "off" } }
+  case "fugueCopy": return { action: { type: "fugueCopy", host: host } }
+  case "fugueInstall": return { action: FUGUE_HELPER_BUILD.url === "" ? null : { type: "fugueHelper", host: host, verb: "install", extra: fugueHelperInstallArgs(FUGUE_HELPER_BUILD) } }
   case "store": {
     if (value === "") return { action: current === "" ? null : { type: "storageUnset", host: host } }
     const path = String(value) + STORE_FOLDER

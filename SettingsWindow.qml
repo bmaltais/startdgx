@@ -3,7 +3,8 @@
 // hint, nothing to change), for a window that does things as well as sets them; a title too long for one line takes up to three (a
 // model's name), a disabled setting keeps its note at full strength (it says why), and a choice's segment never grows past the
 // page (a long disk path is cut, and whole on hover); the footer's line turns red for an error (footerIsError) and takes a second
-// line when it is long. Upstream them to StartAppImage when it needs them.
+// line when it is long; and the field type "command" (stacked, under the label: a line of text in a box, `value`, that the person selects with
+// the mouse and copies). Upstream them to StartAppImage when it needs them.
 //
 // A settings window in the Start family's look, modelled on StartBar's: a header with a search
 // box, the pages down the left, the settings of the chosen page on the right, and a footer.
@@ -11,7 +12,8 @@
 // when one changes.
 //
 //   pages   [{ title, fields: [field] }]
-//   field   { key, type: "bool" | "choice" | "text" | "action" | "info", label, hint,
+//   field   { key, type: "bool" | "choice" | "text" | "action" | "info" | "command", label, hint,
+//             value                         (command: the text shown, selectable)
 //             button, danger                (action)
 //             options: [{ value, label }]   (choice)
 //             stacked: true                 (choice or text: the control goes under the label, full width)
@@ -333,7 +335,7 @@ Item {
               readonly property var field: group.groupData.fields[row.index] || ({ key: "", type: "bool", label: "" })
               readonly property var value: win.values[row.field.key]
               readonly property bool live: !row.field.disabled
-              readonly property bool stacked: row.field.type === "text" || row.field.stacked === true
+              readonly property bool stacked: row.field.type === "text" || row.field.type === "command" || row.field.stacked === true
               readonly property real noteHeight: note.visible ? note.implicitHeight + Style.spacing.xs : 0
 
               width: group.width
@@ -393,6 +395,7 @@ Item {
                   : row.field.type === "info" ? null
                   : row.field.type === "action" ? actionEditor
                   : row.field.type === "text" ? textEditor
+                  : row.field.type === "command" ? commandEditor
                   : row.stacked ? flowEditor : choiceEditor
                 Binding { target: editor.item; property: "field"; value: row.field; when: editor.item !== null; restoreMode: Binding.RestoreNone }
                 Binding { target: editor.item; property: "value"; value: row.value; when: editor.item !== null; restoreMode: Binding.RestoreNone }
@@ -513,6 +516,41 @@ Item {
         text: act.field && act.field.button ? act.field.button : ""
         danger: !!(act.field && act.field.danger)
         onClicked: act.commit(true)
+      }
+    }
+  }
+
+  // A line to copy by hand (a command to run): selectable text in a box, read-only, wrapping at the page's width. It never edits, so it
+  // never reads the clipboard.
+  Component {
+    id: commandEditor
+    Rectangle {
+      id: cmd
+      property var field: null
+      property var value: null
+      signal commit(var next)
+      width: parent ? parent.width : 0
+      implicitHeight: box.implicitHeight + Style.spacing.md * 2
+      height: implicitHeight
+      radius: Math.max(Style.cornerRadius, Style.space(5))
+      color: Util.alpha(Color.foreground, 0.06)
+      border.width: Style.normalBorderWidth
+      border.color: Util.alpha(Color.foreground, 0.12)
+      TextEdit {
+        id: box
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: Style.spacing.xxl
+        anchors.rightMargin: Style.spacing.xxl
+        readOnly: true
+        selectByMouse: true
+        wrapMode: TextEdit.WrapAnywhere
+        text: cmd.field && cmd.field.value ? String(cmd.field.value) : ""
+        color: Color.foreground
+        selectionColor: Util.alpha(Color.accent, 0.4)
+        font.family: "monospace"
+        font.pixelSize: Style.font.caption
       }
     }
   }
