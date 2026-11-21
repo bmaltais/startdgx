@@ -41,7 +41,7 @@ Rectangle {
       visible: input.text === ""
       anchors.verticalCenter: parent.verticalCenter
       text: field.placeholder
-      color: Color.muted
+      color: Tones.muted
       font: input.font
     }
   }

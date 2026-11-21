@@ -113,7 +113,7 @@ Rectangle {
         textFormat: Text.PlainText
         // Why a row can't be used as it is takes the folder's place: that is what needs reading.
         text: row.info.note ? String(row.info.note) : String(row.info.path || "")
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         // The end of a path is what tells installs apart.
@@ -129,7 +129,7 @@ Rectangle {
     Text {
       textFormat: Text.PlainText
       text: row.stateWord
-      color: row.running || row.busy ? Color.foreground : Color.muted
+      color: row.running || row.busy ? Color.foreground : Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -137,7 +137,7 @@ Rectangle {
       visible: String(row.info.version || "") !== ""
       textFormat: Text.PlainText
       text: String(row.info.version || "")
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       font.features: { "tnum": 1 }
@@ -146,7 +146,7 @@ Rectangle {
       visible: row.running && row.info.gib > 0
       textFormat: Text.PlainText
       text: Math.round(row.info.gib) + " GiB"
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       font.features: { "tnum": 1 }
@@ -170,7 +170,7 @@ Rectangle {
       iconText: row.toggle.action === "stop" ? "\udb80\udfe4" : row.toggle.action === "retry" ? "\uf021" : "\udb81\udc0a"
       tooltipText: row.toggle.reason !== "" ? row.toggle.reason : row.toggle.action === "stop" ? "Stop  (s)" : row.toggle.action === "start" ? "Start  (s)"
         : row.toggle.action === "retry" ? "Run the install again, where it stopped  (s)" : ""
-      foreground: row.toggle.reason !== "" ? Color.muted : Color.foreground
+      foreground: row.toggle.reason !== "" ? Tones.muted : Color.foreground
       opacity: !enabled ? 0 : row.toggle.reason !== "" ? 0.5 : 1
       onClicked: if (row.toggle.reason === "") row.toggleRequested()
     }

@@ -164,6 +164,8 @@ SwitchRow.qml	missing-property	Member "md" not found on type "QObject"
 SwitchRow.qml	missing-property	Member "xxl" not found on type "QObject"
 TextLink.qml	missing-property	Member "caption" not found on type "QObject"
 TextLink.qml	missing-property	Member "family" not found on type "QObject"
+Tones.qml	import	Type Tones not declared as singleton in qmldir but using pragma Singleton
+Tones.qml	missing-property	Member "background" not found on type "QObject"
 UninstallView.qml	missing-property	Member "bodySmall" not found on type "QObject"
 UninstallView.qml	missing-property	Member "caption" not found on type "QObject"
 UninstallView.qml	missing-property	Member "family" not found on type "QObject"

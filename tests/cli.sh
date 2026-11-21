@@ -1226,12 +1226,21 @@ dj '{r["id"]: r for r in d}["nemotron-3.5-lightning-spark"]["user"] is True' lis
 ok $? "and it has a recipe of yours"
 dj 'd["store"] is None' storage $a --json; ok $? "a demo machine without storage.json has no store"
 model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
-dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(set(m) - {"live_ram_gib"}) == sorted('"$model_keys"') for m in d["models"].values())' status $a
+dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(set(m) - {"live_ram_gib", "update", "updating", "update_progress"}) == sorted('"$model_keys"') for m in d["models"].values())' status $a
 ok $? "demo status has the engine's status and model row keys, and the host's available memory"
 dj 'd["models"]["'$qwen'"]["unit"] == "active" and d["models"]["'$abl'"]["fits"] is False and d["models"]["'$nem'"]["unit"] == "failed" and d["models"]["'$nem'"]["error"]' status $a
 ok $? "demo spark-a has a running model, one that doesn't fit, and one that failed"
+# an update the catalog has for a model (the engine's `update` on a status row), asked for in the background
+dj 'd["models"]["'$qwen'"]["update"]["weights"] is True and d["models"]["'$qwen'"]["updating"] is False and d["models"]["'$abl'"]["update"] is None' status $a
+ok $? "demo spark-a has a model with an update waiting, and says so on its row"
+out=$(ds update $a $abl 2>&1); same "$out" "$abl is up to date"; ok $? "update says a model without one is up to date"
+out=$(ds update $a $flash 2>&1); same "$out" "Error: $flash isn't set up. Run: omarchy models use $flash"; ok $? "and refuses a model that isn't set up"
+out=$(ds update $a $qwen 2>&1); same "$out" "Updating $qwen: new weights"; ok $? "update starts it and says what changes"
+dj 'd["models"]["'$qwen'"]["updating"] is True and d["models"]["'$qwen'"]["update_progress"]["phase"] == "waiting" and d["models"]["'$qwen'"]["unit"] == "active"' status $a
+ok $? "the row then shows the update waiting, the model still running"
+out=$(ds update $a $qwen 2>&1); echo "$out" | grep -q "already being set up"; ok $? "a second update says it is running already"
 install_keys='["ctx", "endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "install", "name", "observed", "port", "recipe", "result", "runtime", "since_ms", "sub_state", "unit", "vendor"]'
-dj 'sorted(d["models"]["'$flash'"]) == '"$install_keys"' and sorted(d["models"]["'$flash'"]["install"]) == ["done_bytes", "phase", "rate_bytes_s", "total_bytes"]' status $b
+dj 'sorted(set(d["models"]["'$flash'"]) - {"update", "updating"}) == '"$install_keys"' and sorted(d["models"]["'$flash'"]["install"]) == ["done_bytes", "phase", "rate_bytes_s", "total_bytes"]' status $b
 ok $? "a demo setup in progress has the engine's install row keys"
 dj 'd["models"]["'$flash'"]["install"]["phase"] == "downloading" and round(d["models"]["'$flash'"]["install"]["done_bytes"] / d["models"]["'$flash'"]["install"]["total_bytes"], 2) == 0.4' status $b
 ok $? "demo spark-b is 40% through a download"

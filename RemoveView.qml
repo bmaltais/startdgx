@@ -80,7 +80,7 @@ FocusScope {
         elide: Text.ElideRight
         text: card.mine && card.dgx.removePlanning ? "ASKING THE MACHINE WHAT IT FREES…"
           : card.failed ? "HOW MUCH IT FREES IS UNKNOWN" : card.action === "cancel" ? "WHAT CANCELLING DELETES" : "WHAT REMOVING FREES"
-        color: card.failed ? Color.urgent : Color.muted
+        color: card.failed ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -117,7 +117,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "y to " + card.words.button.toLowerCase() + " · Esc to keep"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight

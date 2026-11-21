@@ -521,6 +521,14 @@ def cmd_use(args):
   print((out.strip().splitlines() or [f"Setting up {args.model} in the background"])[-1])
 
 
+def cmd_update(args):
+  # The engine's update sets a model up again from the catalog the machine has now (the old one keeps running until the new
+  # one has started; files that didn't change aren't fetched again). It runs in a transient unit and returns, as use --detach
+  # does, so the panel follows the download from the status poll (update_progress); its last line is the one line shown.
+  out = ssh(target(args.host), "update", recipe(args.model), "--detach", timeout=args.timeout or 120).stdout
+  print((out.strip().splitlines() or [f"Updating {args.model} in the background"])[-1])
+
+
 # Read-only, for variants: the [[variant]] entries of the recipe (argv[1]) in the engine's recipes folder or the user's,
 # largest context first (with each one's source: measured unless the recipe says otherwise). Prints a JSON list, or nothing for a recipe the host doesn't have.
 VARIANTS_PROBE = f'''
@@ -2879,6 +2887,9 @@ def demo_model_row(status, listing, rid):
 def demo_advance(row, now):
   """The row as it is at `now`: a download grows, then loads; a load, stop or removal ends once its time is up."""
   row = json.loads(json.dumps(row))
+  if row.get("_updating_ms") and now - row["_updating_ms"] >= DEMO_UPDATE_MS:
+    row.pop("_updating_ms")
+    row["_update"] = None
   if row["unit"] == "installing" and row["install"]["phase"] == "waiting":
     begins = (row.get("since_ms") or now) + DEMO_WAIT_MS
     if now < begins:
@@ -2901,6 +2912,26 @@ def demo_advance(row, now):
   elif row["unit"] == "removing" and elapsed >= (row["expected_remove_seconds"] or 3) * 1000:
     return None
   return row
+
+
+# A demo update waits, then downloads, for this long in all; a row's private `_update` is what the catalog would change.
+DEMO_UPDATE_MS = 12000
+DEMO_UPDATE_WAIT_MS = 2000
+
+
+def demo_update_fields(row, now):
+  """The engine's `update`, `updating` and `update_progress` of a model row, from its private `_update` and `_updating_ms`."""
+  started = row.get("_updating_ms")
+  if not started:
+    return {"update": row.get("_update"), "updating": False}
+  total = int((row.get("_update") or {}).get("download_bytes") or 4.4e9)
+  waited = now - started
+  if waited < DEMO_UPDATE_WAIT_MS:
+    progress = {"phase": "waiting", "done_bytes": 0, "total_bytes": total, "rate_bytes_s": 0}
+  else:
+    done = min(total, total * (waited - DEMO_UPDATE_WAIT_MS) // (DEMO_UPDATE_MS - DEMO_UPDATE_WAIT_MS))
+    progress = {"phase": "downloading", "done_bytes": int(done), "total_bytes": total, "rate_bytes_s": DEMO_RATE}
+  return {"update": row.get("_update"), "updating": True, "update_progress": progress}
 
 
 def demo_host(state, host):
@@ -2929,9 +2960,12 @@ def demo_status(args):
   available = round(max(0.0, status["ram_total_gib"] - held - 14), 1)
   running = [{"path": i["path"], "rss_mib": DEMO_COMFYUI_GIB * 1024, "port": 8188, "bind": "0.0.0.0"} for i in comfyui if i["managed"] and i.get("state") == "up"]
   # What a running model holds now (the engine's memory --json): a share of what it took to load, as a model that has settled.
+  status_rows = status["models"]
+
   def shown(row):
     row = public(row)
     held = (row.get("observed") or {}).get("ram_used_gib")
+    row = {**row, **demo_update_fields(status_rows[row["recipe"]], demo_now_ms())}
     return {**row, "live_ram_gib": round(held * 0.8, 1)} if row["unit"] == "active" and held else row
   print(json.dumps({**status, "ram_available_gib": available, **({"comfyui": running} if running else {}),
                     "models": {rid: shown(row) for rid, row in status["models"].items()}}, indent=2))
@@ -3003,6 +3037,20 @@ def demo_share(args):
   with demo_state(write=True) as state:
     demo_set_up(demo_host(state, args.host)["status"]["models"], rid)["shared"] = not args.off
   print(f"{rid} is no longer shared" if args.off else f"Sharing {rid} on your tailnet (demo)")
+
+
+def demo_update(args):
+  rid = recipe(args.model)
+  with demo_state(write=True) as state:
+    row = demo_set_up(demo_host(state, args.host)["status"]["models"], rid)
+    if row.get("_updating_ms"):
+      print(f"{rid} is already being set up; follow it with: journalctl --user -u omarchy-agent-local-use-{rid}.service -f")
+      return
+    if not row.get("_update"):
+      print(f"{rid} is up to date")
+      return
+    row["_updating_ms"] = demo_now_ms()
+  print(f"Updating {rid}: new weights")
 
 
 def demo_use(args):
@@ -3686,7 +3734,7 @@ def demo_fugue_helper(args):
   fugue_helper_print(args, args.host, answer)
 
 
-DEMO_COMMANDS = {"fugue-helper": demo_fugue_helper, "comfyui": demo_comfyui, "status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "use": demo_use, "variants": demo_variants, "recipe": demo_recipe, "delete": demo_delete,
+DEMO_COMMANDS = {"fugue-helper": demo_fugue_helper, "comfyui": demo_comfyui, "status": demo_status, "list": demo_list, "start": demo_start, "stop": demo_stop, "share": demo_share, "update": demo_update, "use": demo_use, "variants": demo_variants, "recipe": demo_recipe, "delete": demo_delete,
                  "add": demo_add, "storage": demo_storage, "move": demo_move, "install": demo_says("install on"), "uninstall": demo_uninstall, "logs": demo_logs}
 
 
@@ -4889,6 +4937,8 @@ def build_parser():
   us.add_argument("--ctx", type=int, help="a context size the recipe has measured (startdgx variants lists them)")
   us.add_argument("--yes", action="store_true", help="confirm setting up a recipe of your own (it downloads and runs what you wrote)")
   us.add_argument("--detach", action="store_true", help="set the model up in the background and return; status shows its progress")
+  add("update", cmd_update, model=True, timeout=120, description="Update a model that is set up to the catalog's runtime, weights and settings, in the background "
+      "(status shows its progress; the model keeps running until the new setup has started).")
   va = add("variants", cmd_variants, model=True, description="List the context sizes a recipe has measured on the host, with the memory each needs.")
   va.add_argument("--json", action="store_true", help="as [{ctx, peak_ram_gib, peak_gpu_gib}]")
   rp = sub.add_parser("recipe", description="Your own recipes on a host: validate or add a .toml from this computer (the engine's "

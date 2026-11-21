@@ -70,7 +70,7 @@ FocusScope {
         text: card.step === "checking" ? "ASKING THE MACHINE TO CHECK IT…" : card.step === "adding" ? "ADDING IT…"
           : card.result && !card.result.ok ? (card.result.errors.length === 1 ? "1 THING TO FIX" : card.result.errors.length + " THINGS TO FIX")
           : "A RECIPE FILE FROM THIS COMPUTER"
-        color: card.result && !card.result.ok ? Color.urgent : Color.muted
+        color: card.result && !card.result.ok ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -108,7 +108,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: card.problem
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -149,7 +149,7 @@ FocusScope {
       Layout.fillWidth: true
       visible: card.result !== null && !card.result.ok && card.result.errors.length > card.shownErrors
       text: card.result ? "and " + (card.result.errors.length - card.shownErrors) + " more" : ""
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -157,7 +157,7 @@ FocusScope {
     // The machine's own recipes.
     Text {
       text: "YOUR RECIPES ON THIS MACHINE"
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
       font.letterSpacing: 1
@@ -166,7 +166,7 @@ FocusScope {
       Layout.fillWidth: true
       visible: card.recipes !== null && card.recipes.length === 0 && card.dgx.userRecipesError === ""
       text: "None yet."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -211,7 +211,7 @@ FocusScope {
               elide: Text.ElideRight
               text: recipeRow.modelData.id + " · " + Model.recipeMarks(recipeRow.modelData).join(" · ")
                 + (card.dgx.recipeMeasuring === Model.modelKey(card.host, recipeRow.modelData.id) ? " · measuring…" : "")
-              color: recipeRow.modelData.source === "drafted" ? Color.muted : Color.accent
+              color: recipeRow.modelData.source === "drafted" ? Tones.muted : Color.accent
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
             }
@@ -233,7 +233,7 @@ FocusScope {
           Layout.fillWidth: true
           visible: recipeRow.open && recipeRow.loaded && card.dgx.variantsLoading
           text: "Asking the machine…"
-          color: Color.muted
+          color: Tones.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
         }
@@ -268,7 +268,7 @@ FocusScope {
               textFormat: Text.PlainText
               wrapMode: Text.Wrap
               text: variant.modelData.source + " · " + variant.modelData.text
-              color: Color.muted
+              color: Tones.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
             }
@@ -310,7 +310,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "Enter to add · Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight

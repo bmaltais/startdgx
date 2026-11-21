@@ -89,11 +89,11 @@ Item {
     comfyActProc.running = true
   }
 
-  // A click: kind is start, stop, use, delete, share, unshare, move, storageSet or storageUnset; entry the model's row as drawn.
-  // `extra` is what the command needs besides (a context's size). A context change shows as a setup does: no mark of its own.
+  // A click: kind is start, stop, use, update, delete, share, unshare, move, storageSet or storageUnset; entry the model's row as drawn.
+  // `extra` is what the command needs besides (a context's size). A context change or an update shows as a setup does: no mark of its own.
   function run(kind, id, entry, extra) {
     poller.lastOp += 1
-    const action = Object.assign({ op: poller.lastOp, key: Model.actionKey(poller.host, id, kind), kind: kind, shows: kind === "context" ? "use" : kind }, extra || {})
+    const action = Object.assign({ op: poller.lastOp, key: Model.actionKey(poller.host, id, kind), kind: kind, shows: kind === "context" || kind === "update" ? "use" : kind }, extra || {})
     const s = Model.submit(poller.queue, action, entry)
     poller.queue = s.queue
     poller.launchNext()

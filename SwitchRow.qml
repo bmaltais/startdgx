@@ -34,7 +34,7 @@ Item {
       width: parent.width
       wrapMode: Text.WordWrap
       text: row.description
-      color: Util.alpha(Color.foreground, 0.55)
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }

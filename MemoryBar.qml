@@ -64,7 +64,7 @@ ColumnLayout {
     Layout.fillWidth: true
     textFormat: Text.PlainText
     text: bar.text
-    color: Color.muted
+    color: Tones.muted
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     font.features: { "tnum": 1 }

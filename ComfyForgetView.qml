@@ -58,7 +58,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: "STOP MANAGING THIS INSTALL"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -92,7 +92,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "Enter to forget · Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight

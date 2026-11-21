@@ -72,7 +72,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: card.scanning ? "LOOKING ON YOUR TAILNET…" : card.dgx.peersError !== "" ? "THE TAILNET COULD NOT BE READ" : "MACHINES ON YOUR TAILNET"
-        color: card.dgx.peersError !== "" && !card.scanning ? Color.urgent : Color.muted
+        color: card.dgx.peersError !== "" && !card.scanning ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -85,7 +85,7 @@ FocusScope {
       spacing: Style.spacing.lg
       Text {
         text: "User on the machines"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -116,7 +116,7 @@ FocusScope {
       visible: card.peers.length === 0 && !card.scanning && card.dgx.peersError === ""
       wrapMode: Text.Wrap
       text: "No Linux machine of your tailnet is online."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -188,7 +188,7 @@ FocusScope {
                   Layout.preferredWidth: 0
                   textFormat: Text.PlainText
                   text: String(peerRow.modelData.target)
-                  color: Color.muted
+                  color: Tones.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
@@ -198,7 +198,7 @@ FocusScope {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
                 text: peerRow.offer.text
-                color: peerRow.offer.action !== null || peerRow.modelData.added ? Color.foreground : Color.muted
+                color: peerRow.offer.action !== null || peerRow.modelData.added ? Color.foreground : Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.Wrap

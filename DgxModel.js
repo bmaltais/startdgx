@@ -209,13 +209,28 @@ function modelFacts(entry) {
   return facts.join(" · ")
 }
 
+// An update the engine says is waiting (its `update`: which of image, weights and settings would change, and the download's
+// size once known), for a model nothing else is happening to: { text, detail } or null.
+function updateOffer(entry, pending) {
+  const u = entry && entry.update
+  if (!u || typeof u !== "object" || entry.updating === true) return null
+  if (entry.unit === "installing" || entry.unit === "removing" || pendingOf(pending).kind === "delete") return null
+  const names = [u.image ? "a new runtime" : "", u.weights ? "new weights" : "", u.settings ? "new settings" : ""].filter(function (n) { return n !== "" })
+  if (names.length === 0) return null
+  let what = names.join(", ").replace(/, ([^,]*)$/, " and $1")
+  what = what.charAt(0).toUpperCase() + what.slice(1)
+  const bytes = Number(u.download_bytes) || 0
+  return { text: "Update available", detail: what + (bytes > 0 ? ", " + (bytes / 1e9).toFixed(1) + " GB to download" : "") }
+}
+
 // The line under a model's name, the most telling first, so that what a narrow row drops is the least: what it is
 // doing (a failure's reason has a line of its own), its context and memory, where its files are (`location`, only on a
 // machine with a model store) and whether it is shared. Each fact keeps its words together (no-break spaces), so a row
 // that wraps the line breaks it between facts.
 function modelLine(entry, pending, location) {
   const state = modelState(entry, pending)
-  const facts = modelFacts(entry).split(" · ").concat([locationText(location), entry.shared === true ? "Shared" : ""])
+  const offer = updateOffer(entry, pending)
+  const facts = [offer ? offer.text : ""].concat(modelFacts(entry).split(" · "), [locationText(location), entry.shared === true ? "Shared" : ""])
     .filter(function (s) { return s !== "" }).map(function (s) { return s.replace(/ /g, "\u00a0") })
   return [state.kind === "failed" ? (entry.unit === "installing" ? "Setup failed" : "Failed") : state.text].concat(facts).join(" · ")
 }
@@ -637,6 +652,8 @@ function commandFor(host, action) {
   case "stop": return ["stop", host, id, "--timeout", "120"]
   // --yes only for a setup the person confirmed (a recipe of theirs): the engine refuses one without it.
   case "use": return ["use", "--detach", host, id].concat(action.yes ? ["--yes"] : [], ["--timeout", "120"])
+  // The engine's update runs in a unit of its own, as a setup does: the command returns at once and the row follows its download.
+  case "update": return ["update", host, id, "--timeout", "120"]
   case "context": return ["use", "--detach", host, id, "--ctx", String(action.ctx), "--timeout", "120"]
   case "delete": return ["delete", host, id, "--timeout", "1500"]
   // The engine publishes the model's route with tailscale serve, which can take a while.
@@ -956,6 +973,8 @@ function modelPages(c) {
   const share = { key: "share", type: "bool", label: "Share on my tailnet", hint: "Omarchy on your other machines lists this model while it is shared." }
   if (!shareAction(c.entry, c.pending, c.sharing)) share.disabled = true
   const general = [share]
+  const offer = c.away ? null : updateOffer(c.entry, c.pending)
+  if (offer) general.push({ key: "update", type: "action", label: offer.text, button: "Update", hint: offer.detail + ". The model keeps running until the new setup has started; files that didn't change aren't fetched again." })
   if (c.entry.unit !== "installing") general.push({ key: "logs", type: "action", label: "Logs", button: "Open…", hint: "Open this model's logs in a terminal." })
   const pages = [{ title: "General", fields: general }]
 
@@ -1026,6 +1045,7 @@ function modelChange(host, id, key, value, entry) {
   switch (key) {
   case "share": return { type: value ? "share" : "unshare", host: host, id: id }
   case "logs": return { type: "logs", host: host, id: id }
+  case "update": return { type: "updateModel", host: host, id: id }
   case "ctx": return { type: "setContext", host: host, id: id, ctx: Number(value) }
   case "move-usb": return { type: "move", host: host, id: id, to: "usb" }
   case "move-nvme": return { type: "move", host: host, id: id, to: "nvme" }
@@ -2320,4 +2340,33 @@ function comfyListPartial(text) {
 // What a started ComfyUI action runs as a job, for the row's wording: install, update or recipe (a workflow), "" for the rest.
 function comfyJobKind(kind) {
   return kind === "install" ? "install" : kind === "update" || kind === "update-comfyui" ? "update" : kind === "recipe-install" ? "recipe" : ""
+}
+
+// ---- contrast ----------------------------------------------------------------------------------------------------------
+// A colour for text is not picked by a fixed opacity (a theme's own "muted" can be 2.5:1 on its own background): it is the
+// dimmest the foreground can be, no dimmer than `floor`, that still reads at `min`:1 on what it sits on. Colours are
+// { r, g, b } in 0..1, as QML's `color` gives them.
+
+function srgbLinear(c) { return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4) }
+function relativeLuminance(c) { return 0.2126 * srgbLinear(c.r) + 0.7152 * srgbLinear(c.g) + 0.0722 * srgbLinear(c.b) }
+
+// WCAG's contrast ratio of two colours, from 1 (the same) to 21 (black on white), either way round.
+function contrastRatio(a, b) {
+  const la = relativeLuminance(a), lb = relativeLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+function hexOf(c) {
+  const part = function (v) { const n = Math.round(Math.max(0, Math.min(1, v)) * 255); return (n < 16 ? "0" : "") + n.toString(16) }
+  return "#" + part(c.r) + part(c.g) + part(c.b)
+}
+
+// `foreground` over `background` at the lowest opacity from `floor` up that reaches `min`:1, as "#rrggbb". The foreground
+// itself when even that doesn't reach it (the most it can do).
+function readableOn(foreground, background, min, floor) {
+  for (let a = floor; a < 1; a += 0.01) {
+    const mix = { r: background.r + (foreground.r - background.r) * a, g: background.g + (foreground.g - background.g) * a, b: background.b + (foreground.b - background.b) * a }
+    if (contrastRatio(mix, background) >= min) return hexOf(mix)
+  }
+  return hexOf(foreground)
 }
