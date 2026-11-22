@@ -66,6 +66,8 @@ case "$cmd" in
   *" use "*" --detach") rid=${cmd% --detach}; rid=${rid% --yes}; rid=${rid##* }; echo "Recipe $rid: 3 file(s)"
     if [ -e "$FAKE_HOST.use-$rid" ]; then echo "$rid is already being set up; follow it with: journalctl"
     else : >"$FAKE_HOST.use-$rid"; echo "Setting up $rid in the background; follow it with: journalctl"; fi;;
+  # update of a recipe of yours: the stub engine's own answer, refusal included.
+  *" update mine "*) host sh -c "$cmd";;
   # status's own command runs for real, in zsh where there is one (the hosts' login shell), against a stub engine in the fake home.
   *"status --json"*"'#manifest'"*) shell=bash; command -v zsh >/dev/null && shell=zsh; host "$shell" -c "$cmd";;
   *"status --json"*) echo '{"models":{}}';;
@@ -233,6 +235,12 @@ if [ "$1" = recipe ]; then
   esac
   exit
 fi
+# update: a recipe of yours is refused without --yes, with the engine's own two lines.
+if [ "$1" = update ] && [ "$2" = mine ]; then
+  case " $* " in *" --yes "*) echo "Updating mine in the background";; *)
+    printf '%s\n' "Error: mine is a recipe of yours, so it isn't set up without your say-so." "Review it, then run: omarchy models use mine --yes" >&2; exit 1;; esac
+  exit
+fi
 if [ "$1" = measure ]; then
   printf '%s\n' "Measure $2 at context $4 (now a drafted variant)" "  download: 3.5 GiB to download (3.5 GiB in 2 file(s))" "  load: Mine on tensorfold, context $4"
   if [ "$5" = --yes ]; then echo "Measured $2 at context $4: 61.2 GiB RAM"; echo "$2" >"$HOME/measured"; else echo "Nothing was changed. Run again with --yes to do it."; fi
@@ -276,6 +284,9 @@ s share me@dgx serve-off --off >/dev/null; ok $? "so that unsharing it works"
 err=$(s share me@dgx serve-hang 2>&1 >/dev/null)
 same "$err" "Error: serve-hang is not shared: tailscale serve didn't answer. Serve may not be enabled on the tailnet: enable it at https://login.tailscale.com/f/serve, then share again"
 ok $? "a share whose tailscale serve hangs says Serve may not be enabled, and where to enable it"
+s update me@dgx qwen3.8-27b-tensorfold >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai update qwen3.8-27b-tensorfold --detach$'; ok $? "update asks the engine for a detached update, without --yes"
+s update me@dgx mine | grep -q "Updating mine"; ok $? "update of a recipe of yours is retried with --yes when the engine asks for it"
+tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai update mine --detach --yes$'; ok $? "and the retry is the engine's own update with --yes"
 # use --ctx, and variants: the context sizes a recipe has measured, read from the recipe file on the host
 s use me@dgx qwen3.8-27b-tensorfold --detach --ctx 65536 >/dev/null; tail -1 "$FAKE_LOG" | grep -q 'omarchy-local-ai use qwen3.8-27b-tensorfold --ctx 65536 --detach$'; ok $? "use --ctx sends the context to the engine"
 s use me@dgx qwen3.8-27b-tensorfold --ctx abc >/dev/null 2>&1; ok $((!$?)) "use --ctx refuses what isn't a number"
