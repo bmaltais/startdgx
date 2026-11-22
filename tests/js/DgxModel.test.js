@@ -930,6 +930,12 @@ test("recipeMarks: yours, and the source of a user recipe's numbers", () => {
   assert.deepStrictEqual(M.recipeMarks({ id: "a", user: true, source: "drafted" }), ["yours", "drafted, not yet fitting"])
 })
 
+test("recipeMarks: an experimental recipe says so, before the source of its numbers", () => {
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: true }), ["experimental"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: true, user: true, source: "estimated" }), ["experimental", "yours", "estimated"])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: false }), [])
+})
+
 test("userRecipes keeps only the user's", () => {
   const list = [{ id: "a", user: false }, { id: "b", user: true }, { id: "c" }]
   assert.deepStrictEqual(M.userRecipes(list).map((r) => r.id), ["b"])
