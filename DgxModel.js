@@ -1260,10 +1260,11 @@ function recipeSource(r) {
 
 function isUserRecipe(r) { return !!r && r.user === true }
 
-// The marks a recipe wears in the picker and the Add recipe card: "yours", then where its numbers come from when that isn't
-// measured. Curated recipes wear none.
+// The marks a recipe wears in the picker and the Add recipe card: "experimental" (engine v0.11.0: kept for trying, never
+// recommended), "yours", then where its numbers come from when that isn't measured. Other curated recipes wear none.
 function recipeMarks(r) {
   const marks = []
+  if (r && r.experimental === true) marks.push("experimental")
   if (!isUserRecipe(r)) return marks
   marks.push("yours")
   const s = recipeSource(r)
