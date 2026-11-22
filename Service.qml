@@ -270,6 +270,7 @@ Item {
     case "fixRecipe": core.launch("fix", action.host, action.id); root.close(); break
     case "removeRecipeNow": core.removeRecipe(action.host, action.id); root.closeCard(); break
     case "setContext": core.setContext(action.host, action.id, action.ctx); break
+    case "updateModel": core.updateModel(action.host, action.id); break
     case "storageSet": core.setStore(action.host, action.path); break
     case "storageUnset": core.unsetStore(action.host); break
     case "logs": core.launch("logs", action.host, action.id); root.close(); break

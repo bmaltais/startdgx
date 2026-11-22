@@ -66,7 +66,7 @@ FocusScope {
         elide: Text.ElideRight
         text: card.mine && card.dgx.runPlanning ? "ASKING THE MACHINE WHAT IT WOULD DO…"
           : card.failed ? "WHAT IT WOULD DO IS UNKNOWN" : "WHAT THE MACHINE WOULD DO"
-        color: card.failed ? Color.urgent : Color.muted
+        color: card.failed ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -92,7 +92,7 @@ FocusScope {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         text: modelData
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -118,7 +118,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "Enter to " + card.words.button.toLowerCase() + " · Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight

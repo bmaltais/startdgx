@@ -11,7 +11,7 @@ Text {
   signal clicked()
   property bool picked: false
   property string tooltip: ""
-  property color idleColor: Util.alpha(Color.foreground, 0.55)
+  property color idleColor: Tones.muted
   property color hotColor: Color.foreground
   readonly property bool hot: linkMouse.containsMouse || link.picked
 

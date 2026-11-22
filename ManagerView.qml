@@ -125,7 +125,7 @@ FocusScope {
           text: Model.summaryParts(view.summary).map(function (p) {
             return p.alert ? "<font color=\"" + Color.urgent + "\">" + p.text + "</font>" : p.text
           }).join(" \u00b7 ")
-          color: Color.muted
+          color: Tones.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
         }
@@ -214,7 +214,7 @@ FocusScope {
       visible: view.dgx.loaded && view.dgx.hostList.length === 0
       wrapMode: Text.WordWrap
       text: "No machines yet. Add machine looks for DGX Sparks on your tailnet and sets one up, or adds one that already runs the engine."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }

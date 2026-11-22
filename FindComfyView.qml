@@ -66,7 +66,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: card.looking ? "LOOKING…" : card.dgx.comfyFindError !== "" ? "THE MACHINE COULD NOT BE READ" : "FOUND ON THIS MACHINE"
-        color: card.dgx.comfyFindError !== "" && !card.looking ? Color.urgent : Color.muted
+        color: card.dgx.comfyFindError !== "" && !card.looking ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -90,7 +90,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: "The look through " + card.machine + " was cut short (it took too long), so some folders weren't searched. If yours isn't here, adopt it with: startdgx comfyui adopt " + card.host + " --dir <folder>"
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -100,7 +100,7 @@ FocusScope {
       visible: card.rows.length === 0 && !card.looking && card.dgx.comfyFindError === "" && card.dgx.comfyFound !== null
       wrapMode: Text.Wrap
       text: "No ComfyUI found in the home folder or under a linked disk such as ~/usbdisk."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -166,7 +166,7 @@ FocusScope {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
                 text: String(found.modelData.path)
-                color: Color.muted
+                color: Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideLeft
@@ -176,7 +176,7 @@ FocusScope {
                 visible: found.modelData.text !== ""
                 textFormat: Text.PlainText
                 text: found.modelData.text
-                color: found.modelData.offer !== "" || found.modelData.managed ? Color.foreground : Color.muted
+                color: found.modelData.offer !== "" || found.modelData.managed ? Color.foreground : Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.Wrap
@@ -187,7 +187,7 @@ FocusScope {
               visible: found.modelData.managed
               textFormat: Text.PlainText
               text: "Managed"
-              color: Color.muted
+              color: Tones.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
             }
@@ -224,7 +224,7 @@ FocusScope {
         Layout.fillWidth: true
         horizontalAlignment: Text.AlignRight
         text: "Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
       }

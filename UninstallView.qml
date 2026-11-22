@@ -62,7 +62,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: card.dgx.planning ? "ASKING THE MACHINE WHAT WOULD CHANGE…" : card.dgx.planError !== "" ? "NO PLAN" : "WHAT WOULD CHANGE"
-        color: card.dgx.planError !== "" && !card.dgx.planning ? Color.urgent : Color.muted
+        color: card.dgx.planError !== "" && !card.dgx.planning ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -119,7 +119,7 @@ FocusScope {
       Layout.fillWidth: true
       wrapMode: Text.Wrap
       text: "The uninstall runs in a terminal, where sudo asks for the machine's password."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -130,7 +130,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }

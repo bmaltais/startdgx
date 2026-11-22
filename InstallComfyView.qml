@@ -81,7 +81,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: card.dgx.comfyPlanError !== "" ? "THE MACHINE COULD NOT BE READ" : card.plan ? "A NEW COPY, IN A FOLDER YOU PICK" : "LOOKING AT ITS DISKS…"
-        color: card.dgx.comfyPlanError !== "" ? Color.urgent : Color.muted
+        color: card.dgx.comfyPlanError !== "" ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -106,7 +106,7 @@ FocusScope {
       spacing: Style.spacing.xs
       Text {
         text: "On this disk"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -132,7 +132,7 @@ FocusScope {
       spacing: Style.spacing.xs
       Text {
         text: "Folder on " + card.machine
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -151,7 +151,7 @@ FocusScope {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         text: card.ready.text
-        color: card.ready.ready ? Color.foreground : card.ready.text === "Checking…" ? Color.muted : Color.urgent
+        color: card.ready.ready ? Color.foreground : card.ready.text === "Checking…" ? Tones.muted : Color.urgent
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -162,7 +162,7 @@ FocusScope {
       spacing: Style.spacing.xs
       Text {
         text: "Name in the panel (optional)"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
@@ -181,7 +181,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: "It installs in the background on " + card.machine + " and takes about 15 minutes; the new row shows how it goes. The machine's account must stay logged in for that (it lingers): if it doesn't, this says what to run."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -192,7 +192,7 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         text: "Enter to install · Esc to close"
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight

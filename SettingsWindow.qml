@@ -102,7 +102,7 @@ Item {
         anchors.leftMargin: Style.spacing.xxxl
         anchors.verticalCenter: parent.verticalCenter
         text: ""
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.body
       }
@@ -131,7 +131,7 @@ Item {
           visible: search.text === ""
           anchors.verticalCenter: parent.verticalCenter
           text: win.searchPlaceholder
-          color: Color.muted
+          color: Tones.muted
           font: search.font
         }
       }
@@ -191,7 +191,7 @@ Item {
           width: parent.width
           elide: Text.ElideRight
           text: win.subtitle
-          color: Color.muted
+          color: Tones.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           font.letterSpacing: 1
@@ -374,7 +374,7 @@ Item {
                   width: parent.width
                   wrapMode: Text.WordWrap
                   text: row.field.hint || ""
-                  color: Util.alpha(Color.foreground, 0.55)
+                  color: Tones.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
@@ -417,9 +417,9 @@ Item {
                 width: row.stacked ? parent.width : labels.width
                 wrapMode: Text.WordWrap
                 text: row.field.note ? row.field.note.text : ""
-                color: !row.field.note ? Color.muted
+                color: !row.field.note ? Tones.muted
                   : row.field.note.kind === "bad" ? Color.urgent
-                  : row.field.note.kind === "ok" ? Color.accent : Util.alpha(Color.foreground, 0.55)
+                  : row.field.note.kind === "ok" ? Color.accent : Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
@@ -471,7 +471,7 @@ Item {
       maximumLineCount: 2
       elide: Text.ElideRight
       text: win.footerText + (win.footerText !== "" ? "   ·   " : "") + "Esc to close"
-      color: win.footerIsError ? Color.urgent : Util.alpha(Color.foreground, 0.55)
+      color: win.footerIsError ? Color.urgent : Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }

@@ -17,7 +17,7 @@ Text {
   maximumLineCount: 2
   elide: Text.ElideRight
   text: note.svc ? note.svc.footerText : ""
-  color: note.svc && note.svc.notice !== "" && note.svc.noticeIsError ? Color.urgent : Color.muted
+  color: note.svc && note.svc.notice !== "" && note.svc.noticeIsError ? Color.urgent : Tones.muted
   font.family: Style.font.family
   font.pixelSize: Style.font.bodySmall
 

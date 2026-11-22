@@ -27,10 +27,13 @@ Rectangle {
   signal logsRequested()
   signal settingsRequested()
   signal selectRequested()
+  signal updateRequested()
 
   readonly property var modelState: Model.modelState(row.entry, row.pending)
   readonly property string kind: row.modelState.kind
   readonly property string toggle: Model.toggleAction(row.entry, row.pending) || ""   // "start", "stop" or "" (none)
+  // An update the machine's catalog has for it (nothing while it updates, is set up or removed): a link beside the name.
+  readonly property var updateOffer: row.away ? null : Model.updateOffer(row.entry, row.pending)
   readonly property bool blocked: Model.startBlocked(row.entry)
   readonly property string removal: Model.removeAction(row.entry, row.pending) || ""   // "remove", "cancel" or "" (none)
   readonly property var bar: Model.meter(row.entry, row.nowMs, row.pending)
@@ -154,9 +157,18 @@ Rectangle {
           visible: row.entry.shared === true
           Layout.alignment: Qt.AlignVCenter
           iconSize: Style.space(13)
-          color: Color.muted
+          color: Tones.muted
           HoverHandler { id: shareHover }
           PanelToolTip { visible: shareHover.hovered; text: "Shared with your tailnet" }
+         }
+         // An update is waiting: the machine's catalog has moved on from what this model was set up with.
+         TextLink {
+          visible: row.updateOffer !== null
+          Layout.alignment: Qt.AlignVCenter
+          text: "Update"
+          idleColor: Color.accent
+          tooltip: row.updateOffer ? row.updateOffer.detail + ". The model keeps running until the new setup has started." : ""
+          onClicked: row.updateRequested()
          }
          // Takes the room, so the name's own width limit doesn't shrink the column.
          Item { Layout.fillWidth: true }
@@ -181,7 +193,7 @@ Rectangle {
             // second line rather than cut them short beside the buttons; a third is cut, and whole on hover.
             // A break comes before a separator, never after one: the dot sticks to the fact that follows it.
             text: row.line.replace(/ · /g, " \u00b7\u00a0")
-            color: row.kind === "failed" ? Color.urgent : Color.muted
+            color: row.kind === "failed" ? Color.urgent : Tones.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.Wrap
@@ -211,7 +223,7 @@ Rectangle {
           Layout.fillWidth: true
           textFormat: Text.PlainText
           text: row.stateWord
-          color: row.kind === "failed" ? Color.urgent : row.kind === "stopped" || row.kind === "doesNotFit" ? Color.muted : Color.foreground
+          color: row.kind === "failed" ? Color.urgent : row.kind === "stopped" || row.kind === "doesNotFit" ? Tones.muted : Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           elide: Text.ElideRight
@@ -226,7 +238,7 @@ Rectangle {
         horizontalAlignment: Text.AlignRight
         textFormat: Text.PlainText
         text: row.columns.ctx
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         font.features: { "tnum": 1 }
@@ -240,7 +252,7 @@ Rectangle {
         horizontalAlignment: Text.AlignRight
         textFormat: Text.PlainText
         text: row.columns.size
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         font.features: { "tnum": 1 }
@@ -253,7 +265,7 @@ Rectangle {
         Layout.preferredWidth: Style.space(84)
         textFormat: Text.PlainText
         text: Model.locationShort(row.store ? row.location : "")
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
@@ -274,7 +286,7 @@ Rectangle {
         Layout.preferredWidth: implicitHeight
         visible: !row.away
         opacity: row.hot ? 1 : 0
-        foreground: Color.muted
+        foreground: Tones.muted
         iconText: "\uf013"
         tooltipText: row.hot ? "Settings…  (g)" : ""
         onClicked: row.settingsRequested()
@@ -291,7 +303,7 @@ Rectangle {
         // No tooltip while it is hidden: one already open would stay, over a button that isn't there.
         tooltipText: row.removal === "" || !row.hot ? "" : row.removal === "cancel" ? "Cancel the setup…  (d)" : "Remove…  (d)"
         // Quiet: a destructive action is never the loudest thing on the row.
-        foreground: Color.muted
+        foreground: Tones.muted
         onClicked: row.removeRequested()
       }
 
@@ -304,7 +316,7 @@ Rectangle {
         iconText: row.toggle === "stop" ? "\udb80\udfe4" : "\udb81\udc0a"
         tooltipText: row.blocked ? String(row.entry.fit_reason || "") || "Not enough memory"
           : row.toggle === "stop" ? "Stop  (s)" : row.toggle === "start" ? "Start  (s)" : ""
-        foreground: row.blocked ? Color.muted : Color.foreground
+        foreground: row.blocked ? Tones.muted : Color.foreground
         opacity: !enabled ? 0 : row.blocked ? 0.5 : 1
         onClicked: if (!row.blocked) row.toggleRequested()
       }
@@ -345,7 +357,7 @@ Rectangle {
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignRight
         text: row.shownBar ? row.shownBar.value : ""
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }

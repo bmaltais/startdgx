@@ -123,7 +123,7 @@ ColumnLayout {
             textFormat: Text.PlainText
             // The SSH target, when it says more than the name (a user).
             text: [section.host !== section.machine ? section.host : "", Model.hostLine(section.profile)].filter(function (s) { return s !== "" }).join(" · ")
-            color: Color.muted
+            color: Tones.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
@@ -142,7 +142,7 @@ ColumnLayout {
           text: !section.loaded ? "Asking the machine…"
             : section.away ? Model.offlineText(section.hostState.error, section.hostState.lastSeenMs, section.nowMs)
             : section.entries.length === 0 ? "No models set up yet" : ""
-          color: section.away ? Color.urgent : Color.muted
+          color: section.away ? Color.urgent : Tones.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
@@ -153,7 +153,7 @@ ColumnLayout {
           visible: section.update !== null
           textFormat: Text.PlainText
           text: section.update ? section.update.text + ". Update it in the machine's settings." : ""
-          color: Color.muted
+          color: Tones.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.Wrap
@@ -212,6 +212,7 @@ ColumnLayout {
         if (action) section.actionRequested(action)
       }
       onLogsRequested: section.actionRequested({ type: "logs", host: section.host, id: modelRow.modelData })
+      onUpdateRequested: section.actionRequested({ type: "updateModel", host: section.host, id: modelRow.modelData })
       onSettingsRequested: {
         section.selectRequested(Model.modelKey(section.host, modelRow.modelData))
         section.actionRequested({ type: "modelSettings", host: section.host, id: modelRow.modelData })
@@ -253,7 +254,7 @@ ColumnLayout {
       anchors.rightMargin: Style.spacing.lg
       textFormat: Text.PlainText
       text: "+  Add model…"
-      color: addHover.hovered || addRow.current ? Color.foreground : Color.muted
+      color: addHover.hovered || addRow.current ? Color.foreground : Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       elide: Text.ElideRight
@@ -271,7 +272,7 @@ ColumnLayout {
     Layout.topMargin: Style.spacing.md
     textFormat: Text.PlainText
     text: section.comfyRows.length > 0 ? "ComfyUI \u00b7 " + Model.comfySummary(section.comfyRows) : "ComfyUI"
-    color: Color.muted
+    color: Tones.muted
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     elide: Text.ElideRight
@@ -335,7 +336,7 @@ ColumnLayout {
       anchors.rightMargin: Style.spacing.lg
       textFormat: Text.PlainText
       text: "+  Install ComfyUI…"
-      color: installHover.hovered || installRow.current ? Color.foreground : Color.muted
+      color: installHover.hovered || installRow.current ? Color.foreground : Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       elide: Text.ElideRight
@@ -376,7 +377,7 @@ ColumnLayout {
       anchors.rightMargin: Style.spacing.lg
       textFormat: Text.PlainText
       text: "+  Find existing ComfyUI…"
-      color: findHover.hovered || findRow.current ? Color.foreground : Color.muted
+      color: findHover.hovered || findRow.current ? Color.foreground : Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       elide: Text.ElideRight

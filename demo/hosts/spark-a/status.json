@@ -79,7 +79,13 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "_update": {
+        "image": false,
+        "weights": true,
+        "settings": false,
+        "download_bytes": 4400000000
+      }
     }
   },
   "share_error": "",

@@ -82,7 +82,7 @@ Rectangle {
         textFormat: Text.PlainText
         elide: Text.ElideRight
         text: row.note
-        color: Color.muted
+        color: Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }

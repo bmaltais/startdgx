@@ -105,7 +105,7 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: card.reading ? "READING THE MACHINE'S CATALOG…" : card.failure !== "" ? "THE CATALOG COULD NOT BE READ" : card.tfOffers.rows.length > 0 ? "MODELS FOR THIS MACHINE · " + card.tfOffers.rows.length + " MORE FROM TENSORFOLD BELOW" : "MODELS FOR THIS MACHINE"
-        color: card.failure !== "" ? Color.urgent : Color.muted
+        color: card.failure !== "" ? Color.urgent : Tones.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.letterSpacing: 1
@@ -147,7 +147,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       text: Model.draftStatus(card.draftStep, card.host, card.dgx.draftRepo)
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
     }
@@ -198,7 +198,7 @@ FocusScope {
       visible: card.mine && !card.dgx.listing && card.failure === "" && card.allOffers.length === 0
       wrapMode: Text.Wrap
       text: "The engine on this machine has no models in its catalog."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -207,7 +207,7 @@ FocusScope {
       visible: card.filter.trim() !== "" && card.allOffers.length > 0 && card.offers.length === 0 && card.tfOffers.rows.length === 0
       wrapMode: Text.Wrap
       text: "No model matches \u201c" + card.filter.trim() + "\u201d."
-      color: Color.muted
+      color: Tones.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -238,7 +238,7 @@ FocusScope {
             Layout.topMargin: Style.spacing.lg
             visible: card.tfOffers.rows.length > 0
             text: "FROM TENSORFOLD · NOT IN THE LIST YET"
-            color: Color.muted
+            color: Tones.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             font.letterSpacing: 1
@@ -263,7 +263,7 @@ FocusScope {
             visible: card.tfOffers.blockedText !== ""
             wrapMode: Text.Wrap
             text: card.tfOffers.blockedText
-            color: Color.muted
+            color: Tones.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
           }
@@ -335,7 +335,7 @@ FocusScope {
                   visible: recipeRow.marks !== ""
                   textFormat: Text.PlainText
                   text: recipeRow.marks
-                  color: recipeRow.r.source === "drafted" ? Color.muted : Color.accent
+                  color: recipeRow.r.source === "drafted" ? Tones.muted : Color.accent
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
@@ -355,7 +355,7 @@ FocusScope {
                 visible: text !== ""
                 textFormat: Text.PlainText
                 text: recipeRow.modelData.best && recipeRow.can ? "" : recipeRow.modelData.text
-                color: recipeRow.can || recipeRow.r.available === true ? Color.foreground : Color.muted
+                color: recipeRow.can || recipeRow.r.available === true ? Color.foreground : Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.Wrap
@@ -366,7 +366,7 @@ FocusScope {
                 visible: recipeRow.facts !== ""
                 textFormat: Text.PlainText
                 text: recipeRow.facts
-                color: Color.muted
+                color: Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
@@ -382,7 +382,7 @@ FocusScope {
                 visible: text !== ""
                 textFormat: Text.PlainText
                 text: String(recipeRow.r.summary || "")
-                color: Color.muted
+                color: Tones.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.Wrap
@@ -402,7 +402,7 @@ FocusScope {
               Layout.preferredWidth: implicitHeight
               iconText: "\uf013"
               tooltipText: "Settings of " + String(recipeRow.r.name || recipeRow.r.id) + ": " + (recipeRow.fromList ? "context, requests at once, input" : "its context sizes" + (Model.isUserRecipe(recipeRow.r) ? ", measuring, adding a size, removing it" : ""))
-              foreground: Color.muted
+              foreground: Tones.muted
               onClicked: card.svc.dispatch({ type: "recipeSettings", host: card.host, recipe: recipeRow.r })
             }
 
@@ -415,7 +415,7 @@ FocusScope {
               enabled: card.dgx.recipeRemoving === "" && !card.dgx.recipeBusy
               iconText: "\uf1f8"
               tooltipText: "Remove " + String(recipeRow.r.name || recipeRow.r.id) + " from " + Model.hostName(card.host) + "'s list. It is yours: nothing else is deleted"
-              foreground: Color.muted
+              foreground: Tones.muted
               onClicked: card.dgx.removeRecipe(card.host, recipeRow.r.id)
             }
 

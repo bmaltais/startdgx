@@ -2035,3 +2035,67 @@ test("a running model's memory is what it holds now when the machine says so, el
   const mem = M.hostMemory(status, {})
   assert.deepStrictEqual(mem.segments.map((s) => s.gib), [12.4, 27.9])
 })
+
+// ---- a model's update (the engine's `update`) ----------------------------------------------------------------
+
+const pendingUpdate = { image: false, weights: true, settings: false, download_bytes: 4.4e9 }
+
+test("updateOffer: a model whose catalog moved on, that isn't updating or changing, can be updated", () => {
+  assert.deepStrictEqual(M.updateOffer(row({ update: pendingUpdate }), ""), { text: "Update available", detail: "New weights, 4.4 GB to download" })
+  assert.deepStrictEqual(M.updateOffer(row({ update: { image: true, weights: false, settings: true, download_bytes: null } }), ""),
+    { text: "Update available", detail: "A new runtime and new settings" })
+  assert.strictEqual(M.updateOffer(row({ update: null }), ""), null)
+  assert.strictEqual(M.updateOffer(row({}), ""), null, "an engine that doesn't say")
+  assert.strictEqual(M.updateOffer(row({ update: pendingUpdate, updating: true }), ""), null, "while it updates")
+  assert.strictEqual(M.updateOffer(row({ update: pendingUpdate, unit: "installing" }), ""), null)
+  assert.strictEqual(M.updateOffer(row({ update: pendingUpdate }), "delete"), null, "a removal is on its way")
+})
+
+test("the row says an update is available, after what it is doing", () => {
+  assert.strictEqual(M.modelLine(row({ unit: "active", update: pendingUpdate }), "", "").split(" · ")[1], "Update available")
+  assert.ok(!M.modelLine(row({ unit: "active" }), "", "").includes("Update"))
+})
+
+test("the update click runs the engine's update in the background, as a setup does", () => {
+  assert.deepStrictEqual(M.commandFor("me@spark", { kind: "update", key: "me@spark/qwen" }), ["update", "me@spark", "qwen", "--timeout", "120"])
+  assert.deepStrictEqual(M.modelChange("h", "m", "update", true, row({ update: pendingUpdate })), { type: "updateModel", host: "h", id: "m" })
+})
+
+test("a model's settings offer Update while one is waiting, and say what it changes", () => {
+  const pages = M.modelPages({ entry: row({ unit: "active", update: pendingUpdate }), pending: "", sharing: "", store: null, location: "", choices: [], away: false })
+  const field = pages[0].fields.find((f) => f.key === "update")
+  assert.strictEqual(field.type, "action")
+  assert.strictEqual(field.button, "Update")
+  assert.ok(field.hint.includes("New weights, 4.4 GB"))
+  assert.ok(!M.modelPages({ entry: row({ unit: "active" }), pending: "", sharing: "", store: null, location: "", choices: [], away: false })[0].fields.some((f) => f.key === "update"))
+})
+
+// ---- contrast: a colour for text is picked against what it sits on -------------------------------------------
+
+const rgb = (hex) => ({ r: parseInt(hex.slice(1, 3), 16) / 255, g: parseInt(hex.slice(3, 5), 16) / 255, b: parseInt(hex.slice(5, 7), 16) / 255 })
+
+test("contrastRatio: WCAG's, from 1 to 21", () => {
+  assert.strictEqual(Math.round(M.contrastRatio(rgb("#000000"), rgb("#ffffff"))), 21)
+  assert.strictEqual(M.contrastRatio(rgb("#777777"), rgb("#777777")), 1)
+  assert.ok(Math.abs(M.contrastRatio(rgb("#767676"), rgb("#ffffff")) - 4.54) < 0.02, "the usual 4.5:1 grey on white")
+  assert.strictEqual(M.contrastRatio(rgb("#ffffff"), rgb("#000000")), M.contrastRatio(rgb("#000000"), rgb("#ffffff")), "either way round")
+})
+
+test("readableOn: the dimmest the foreground can be and still read, never dimmer than the floor", () => {
+  const dark = rgb("#1e2230"), fg = rgb("#e8e0c0")
+  const pick = (floor, min) => rgb(M.readableOn(fg, dark, min, floor))
+  const muted = pick(0.55, 4.5)
+  assert.ok(M.contrastRatio(muted, dark) >= 4.5, "reads on the background")
+  assert.ok(M.contrastRatio(pick(0.55, 7), dark) >= 7)
+  // A theme whose own muted colour (#505a70) is 2.5:1 on this background: the pick is what the text uses instead.
+  assert.ok(M.contrastRatio(rgb("#505a70"), dark) < 3)
+  // Already readable at the floor: the floor, not brighter.
+  const easy = M.readableOn(rgb("#ffffff"), rgb("#000000"), 4.5, 0.55)
+  assert.ok(M.contrastRatio(rgb(easy), rgb("#000000")) >= 4.5)
+  assert.strictEqual(M.readableOn(rgb("#ffffff"), rgb("#000000"), 1, 0.55), "#8c8c8c", "55% white on black")
+  // A light theme works the same way: the foreground is dark, the pick darker than 55% only when it must be.
+  const light = rgb("#f4f0e4"), ink = rgb("#2a2a2a")
+  assert.ok(M.contrastRatio(rgb(M.readableOn(ink, light, 4.5, 0.55)), light) >= 4.5)
+  // A foreground that can't reach the ratio at all (grey on grey) comes back as itself, the most it can do.
+  assert.strictEqual(M.readableOn(rgb("#808080"), rgb("#7a7a7a"), 4.5, 0.55), "#808080")
+})

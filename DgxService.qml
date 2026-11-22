@@ -526,6 +526,13 @@ Item {
     variantsQuery.ask(key, [service.script, "variants", host, id, "--json", "--timeout", "60"])
   }
 
+  // Updates a model to the catalog's runtime, weights and settings (the engine's update): it runs on the machine in a unit of
+  // its own, and the row shows its download from the status poll (`update_progress`).
+  function updateModel(host, id) {
+    const p = service.poller(host)
+    if (p) p.run("update", id, service.entry(host, id))
+  }
+
   // Restarts a model set up with one of its measured contexts (the engine's use --ctx).
   function setContext(host, id, ctx) {
     const p = service.poller(host)
