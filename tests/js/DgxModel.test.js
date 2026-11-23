@@ -115,6 +115,9 @@ test("modelFacts: context, and the memory a stopped model takes once running", (
   assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "video", ctx: null, observed: null })), "Video model")
   assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "music", ctx: null, observed: null })), "Music model")
   assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "text" })), "128K context · 28 GiB")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "music", vocals: false, ctx: null, observed: null })), "Instrumental music model", "engine v0.13.0: a music model without vocals says so")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "music", vocals: true, ctx: null, observed: null })), "Music model")
+  assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "text", vocals: false })), "128K context · 28 GiB", "vocals is for music only")
 })
 
 const profile = { platform: "aarch64-gb10", ram_gib: 121.62, ram_class: 128,
@@ -346,6 +349,9 @@ test("recipeFacts: what a recipe needs and gives on this machine", () => {
   assert.strictEqual(M.recipeFacts(recipe()), "95 GiB memory · 256K context · 53 TPS")
   assert.strictEqual(M.recipeFacts(recipe({ decode_tok_s: null })), "95 GiB memory · 256K context")
   assert.strictEqual(M.recipeFacts(recipe({ memory_gib: null, context: null, decode_tok_s: null })), "")
+  assert.strictEqual(M.recipeFacts(recipe({ kind: "music", vocals: false, context: null, decode_tok_s: null })), "Instrumental music · 95 GiB memory", "a non-text recipe says what it makes")
+  assert.strictEqual(M.recipeFacts(recipe({ kind: "music", context: null, decode_tok_s: null })), "Music · 95 GiB memory")
+  assert.strictEqual(M.recipeFacts(recipe({ kind: "text" })), "95 GiB memory · 256K context · 53 TPS")
 })
 
 test("withSetups: a model just asked for shows at once, waiting, until the machine lists it", () => {
