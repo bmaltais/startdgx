@@ -197,12 +197,17 @@ function meter(entry, nowMs, pending) {
 // to size and agents to run on it; the others have neither.
 var KIND_WORDS = { image: "Image", video: "Video", music: "Music" }
 function isTextModel(entry) { return !entry || !KIND_WORDS[entry.kind] }
+// A music model that sings no lyrics (engine v0.13.0 `vocals: false`) is called instrumental.
+function kindWord(entry) {
+  if (!entry || !KIND_WORDS[entry.kind]) return ""
+  return entry.kind === "music" && entry.vocals === false ? "Instrumental music" : KIND_WORDS[entry.kind]
+}
 
 // The facts under a model's name: what it makes (not text), its context, and the memory it took when it last ran (a
 // running model's is on its meter).
 function modelFacts(entry) {
   const facts = []
-  if (!isTextModel(entry)) facts.push(KIND_WORDS[entry.kind] + " model")
+  if (!isTextModel(entry)) facts.push(kindWord(entry) + " model")
   if (Number(entry.ctx) > 0) facts.push(Math.round(Number(entry.ctx) / 1024) + "K context")
   const used = entry.observed ? Number(entry.observed.ram_used_gib) || 0 : 0
   if (used > 0 && entry.unit !== "active") facts.push(Math.round(used) + " GiB")
@@ -1382,6 +1387,7 @@ function variantsText(variants) {
 // The facts under a recipe in the picker: the memory it takes, its context and its speed, measured on this machine class.
 function recipeFacts(r) {
   const facts = []
+  if (kindWord(r) !== "") facts.push(kindWord(r))
   if (Number(r.memory_gib) > 0) facts.push(Math.round(Number(r.memory_gib)) + " GiB memory")
   if (Number(r.context) > 0) facts.push(Math.round(Number(r.context) / 1024) + "K context")
   if (Number(r.decode_tok_s) > 0) facts.push(Math.round(Number(r.decode_tok_s)) + " TPS")
