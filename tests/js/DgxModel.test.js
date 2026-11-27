@@ -1900,11 +1900,15 @@ test("tfAddedRow finds the list's row for a recipe the machine was given from it
 })
 
 test("tfOffers: the entries that can be added and aren't in the machine's list yet, and one line about the rest", () => {
-  const rows = [{ id: "a", draftable: true, recipeId: "ra" }, { id: "b", draftable: true, recipeId: "rb" }, { id: "c", draftable: false, recipeId: "" }]
+  const rows = [{ id: "a", draftable: true, recipeId: "ra" }, { id: "b", draftable: true, recipeId: "rb" },
+    { id: "c", name: "C", draftable: false, recipeId: "", reason: "needs Mia’s AI Lab's own TensorFold image, which the engine doesn't run" },
+    { id: "d", draftable: false, recipeId: "", reason: "" }]
   const recipes = [{ id: "rb", user: true, available: true, source: "estimated" }]
   const o = M.tfOffers({ rows: rows }, recipes, null)
   assert.deepStrictEqual(o.rows.map(r => r.id), ["a"])
-  assert.match(o.blockedText, /1 more TensorFold entry needs a runtime/)
+  assert.strictEqual(o.blockedText, "2 more TensorFold entries can't be added yet.")
+  assert.strictEqual(o.blockedDetail, "C: needs Mia’s AI Lab's own TensorFold image, which the engine doesn't run\nd: Can't be drafted", "each says why, by name")
+  assert.strictEqual(M.tfOffers({ rows: rows.slice(0, 3) }, [], null).blockedText, "1 more TensorFold entry can't be added yet.")
   assert.strictEqual(M.tfOffers({ rows: rows.slice(0, 2) }, [], null).blockedText, "")
   assert.deepStrictEqual(M.tfOffers(null, null, null).rows, [])
 })

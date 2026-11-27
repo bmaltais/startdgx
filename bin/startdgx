@@ -32,7 +32,7 @@ import urllib.request
 
 ENGINE = "~/.local/share/omarchy-local-ai/omarchy-local-ai"
 ENGINE_REPO = "https://github.com/bmaltais/omarchy-local-ai"
-ENGINE_TAG = "v0.16.1-dgx.1"
+ENGINE_TAG = "v0.17.1-dgx.1"
 SERVE_ENABLE_URL = "https://login.tailscale.com/f/serve"
 # No colon, which rsync would read in its destination as host:path, or as a daemon in host::module.
 TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
@@ -2240,7 +2240,7 @@ runtime = "tensorfold"
 [[hardware]]
 gpu = "nvidia-gb10"
 
-# MLX affine 4-bit export. The server loads the directory.
+# {fmt} export. The server loads the directory.
 [[artifacts]]
 repo = {repo_q}
 revision = "{revision}"
@@ -2440,7 +2440,8 @@ def draft_recipe(args, replace=False):
   vision = bool(config.get("vision_config")) if vision is None else vision
   ctx = getattr(args, "context", None) or DRAFT_CTX
   parallel = getattr(args, "parallel", None)
-  text = DRAFT_TEMPLATE.format(repo=repo, name=toml_str(draft_name(repo)), repo_q=toml_str(repo), revision=sha,
+  fmt = getattr(args, "format", None) or "MLX affine 4-bit"
+  text = DRAFT_TEMPLATE.format(repo=repo, name=toml_str(draft_name(repo)), repo_q=toml_str(repo), revision=sha, fmt=fmt,
                                summary=toml_str(summary_text or f"Drafted from {repo}: MLX 4-bit on TensorFold. The memory numbers are placeholders until it is measured."),
                                license=toml_str(license_id or "unknown"), files=toml_str(DRAFT_FILES), ctx=ctx, gib=gib, source=variant_source,
                                vision_input=DRAFT_VISION_INPUT if vision else "", vision_server=draft_server_block(parallel, vision))
@@ -2480,7 +2481,12 @@ TF_DEFAULT_CATALOG = "https://tensorfold.dev/recipes/catalog.json"
 TF_DEVICE = "dgx-spark"
 TF_MAX_BYTES = 8 * 2**20
 TF_CHECKPOINT_RE = re.compile(r"^https://huggingface\.co/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/tree/([0-9a-f]{40})$")
-TF_FORMAT = "MLX 4-bit"  # the one format the pinned TensorFold runtime is set up for: the others need a runtime startdgx doesn't pin
+# The TensorFold release the pinned engine's `tensorfold` runtime runs (runtimes/tensorfold.toml at ENGINE_TAG): move it with ENGINE_TAG.
+TF_RUNTIME = "1.3.6"
+# The checkpoint formats that runtime serves on a Spark as stored, with the template's files and no patches. An entry's other words
+# (MTP, DFlash2) name a drafter, which a draft leaves out: the model runs without it.
+TF_FORMATS = ("MLX 4-bit", "NVFP4")
+TF_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 def tf_clean(text, limit=80):
@@ -2540,6 +2546,25 @@ def tf_settings(settings):
   return {"defaults": {"context": d["context"], "parallel": d["parallel"], "input": d["input"]}, "contexts": contexts, "requests": requests, "inputs": inputs}
 
 
+def tf_blocker(deployment, fmt, repo):
+  """Why an entry can't be drafted for the engine's TensorFold, or "": its checkpoint must be a pinned Hugging Face commit, in a format
+  that runtime serves, for a TensorFold release no newer than it, and not tied to an image of its maker's own (a patched build)."""
+  if not repo:
+    return "no pinned Hugging Face checkpoint"
+  if deployment.get("image"):
+    creator = deployment.get("creator")
+    maker = tf_clean(creator.get("name")) if isinstance(creator, dict) else ""
+    whose = f"{maker}'s" if maker else "its maker's"
+    return f"needs {whose} own TensorFold image, which the engine doesn't run"
+  version = TF_VERSION_RE.match(str(deployment.get("engineVersion") or ""))
+  if version and tuple(map(int, version.groups())) > tuple(map(int, TF_RUNTIME.split("."))):
+    return f"needs TensorFold {version.group(0)}; the engine runs {TF_RUNTIME}"
+  base_format = fmt.split(" \u00b7 ")[0]
+  if base_format not in TF_FORMATS:
+    return f"{base_format or 'its format'} doesn't run on the engine's TensorFold {TF_RUNTIME}"
+  return ""
+
+
 def tf_rows(document):
   """One row per catalog record that has a deployment for one DGX Spark: {id, name, format, estimate_gb, weight_gb, repo, revision,
   url, draftable, reason}. A record whose checkpoint is not a pinned Hugging Face commit is listed, and not draftable."""
@@ -2551,8 +2576,7 @@ def tf_rows(document):
     fmt = tf_clean(deployment.get("format"))
     match = TF_CHECKPOINT_RE.match(deployment.get("checkpoint", "")) if isinstance(deployment.get("checkpoint"), str) else None
     repo, revision = (match.group(1), match.group(2)) if match and valid_repo(match.group(1)) else (None, None)
-    base_format = fmt.split(" \u00b7 ")[0]
-    reason = "" if repo and base_format == TF_FORMAT else (f"{base_format or 'its format'} needs a newer TensorFold runtime than the engine has" if repo else "no pinned Hugging Face checkpoint")
+    reason = tf_blocker(deployment, fmt, repo)
     source = record.get("source")
     rows.append({"id": record["id"], "name": tf_clean(record.get("name")) or record["id"], "format": fmt, "estimate_gb": tf_number(deployment.get("estimateGB")),
                  "weight_gb": tf_number(deployment.get("weightGB")), "repo": repo, "revision": revision, "recipe_id": draft_id(repo) if repo else "", "settings": tf_settings(deployment.get("settings")),
@@ -2677,6 +2701,8 @@ def cmd_tensorfold_draft(args):
   estimate = row["estimate_gb"]
   basis = f"tensorfold.dev's estimate of {estimate:g} GB" if estimate else "the weights' size"
   args.repo, args.revision, args.estimate_gib = row["repo"], row["revision"], estimate
+  # The template's comment names the checkpoint's format (one of TF_FORMATS), without the drafter words a draft leaves out.
+  args.format = row["format"].split(" \u00b7 ")[0]
   # --estimated: the list's own estimate is the variant's numbers, as the person's say-so (the panel confirms them with the add). An entry
   # without an estimate has nothing to stand on, so it stays drafted.
   args.variant_source = "estimated" if args.estimated and estimate else "drafted"

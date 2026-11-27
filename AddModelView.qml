@@ -36,7 +36,7 @@ FocusScope {
   readonly property string failure: card.mine && !card.dgx.listing ? card.dgx.recipesError : ""
 
   readonly property var tfAll: Model.tfOffers(card.dgx.tfList, card.mine ? card.dgx.recipes : null, card.hostState ? card.hostState.status : null)
-  readonly property var tfOffers: ({ rows: Model.filterTfRows(card.tfAll.rows, card.filter), blockedText: card.tfAll.blockedText })
+  readonly property var tfOffers: ({ rows: Model.filterTfRows(card.tfAll.rows, card.filter), blockedText: card.tfAll.blockedText, blockedDetail: card.tfAll.blockedDetail })
   // The last add: its steps, warnings and any clash or validation error, as on the card this replaced.
   readonly property bool drafting: card.dgx.recipeHost === card.host && card.dgx.draftRepo !== ""
   readonly property string draftStep: card.dgx.draftStep !== "" ? card.dgx.draftStep : card.dgx.recipeStep
@@ -266,6 +266,9 @@ FocusScope {
             color: Tones.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
+            // Which ones, and why each can't be added yet.
+            HoverHandler { id: blockedHover }
+            PanelToolTip { visible: blockedHover.hovered && card.tfOffers.blockedDetail !== ""; text: card.tfOffers.blockedDetail }
           }
         }
 
