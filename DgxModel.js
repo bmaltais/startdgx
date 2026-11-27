@@ -203,6 +203,12 @@ function kindWord(entry) {
   return entry.kind === "music" && entry.vocals === false ? "Instrumental music" : KIND_WORDS[entry.kind]
 }
 
+// Engine v0.14.0 retires a recipe it no longer offers (its `retired`); a model already set up from one keeps working. Its
+// row says so beside the name, in words: "retired" alone reads like "stopped".
+var RETIRED_TEXT = "No longer offered"
+var RETIRED_DETAIL = "Omarchy local AI no longer offers or recommends this model. It keeps working as it is set up."
+function retiredMark(entry) { return entry && entry.retired === true ? RETIRED_TEXT : "" }
+
 // The facts under a model's name: what it makes (not text), its context, and the memory it took when it last ran (a
 // running model's is on its meter).
 function modelFacts(entry) {
@@ -1266,10 +1272,12 @@ function recipeSource(r) {
 function isUserRecipe(r) { return !!r && r.user === true }
 
 // The marks a recipe wears in the picker and the Add recipe card: "experimental" (engine v0.11.0: kept for trying, never
-// recommended), "yours", then where its numbers come from when that isn't measured. Other curated recipes wear none.
+// recommended) or "no longer offered" (engine v0.14.0 `retired`: listed only once set up), "yours", then where its numbers
+// come from when that isn't measured. Other curated recipes wear none.
 function recipeMarks(r) {
   const marks = []
   if (r && r.experimental === true) marks.push("experimental")
+  if (r && r.retired === true) marks.push(RETIRED_TEXT.toLowerCase())
   if (!isUserRecipe(r)) return marks
   marks.push("yours")
   const s = recipeSource(r)

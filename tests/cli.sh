@@ -1236,7 +1236,7 @@ ok $? "its Nemotron recipe has two variants at one context, as the engine's has"
 dj '{r["id"]: r for r in d}["nemotron-3.5-lightning-spark"]["user"] is True' list $g
 ok $? "and it has a recipe of yours"
 dj 'd["store"] is None' storage $a --json; ok $? "a demo machine without storage.json has no store"
-model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx"]'
+model_keys='["endpoint", "error", "expected_load_seconds", "expected_remove_seconds", "expected_stop_seconds", "fit_reason", "fits", "image", "name", "observed", "port", "ram_total_gib", "recipe", "result", "runtime", "shared", "since_ms", "sub_state", "unit", "vendor", "ctx", "retired"]'
 dj 'sorted(d) == ["best", "last", "link", "models", "ram_available_gib", "ram_total_gib", "share_error"] and all(sorted(set(m) - {"live_ram_gib", "update", "updating", "update_progress"}) == sorted('"$model_keys"') for m in d["models"].values())' status $a
 ok $? "demo status has the engine's status and model row keys, and the host's available memory"
 dj 'd["models"]["'$qwen'"]["unit"] == "active" and d["models"]["'$abl'"]["fits"] is False and d["models"]["'$nem'"]["unit"] == "failed" and d["models"]["'$nem'"]["error"]' status $a
@@ -1559,7 +1559,7 @@ a = r["artifacts"]
 v = r["variant"]
 gib = -(-16074529674 * 10 // 2**30) / 10
 ok = (r["runtime"] == "tensorfold" and r["name"] and r["summary"] and len(a) == 1 and len(v) == 1
-      and r["hardware"] == [{"gpu": "nvidia-gb10", "ram_class": 128}]
+      and r["hardware"] == [{"gpu": "nvidia-gb10"}]
       and a[0] == {"repo": "TensorFold/Qwen3.8-27B-MLX-4bit", "revision": "948c129a6ba97f159b648637d7b54f8f5eb3c61a", "license": "apache-2.0",
                    "files": ["*.safetensors", "*.json", "chat_template.jinja"], "dest": "target", "model": "."}
       and v[0]["source"] == "drafted" and v[0]["peak_ram_gib"] == gib and v[0]["peak_gpu_gib"] == gib and v[0]["ctx"] > 0)

@@ -120,6 +120,13 @@ test("modelFacts: context, and the memory a stopped model takes once running", (
   assert.strictEqual(M.modelFacts(row({ unit: "inactive", kind: "text", vocals: false })), "128K context · 28 GiB", "vocals is for music only")
 })
 
+test("retiredMark: a model set up from a recipe the engine retired says it's no longer offered", () => {
+  assert.strictEqual(M.retiredMark(row({ retired: true })), "No longer offered")
+  assert.strictEqual(M.retiredMark(row({ retired: false })), "")
+  assert.strictEqual(M.retiredMark(row({})), "", "an engine before v0.16.1-dgx.1 sends no retired")
+  assert.strictEqual(M.retiredMark(null), "")
+})
+
 const profile = { platform: "aarch64-gb10", ram_gib: 121.62, ram_class: 128,
   gpus: [{ vendor: "nvidia", family: "nvidia-gb10", unified: true, memory_gib: 121.62 }] }
 
@@ -940,6 +947,8 @@ test("recipeMarks: an experimental recipe says so, before the source of its numb
   assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: true }), ["experimental"])
   assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: true, user: true, source: "estimated" }), ["experimental", "yours", "estimated"])
   assert.deepStrictEqual(M.recipeMarks({ id: "a", experimental: false }), [])
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", retired: true }), ["no longer offered"], "engine v0.14.0: retired")
+  assert.deepStrictEqual(M.recipeMarks({ id: "a", retired: false }), [])
 })
 
 test("userRecipes keeps only the user's", () => {

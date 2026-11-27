@@ -25,7 +25,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": true
     },
     "nemotron-3.5-lightning-spark": {
       "error": "",
@@ -52,7 +53,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": false
     },
     "qwen3.8-27b-abliterated-tensorfold": {
       "error": "",
@@ -79,7 +81,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": false
     },
     "qwen3.8-27b-tensorfold": {
       "error": "",
@@ -106,7 +109,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": false
     },
     "qwen3.8-flash-next-tensorfold": {
       "error": "",
@@ -133,7 +137,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": false
     }
   },
   "share_error": "",
