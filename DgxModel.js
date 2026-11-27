@@ -71,6 +71,14 @@ function updateDownload(entry) {
 // The download a row shows: an update's, else a first setup's.
 function modelDownload(entry) { return updateDownload(entry) || (entry && entry.install) || null }
 
+// Whether bytes are still arriving. The engine says `downloading` for every step of a setup or an update: also when
+// there is nothing to fetch (the image and the weights are already there: total 0) and after the download, while the
+// new setup is made. Only a fetch says "Downloading"; the rest is "Updating", or "Setting up" for a first setup.
+function fetching(p) {
+  const total = p ? Number(p.total_bytes) || 0 : 0
+  return total > 0 && (Number(p.done_bytes) || 0) < total
+}
+
 // What a running model holds now, in GiB: what the machine's `memory` says when the status carries it (`live_ram_gib`),
 // else what it took to load (`observed.ram_used_gib`, which an idle model may since have let go of).
 function modelGib(entry) {
@@ -103,7 +111,7 @@ function modelState(entry, pending) {
   switch (unit) {
   case "installing":
     if (phase === "failed") return { kind: "failed", text: error || "Setup failed" }
-    return { kind: "installing", text: phase === "waiting" ? "Waiting to download" : "Downloading" }
+    return { kind: "installing", text: phase === "waiting" ? "Waiting to download" : fetching(entry.install) ? "Downloading" : "Setting up" }
   case "active": return { kind: "running", text: "Running" }
   case "activating": return { kind: "loading", text: "Loading" }
   case "deactivating": return { kind: "stopping", text: "Stopping" }
@@ -173,10 +181,12 @@ function meter(entry, nowMs, pending) {
   const seconds = function (value, fallback) { return Number(value) > 0 ? Number(value) : fallback }
   switch (kind) {
   case "installing": {
-    const install = updateDownload(entry) || entry.install || {}
+    const update = updateDownload(entry)
+    const install = update || entry.install || {}
     if (install.phase === "waiting") return { label: "Waiting", fraction: 0, value: "" }
     const total = Number(install.total_bytes) || 0
-    return { label: "Downloading", fraction: total > 0 ? (Number(install.done_bytes) || 0) / total : 0, value: downloadRate(Number(install.rate_bytes_s) || 0) }
+    if (!fetching(install)) return { label: update ? "Updating" : "Setting up", fraction: total > 0 ? 1 : 0, value: "" }
+    return { label: "Downloading", fraction: (Number(install.done_bytes) || 0) / total, value: downloadRate(Number(install.rate_bytes_s) || 0) }
   }
   case "loading": return { label: "Loading", fraction: phaseProgress(elapsed, seconds(entry.expected_load_seconds, 60)), value: "" }
   case "stopping": return { label: "Stopping", fraction: phaseProgress(elapsed, seconds(entry.expected_stop_seconds, 10)), value: "" }
