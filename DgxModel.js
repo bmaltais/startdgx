@@ -1812,11 +1812,15 @@ function tfStateText(row, st) {
 }
 
 // What the model picker shows under the machine's own recipes, from TensorFold's list: the entries that can be added and aren't on the machine's
-// list yet, and one line about those that can't be added yet. `recipes` is the machine's recipe list (null while read).
+// list yet, one line about those that can't be added yet, and why each can't, for that line's tooltip (the reasons vary: a format or a
+// TensorFold newer than the engine's, an image of the entry's maker's own, no pinned checkpoint). `recipes` is the machine's recipe list
+// (null while read).
 function tfOffers(list, recipes, status) {
   const parts = tfSplit(list)
   const rows = parts.ready.filter(function (r) { return findState(r.recipeId, recipes, status).state === "" })
-  return { rows: rows, blockedText: parts.blocked.length === 0 ? "" : parts.blocked.length + " more TensorFold " + (parts.blocked.length === 1 ? "entry needs" : "entries need") + " a runtime this engine doesn't have yet." }
+  return { rows: rows,
+           blockedText: parts.blocked.length === 0 ? "" : parts.blocked.length + " more TensorFold " + (parts.blocked.length === 1 ? "entry" : "entries") + " can't be added yet.",
+           blockedDetail: parts.blocked.map(function (r) { return String(r.name || r.id) + ": " + tfRowNote(r) }).join("\n") }
 }
 
 // A row's facts, as plain text: the format and the list's memory estimate (an estimate, never a fit).

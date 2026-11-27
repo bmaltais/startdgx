@@ -1673,18 +1673,20 @@ ds recipe remove $a my-draft-70b >/dev/null; ds recipe remove $a my-estimate-14b
 # tensorfold list / draft: tensorfold.dev's catalog for one DGX Spark, read-only, with a drafted recipe from an entry (its memory is
 # the catalog's estimate, so the variant is drafted and never fits until measured, ADR 0001).
 dtf() { local cond=$1; shift; ds tensorfold "$@" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(not ($cond))"; }
-dtf '[r["id"] for r in d["recipes"]] == ["lfm2.5-24b-a2b", "qwen3.6-35b-a3b", "odd-link"] and d["first_look"] is True' list --json
+dtf '[r["id"] for r in d["recipes"]] == ["lfm2.5-24b-a2b", "qwen3.6-35b-a3b", "odd-link", "mia-27b", "too-new", "exl3-model"] and d["first_look"] is True' list --json
 ok $? "tensorfold list: the entries with a Spark deployment, in order (a Mac-only entry is left out)"
-dtf '{r["id"]: r["draftable"] for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and "runtime" in d["recipes"][1]["reason"] and d["recipes"][2]["repo"] is None' list --json
-ok $? "only an MLX 4-bit entry with a pinned Hugging Face commit can be drafted, and the others say why"
+dtf '{r["id"]: r["draftable"] for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": True, "odd-link": False, "mia-27b": False, "too-new": False, "exl3-model": False} and d["recipes"][2]["repo"] is None' list --json
+ok $? "an MLX 4-bit or NVFP4 entry with a pinned Hugging Face commit can be drafted (an MTP drafter is left out), and the others can't"
+dtf '[r["reason"] for r in d["recipes"][2:]] == ["no pinned Hugging Face checkpoint", "needs Mia Lab'"'"'s own TensorFold image, which the engine doesn'"'"'t run", "needs TensorFold 9.0.0; the engine runs 1.3.6", "EXL3 4-bit doesn'"'"'t run on the engine'"'"'s TensorFold 1.3.6"]' list --json
+ok $? "each says why: no checkpoint, an image of its maker's own, a newer TensorFold, a format the engine's TensorFold doesn't serve"
 dtf 'd["recipes"][0]["estimate_gb"] == 24 and d["recipes"][2]["estimate_gb"] is None' list --json
 ok $? "the catalog's estimate is carried as an estimate, and a missing one stays missing"
 ds tensorfold draft lfm2.5-24b-a2b --json | python3 -c "
 import json,sys,tomllib
 d=json.load(sys.stdin); r=tomllib.load(open(d['path'],'rb')); v=r['variant'][0]
-sys.exit(not (d['source']=='drafted' and r['artifacts'][0]['revision']=='0f74678ad5062e607c5469c35151dc6fcbd966b6' and v['source']=='drafted' and v['peak_ram_gib']==24 and 'estimate of 24 GB' in r['summary']))"
-ok $? "tensorfold draft pins the catalog's commit, takes its estimate as the drafted placeholder and says so"
-dtf '{r["id"]: r["settings"] is not None for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False} and d["recipes"][0]["settings"]["contexts"] == [8192, 16384, 32768] and d["recipes"][0]["settings"]["defaults"] == {"context": 8192, "parallel": 1, "input": "text"}' list --json
+sys.exit(not (d['source']=='drafted' and r['artifacts'][0]['revision']=='0f74678ad5062e607c5469c35151dc6fcbd966b6' and v['source']=='drafted' and v['peak_ram_gib']==24 and 'estimate of 24 GB' in r['summary'] and '# MLX 4-bit export.' in open(d['path']).read()))"
+ok $? "tensorfold draft pins the catalog's commit, takes its estimate as the drafted placeholder and says so, and names the entry's format"
+dtf '{r["id"]: r["settings"] is not None for r in d["recipes"]} == {"lfm2.5-24b-a2b": True, "qwen3.6-35b-a3b": False, "odd-link": False, "mia-27b": False, "too-new": False, "exl3-model": False} and d["recipes"][0]["settings"]["contexts"] == [8192, 16384, 32768] and d["recipes"][0]["settings"]["defaults"] == {"context": 8192, "parallel": 1, "input": "text"}' list --json
 ok $? "an entry carries the choices it offers (context, requests, input), validated, or none"
 ds tensorfold draft lfm2.5-24b-a2b --context 32768 --parallel 2 --input images --id custom-lfm --out "$tmp/tfc" --json | python3 -c "
 import json,sys,tomllib
@@ -1753,7 +1755,7 @@ d["records"][0]["deployments"]["dgx-spark"]["checkpoint"] = "https://huggingface
 d["records"].append({"id": "brand-new", "name": "Brand New", "deployments": {"dgx-spark": {"format": "MLX 4-bit", "estimateGB": 5, "checkpoint": "https://huggingface.co/x/y/tree/" + "c" * 40}}})
 json.dump(d, open(sys.argv[1], "w"))
 F
-tfl list --json | python3 -c "import json,sys; d=json.load(sys.stdin); st={r['id']: r['status'] for r in d['recipes']}; sys.exit(not (st == {'lfm2.5-24b-a2b': 'changed', 'qwen3.6-35b-a3b': '', 'odd-link': '', 'brand-new': 'new'} and d['first_look'] is False))"
+tfl list --json | python3 -c "import json,sys; d=json.load(sys.stdin); st={r['id']: r['status'] for r in d['recipes']}; sys.exit(not (st == {'lfm2.5-24b-a2b': 'changed', 'qwen3.6-35b-a3b': '', 'odd-link': '', 'mia-27b': '', 'too-new': '', 'exl3-model': '', 'brand-new': 'new'} and d['first_look'] is False))"
 ok $? "a later look says which entries are new and which are pinned to another commit"
 echo '{"schemaVersion": 2, "records": []}' >"$tmp/tf-bad.json"; STARTDGX_TENSORFOLD_CATALOG=$tmp/tf-bad.json s tensorfold list >/dev/null 2>&1; ok $((!$?)) "a list in another schema version is refused"
 STARTDGX_TENSORFOLD_CATALOG=http://127.0.0.1:9 s tensorfold list 2>&1 | grep -q "Can't reach tensorfold.dev"; ok $? "tensorfold list offline says so"

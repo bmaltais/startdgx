@@ -108,6 +108,63 @@
      "parallel": 1
     }
    }
+  },
+  {
+   "id": "mia-27b",
+   "name": "Qwen3.8-27B (Mia)",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/lfm2.5-24b-a2b.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "NVFP4",
+     "estimateGB": 40,
+     "weightGB": 25.8,
+     "checkpoint": "https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4/tree/0123456789abcdef0123456789abcdef01234567",
+     "engineVersion": "0.6.0",
+     "image": "ghcr.io/miaai-lab/example@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+     "creator": {
+      "name": "Mia Lab"
+     },
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  },
+  {
+   "id": "too-new",
+   "name": "Too New 8B",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/lfm2.5-24b-a2b.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "MLX 4-bit",
+     "estimateGB": 10,
+     "weightGB": 5,
+     "checkpoint": "https://huggingface.co/example/Too-New-8B-MLX-4bit/tree/0123456789abcdef0123456789abcdef01234567",
+     "engineVersion": "9.0.0",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
+  },
+  {
+   "id": "exl3-model",
+   "name": "EXL3 Model",
+   "provider": "x",
+   "description": "d",
+   "source": "https://github.com/ashhart/TensorFold/blob/v1.2.9/docs/recipes/lfm2.5-24b-a2b.md",
+   "deployments": {
+    "dgx-spark": {
+     "format": "EXL3 4-bit \u00b7 DFlash2",
+     "estimateGB": 60,
+     "weightGB": 50,
+     "checkpoint": "https://huggingface.co/example/EXL3-Model/tree/0123456789abcdef0123456789abcdef01234567",
+     "context": 8192,
+     "parallel": 1
+    }
+   }
   }
  ]
 }
