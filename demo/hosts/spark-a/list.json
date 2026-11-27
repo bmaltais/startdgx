@@ -16,7 +16,8 @@
     "memory_gib": null,
     "context": null,
     "decode_tok_s": null,
-    "prefill_tok_s": null
+    "prefill_tok_s": null,
+    "retired": false
   },
   {
     "id": "nemotron-3.5-bolt-tensorfold",
@@ -35,7 +36,8 @@
     "memory_gib": 54,
     "context": 262144,
     "decode_tok_s": 68.9,
-    "prefill_tok_s": 1725.7
+    "prefill_tok_s": 1725.7,
+    "retired": true
   },
   {
     "id": "qwen3.8-27b-abliterated-tensorfold",
@@ -54,7 +56,8 @@
     "memory_gib": 95,
     "context": 262144,
     "decode_tok_s": 52.7,
-    "prefill_tok_s": 1251.0
+    "prefill_tok_s": 1251.0,
+    "retired": false
   },
   {
     "id": "qwen3.8-27b-gufo",
@@ -73,7 +76,8 @@
     "memory_gib": null,
     "context": null,
     "decode_tok_s": null,
-    "prefill_tok_s": null
+    "prefill_tok_s": null,
+    "retired": false
   },
   {
     "id": "qwen3.8-27b-tensorfold",
@@ -92,7 +96,8 @@
     "memory_gib": 95,
     "context": 262144,
     "decode_tok_s": 52.7,
-    "prefill_tok_s": 1251.0
+    "prefill_tok_s": 1251.0,
+    "retired": false
   },
   {
     "id": "qwen3.8-flash-next-gufo",
@@ -111,7 +116,8 @@
     "memory_gib": null,
     "context": null,
     "decode_tok_s": null,
-    "prefill_tok_s": null
+    "prefill_tok_s": null,
+    "retired": false
   },
   {
     "id": "qwen3.8-flash-next-tensorfold",
@@ -130,6 +136,7 @@
     "memory_gib": 95,
     "context": 262144,
     "decode_tok_s": 61.8,
-    "prefill_tok_s": 1690.0
+    "prefill_tok_s": 1690.0,
+    "retired": false
   }
 ]

@@ -25,7 +25,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": true
     },
     "qwen3.8-flash-next-tensorfold": {
       "error": "",

@@ -161,6 +161,19 @@ Rectangle {
           HoverHandler { id: shareHover }
           PanelToolTip { visible: shareHover.hovered; text: "Shared with your tailnet" }
          }
+         // Its recipe is retired (engine v0.14.0): it keeps working, so a quiet word, not a warning.
+         Text {
+          id: retiredText
+          visible: text !== ""
+          Layout.alignment: Qt.AlignVCenter
+          textFormat: Text.PlainText
+          text: Model.retiredMark(row.entry)
+          color: Tones.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          HoverHandler { id: retiredHover }
+          PanelToolTip { visible: retiredHover.hovered; text: Model.RETIRED_DETAIL }
+         }
          // An update is waiting: the machine's catalog has moved on from what this model was set up with.
          TextLink {
           visible: row.updateOffer !== null

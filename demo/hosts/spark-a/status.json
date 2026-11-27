@@ -25,7 +25,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": true
     },
     "qwen3.8-27b-abliterated-tensorfold": {
       "error": "",
@@ -52,7 +53,8 @@
       "since_ms": null,
       "expected_load_seconds": 6.0,
       "expected_stop_seconds": 2.0,
-      "expected_remove_seconds": null
+      "expected_remove_seconds": null,
+      "retired": false
     },
     "qwen3.8-27b-tensorfold": {
       "error": "",
@@ -85,7 +87,8 @@
         "weights": true,
         "settings": false,
         "download_bytes": 4400000000
-      }
+      },
+      "retired": false
     }
   },
   "share_error": "",
