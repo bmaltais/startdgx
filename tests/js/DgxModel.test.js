@@ -47,6 +47,8 @@ test("modelState shows a setup in progress", () => {
   const setup = (install, over) => M.modelState(row(Object.assign({ unit: "installing", install: install }, over)))
   assert.deepStrictEqual(setup({ phase: "downloading", done_bytes: 1, total_bytes: 10, rate_bytes_s: 5 }), { kind: "installing", text: "Downloading" })
   assert.deepStrictEqual(setup({ phase: "waiting" }), { kind: "installing", text: "Waiting to download" })
+  assert.deepStrictEqual(setup({ phase: "downloading", done_bytes: 0, total_bytes: 0 }), { kind: "installing", text: "Setting up" }, "nothing to fetch")
+  assert.deepStrictEqual(setup({ phase: "downloading", done_bytes: 10, total_bytes: 10 }), { kind: "installing", text: "Setting up" }, "fetched: the setup is being made")
   assert.deepStrictEqual(setup({ phase: "failed" }, { error: "No space left on device" }), { kind: "failed", text: "No space left on device" })
   assert.deepStrictEqual(setup({ phase: "failed" }), { kind: "failed", text: "Setup failed" })
 })
@@ -2045,6 +2047,15 @@ test("an update shows on the model's own row: waiting, then downloading with its
   assert.deepStrictEqual(M.meter(going, 0, ""), { label: "Downloading", fraction: 0.4, value: "2 MB/s" })
   assert.strictEqual(M.toggleAction(going, ""), null, "no play or pause while it updates")
   assert.strictEqual(M.modelLine(going, "", "").split(" · ")[0], "Updating")
+})
+
+test("an update with nothing left to fetch says Updating, not Downloading", () => {
+  const nothing = row({ unit: "active", updating: true, update_progress: { phase: "downloading", done_bytes: 0, total_bytes: 0, rate_bytes_s: 0 } })
+  assert.deepStrictEqual(M.meter(nothing, 0, ""), { label: "Updating", fraction: 0, value: "" }, "the image and weights are already there")
+  const fetched = row({ unit: "active", updating: true, update_progress: { phase: "downloading", done_bytes: 10e9, total_bytes: 10e9, rate_bytes_s: 3e6 } })
+  assert.deepStrictEqual(M.meter(fetched, 0, ""), { label: "Updating", fraction: 1, value: "" }, "fetched: the new setup is being made")
+  assert.deepStrictEqual(M.meter(row({ unit: "installing", install: { phase: "downloading", done_bytes: 0, total_bytes: 0, rate_bytes_s: 0 } }), 0),
+    { label: "Setting up", fraction: 0, value: "" }, "a first setup with nothing to fetch")
 })
 
 test("an update's reload is the model's own: no progress left, it loads as any restart does", () => {
